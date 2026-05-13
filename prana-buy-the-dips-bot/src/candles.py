@@ -1,0 +1,79 @@
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+from .binance_client import BinanceSpotClient
+from .db import load_candles_df, upsert_candles
+from .utils import ms_to_iso, utc_ms
+
+
+INTERVAL_MS = {
+    "4h": 4 * 60 * 60 * 1000,
+}
+
+
+def backfill_12_months(
+    database_path: str | Path,
+    exchange: str = "binance",
+    symbol: str = "BTCUSDT",
+    timeframe: str = "4h",
+    client: BinanceSpotClient | None = None,
+) -> dict[str, Any]:
+    client = client or BinanceSpotClient()
+    interval_ms = INTERVAL_MS.get(timeframe)
+    if interval_ms is None:
+        raise ValueError(f"Unsupported timeframe for Phase 1: {timeframe}")
+
+    end_time = utc_ms()
+    start_time = int((datetime.now(tz=timezone.utc) - timedelta(days=365)).timestamp() * 1000)
+
+    total_upserted = 0
+    all_rows: list[dict[str, Any]] = []
+    cursor = start_time
+    while cursor <= end_time:
+        batch = client.fetch_klines(
+            symbol=symbol,
+            interval=timeframe,
+            limit=1000,
+            start_time=cursor,
+            end_time=end_time,
+        )
+        if not batch:
+            break
+        total_upserted += upsert_candles(database_path, batch, exchange, symbol, timeframe)
+        all_rows.extend(batch)
+        last_open_time = int(batch[-1]["open_time"])
+        next_cursor = last_open_time + interval_ms
+        if next_cursor <= cursor:
+            break
+        cursor = next_cursor
+        if len(batch) < 1000:
+            break
+
+    closed_df = load_candles_df(database_path, exchange, symbol, timeframe, only_closed=False)
+    first_open_time = int(closed_df["open_time"].min()) if not closed_df.empty else None
+    last_open_time = int(closed_df["open_time"].max()) if not closed_df.empty else None
+    return {
+        "upserted": total_upserted,
+        "fetched": len(all_rows),
+        "first_candle_timestamp": first_open_time,
+        "last_candle_timestamp": last_open_time,
+        "first_candle_iso": ms_to_iso(first_open_time),
+        "last_candle_iso": ms_to_iso(last_open_time),
+        "database_path": str(database_path),
+    }
+
+
+def fetch_latest_candles(
+    database_path: str | Path,
+    exchange: str = "binance",
+    symbol: str = "BTCUSDT",
+    timeframe: str = "4h",
+    limit: int = 1000,
+    client: BinanceSpotClient | None = None,
+) -> int:
+    client = client or BinanceSpotClient()
+    rows = client.fetch_klines(symbol=symbol, interval=timeframe, limit=limit)
+    return upsert_candles(database_path, rows, exchange, symbol, timeframe)
