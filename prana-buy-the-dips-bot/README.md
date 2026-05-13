@@ -31,7 +31,7 @@ Even `STRONG_BUY_SIGNAL` is only a logged paper signal in Phase 1.
 ## Install
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp config.example.yaml config.yaml
@@ -40,7 +40,7 @@ cp config.example.yaml config.yaml
 ## Initialize The Database
 
 ```bash
-python -m src.cli init-db
+python3 -m src.cli init-db
 ```
 
 Default database path:
@@ -52,7 +52,7 @@ data/prana_buy_the_dips.sqlite
 ## Backfill 12 Months Of BTCUSDT 4H Candles
 
 ```bash
-python -m src.cli backfill
+python3 -m src.cli backfill
 ```
 
 The backfill paginates Binance Spot public klines with `limit=1000`, inserts or
@@ -62,7 +62,7 @@ last candle, and database path.
 ## Print Zones
 
 ```bash
-python -m src.cli zones
+python3 -m src.cli zones
 ```
 
 This loads closed candles from SQLite, detects pure-close zones, stores the zone
@@ -71,7 +71,7 @@ snapshot, and prints support, active, and resistance zones.
 ## Run One Paper Signal Cycle
 
 ```bash
-python -m src.cli run-once
+python3 -m src.cli run-once
 ```
 
 This fetches the latest candles, stores them, excludes any currently open 4H
