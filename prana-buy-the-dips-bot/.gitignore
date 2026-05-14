@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .env
+**/.DS_Store
 config.yaml
 data/*.sqlite
 data/*.sqlite-*
