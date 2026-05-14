@@ -20,7 +20,7 @@ def test_support_zone_uses_exact_close_bounds() -> None:
     )
 
     zone = result["support"][0]
-    assert zone["origin"] == "support_pivot_close"
+    assert zone["origin"] == "support_pivot"
     assert zone["low"] == 100
     assert zone["high"] == 101
     assert zone["source_closes"] == [100.0, 100.5, 101.0]
@@ -42,7 +42,7 @@ def test_resistance_zone_uses_exact_close_bounds() -> None:
     )
 
     zone = result["resistance"][0]
-    assert zone["origin"] == "resistance_pivot_close"
+    assert zone["origin"] == "resistance_pivot"
     assert zone["low"] == 120
     assert zone["high"] == 121
     assert zone["source_closes"] == [120.0, 120.5, 121.0]
@@ -93,7 +93,7 @@ def test_cluster_median_logic_prevents_oversized_chain_merge() -> None:
         current_price=120,
     )
 
-    support_origin_zones = [zone for zone in result["support"] if zone["origin"] == "support_pivot_close"]
+    support_origin_zones = [zone for zone in result["support"] if zone["origin"] == "support_pivot"]
     assert len(support_origin_zones) == 1
     zone = support_origin_zones[0]
     assert zone["low"] == 100

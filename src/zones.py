@@ -1,8 +1,6 @@
 from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Any, Literal
-
 import numpy as np
 import pandas as pd
 from scipy.signal import argrelextrema
@@ -46,7 +44,7 @@ def detect_support_resistance_zones_pure_close(
         lookahead=lookahead,
         min_reversal_pct=min_reversal_pct,
         comparator=np.less,
-        origin="support_pivot_close",
+        origin="support_pivot",
     )
     resistance_candidates = _validated_candidates(
         closes=closes,
@@ -54,7 +52,7 @@ def detect_support_resistance_zones_pure_close(
         lookahead=lookahead,
         min_reversal_pct=min_reversal_pct,
         comparator=np.greater,
-        origin="resistance_pivot_close",
+        origin="resistance_pivot",
     )
 
     zones = []
@@ -101,7 +99,7 @@ def _validated_candidates(
         if len(future) == 0:
             continue
         pivot_close = float(closes[idx])
-        if origin == "support_pivot_close":
+        if origin == "support_pivot":
             reversal = (float(np.max(future)) - pivot_close) / pivot_close
             if reversal >= min_reversal_pct:
                 candidates.append(Candidate(price=pivot_close, index=int(idx), origin=origin))

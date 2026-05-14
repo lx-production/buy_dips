@@ -1,9 +1,6 @@
 # PRANA Buy the Dips Bot
 
-Phase 1 is a local, Python-based foundation for a paper-only Buy the Dips system.
-It collects Binance Spot `BTCUSDT` 4H candles, stores raw candle data in SQLite,
-detects support and resistance zones from closed candle closes, generates paper
-signals, and logs every decision including `HOLD`.
+Phase 1 is a local, Python-based foundation for a paper-only Buy the Dips system. It collects Binance Spot `BTCUSDT` 4H candles, stores raw candle data in SQLite, detects support and resistance zones from closed candle closes, generates paper signals, and logs every decision including `HOLD`.
 
 ## What Phase 1 Does
 
@@ -55,9 +52,7 @@ data/prana_buy_the_dips.sqlite
 python3 -m src.cli backfill
 ```
 
-The backfill paginates Binance Spot public klines with `limit=1000`, inserts or
-updates local rows, and prints the number of candles processed, first candle,
-last candle, and database path.
+The backfill paginates Binance Spot public klines with `limit=1000`, inserts or updates local rows, and prints the number of candles processed, first candle, last candle, and database path.
 
 ## Print Zones
 
@@ -65,8 +60,7 @@ last candle, and database path.
 python3 -m src.cli zones
 ```
 
-This loads closed candles from SQLite, detects pure-close zones, stores the zone
-snapshot, and prints support, active, and resistance zones.
+This loads closed candles from SQLite, detects pure-close zones, stores the zone snapshot, and prints support, active, and resistance zones.
 
 ## Run One Paper Signal Cycle
 
@@ -74,20 +68,17 @@ snapshot, and prints support, active, and resistance zones.
 python3 -m src.cli run-once
 ```
 
-This fetches the latest candles, stores them, excludes any currently open 4H
-candle from signal calculations, detects zones, generates one paper signal, and
-stores it in the `signals` table. A `HOLD` decision is stored just like any other
-decision.
+This fetches the latest candles, stores them, excludes any currently open 4H candle from signal calculations, detects zones, generates one paper signal, and stores it in the `signals` table. A `HOLD` decision is stored just like any other decision.
 
 ## Pure Close Support / Resistance Logic
 
-The initial detector intentionally uses close prices only. Wick highs, wick lows,
-candle body percentiles, volume filters, RSI, and ML are not part of Phase 1.
+The initial detector intentionally uses close prices only. Wick highs, wick lows, candle body percentiles, volume filters, RSI, and ML are not part of Phase 1.
 
 Support pivots are local close minima validated by a future close reversal.
+
 Resistance pivots are local close maxima validated by a future close reversal.
-Candidate pivot closes are clustered by price using the cluster median, with a
-maximum zone width guard to prevent oversized chain merges.
+
+Candidate pivot closes are clustered by price using the cluster median, with a maximum zone width guard to prevent oversized chain merges.
 
 Each zone stores:
 
@@ -95,7 +86,7 @@ Each zone stores:
 - `high`: highest actual pivot close in the cluster
 - `mid`: average of `low` and `high`
 - `touches`: number of pivot closes in the cluster
-- `origin`: `support_pivot_close` or `resistance_pivot_close`
+- `origin`: `support_pivot` or `resistance_pivot`
 - `role`: `support`, `resistance`, or `active` based on current price
 
 ## Safety Warning

@@ -20,7 +20,7 @@ def test_signal_scores_near_support() -> None:
     zones = {
         "support": [
             {
-                "origin": "support_pivot_close",
+                "origin": "support_pivot",
                 "role": "support",
                 "low": 99.5,
                 "high": 100.0,
@@ -48,7 +48,7 @@ def test_hold_generated_when_far_from_support() -> None:
     zones = {
         "support": [
             {
-                "origin": "support_pivot_close",
+                "origin": "support_pivot",
                 "role": "support",
                 "low": 90.0,
                 "high": 91.0,
