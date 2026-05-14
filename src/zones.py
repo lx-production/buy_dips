@@ -76,6 +76,13 @@ def detect_support_resistance_zones_pure_close(
             buffer_pct=buffer_pct,
         )
     )
+    zones = _make_zones_distinct(
+        zones=zones,
+        max_zone_width_pct=max_zone_width_pct,
+        zone_tolerance_pct=zone_tolerance_pct,
+        current_price=current_price,
+        buffer_pct=buffer_pct,
+    )
 
     support = sorted([zone for zone in zones if zone["role"] == "support"], key=lambda z: z["high"], reverse=True)
     resistance = sorted([zone for zone in zones if zone["role"] == "resistance"], key=lambda z: z["low"])
@@ -160,11 +167,109 @@ def _build_zones(
                 "source_indexes": indexes,
             }
         )
-    return zones
+    return _merge_nearby_zones(zones, max_zone_width_pct, current_price, buffer_pct)
+
+
+def _make_zones_distinct(
+    zones: list[dict[str, Any]],
+    max_zone_width_pct: float,
+    zone_tolerance_pct: float,
+    current_price: float,
+    buffer_pct: float,
+) -> list[dict[str, Any]]:
+    distinct: list[dict[str, Any]] = []
+    for role in ("support", "active", "resistance"):
+        role_zones = sorted([zone for zone in zones if zone["role"] == role], key=lambda item: item["low"])
+        distinct.extend(_merge_nearby_zones(role_zones, max_zone_width_pct, current_price, buffer_pct))
+
+    compacted: list[dict[str, Any]] = []
+    for role in ("support", "active", "resistance"):
+        role_zones = sorted([zone for zone in distinct if zone["role"] == role], key=lambda item: item["low"])
+        for zone in role_zones:
+            if not compacted or compacted[-1]["role"] != role:
+                compacted.append(dict(zone))
+                continue
+            previous = compacted[-1]
+            if _zones_overlap(previous, zone) or _zone_gap_pct(previous, zone) <= zone_tolerance_pct:
+                compacted[-1] = _prefer_zone(previous, zone)
+            else:
+                compacted.append(dict(zone))
+    return compacted
+
+
+def _merge_nearby_zones(
+    zones: list[dict[str, Any]],
+    max_zone_width_pct: float,
+    current_price: float,
+    buffer_pct: float,
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    for zone in sorted(zones, key=lambda item: item["low"]):
+        if not merged:
+            merged.append(dict(zone))
+            continue
+
+        if _prices_within_max_width([merged[-1]["low"], merged[-1]["high"], zone["low"], zone["high"]], max_zone_width_pct):
+            merged[-1] = _combine_zones(merged[-1], zone, current_price, buffer_pct)
+        else:
+            merged.append(dict(zone))
+    return merged
+
+
+def _combine_zones(
+    first: dict[str, Any],
+    second: dict[str, Any],
+    current_price: float,
+    buffer_pct: float,
+) -> dict[str, Any]:
+    closes_and_indexes = list(zip(first["source_closes"], first["source_indexes"], strict=True)) + list(
+        zip(second["source_closes"], second["source_indexes"], strict=True)
+    )
+    closes_and_indexes.sort(key=lambda item: item[0])
+    source_closes = [float(item[0]) for item in closes_and_indexes]
+    source_indexes = [int(item[1]) for item in closes_and_indexes]
+    low = min(source_closes)
+    high = max(source_closes)
+    mid = (low + high) / 2.0
+    width = high - low
+    width_pct = width / mid * 100.0 if mid else 0.0
+    return {
+        "origin": first["origin"] if first["origin"] == second["origin"] else "mixed_pivot",
+        "role": _classify_role(low=low, high=high, current_price=current_price, buffer_pct=buffer_pct),
+        "low": low,
+        "high": high,
+        "mid": mid,
+        "width": width,
+        "width_pct": width_pct,
+        "touches": len(source_closes),
+        "source_closes": source_closes,
+        "source_indexes": source_indexes,
+    }
+
+
+def _zones_overlap(first: dict[str, Any], second: dict[str, Any]) -> bool:
+    return max(first["low"], second["low"]) <= min(first["high"], second["high"])
+
+
+def _zone_gap_pct(first: dict[str, Any], second: dict[str, Any]) -> float:
+    gap = max(0.0, float(second["low"]) - float(first["high"]))
+    mid = (float(first["mid"]) + float(second["mid"])) / 2.0
+    if mid == 0:
+        return float("inf")
+    return gap / mid
+
+
+def _prefer_zone(first: dict[str, Any], second: dict[str, Any]) -> dict[str, Any]:
+    first_score = (int(first["touches"]), -float(first["width_pct"]))
+    second_score = (int(second["touches"]), -float(second["width_pct"]))
+    return dict(first if first_score >= second_score else second)
 
 
 def _within_max_width(cluster: list[Candidate], candidate: Candidate, max_zone_width_pct: float) -> bool:
-    prices = [item.price for item in cluster] + [candidate.price]
+    return _prices_within_max_width([item.price for item in cluster] + [candidate.price], max_zone_width_pct)
+
+
+def _prices_within_max_width(prices: list[float], max_zone_width_pct: float) -> bool:
     low = min(prices)
     high = max(prices)
     mid = (low + high) / 2.0

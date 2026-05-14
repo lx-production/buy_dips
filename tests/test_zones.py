@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from src.zones import detect_support_resistance_zones_pure_close
+from src.zones import _make_zones_distinct, detect_support_resistance_zones_pure_close
 
 
 def test_support_zone_uses_exact_close_bounds() -> None:
@@ -99,3 +99,42 @@ def test_cluster_median_logic_prevents_oversized_chain_merge() -> None:
     assert zone["low"] == 100
     assert zone["high"] == 101.2
     assert 102.4 not in zone["source_closes"]
+
+
+def test_distinct_pass_merges_nearby_same_role_zones() -> None:
+    zones = [
+        _zone(low=100.0, high=101.0, touches=2, origin="support_pivot"),
+        _zone(low=101.2, high=101.8, touches=2, origin="resistance_pivot"),
+        _zone(low=106.0, high=106.4, touches=2, origin="support_pivot"),
+    ]
+
+    result = _make_zones_distinct(
+        zones=zones,
+        max_zone_width_pct=0.025,
+        zone_tolerance_pct=0.0045,
+        current_price=110,
+        buffer_pct=0.0015,
+    )
+
+    assert len(result) == 2
+    assert result[0]["origin"] == "mixed_pivot"
+    assert result[0]["low"] == 100.0
+    assert result[0]["high"] == 101.8
+    assert result[0]["touches"] == 4
+
+
+def _zone(low: float, high: float, touches: int, origin: str) -> dict:
+    source_closes = [low, high] if touches == 2 else [low, high, *([low] * (touches - 2))]
+    mid = (low + high) / 2.0
+    return {
+        "origin": origin,
+        "role": "support",
+        "low": low,
+        "high": high,
+        "mid": mid,
+        "width": high - low,
+        "width_pct": (high - low) / mid * 100.0,
+        "touches": touches,
+        "source_closes": source_closes,
+        "source_indexes": list(range(touches)),
+    }

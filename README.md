@@ -52,7 +52,7 @@ data/prana_buy_the_dips.sqlite
 python3 -m src.cli backfill
 ```
 
-The backfill paginates Binance Spot public klines with `limit=1000`, inserts or updates local rows, and prints the number of candles processed, first candle, last candle, and database path.
+Fetches roughly the **last 12 months** of public `BTCUSDT` 4H klines into SQLite. Binance allows at most **1000 klines per request**, so the client **pages** through the range (moving `startTime` forward after each batch)—that is a page size, not “only 1000 candles total.” Rows are **upserted**; re-runs are safe. On success the CLI prints insert/update counts, first and last candle (with ISO times), and the database path.
 
 ## Print Zones
 
@@ -61,6 +61,20 @@ python3 -m src.cli zones
 ```
 
 This loads closed candles from SQLite, detects pure-close zones, stores the zone snapshot, and prints support, active, and resistance zones.
+
+## Open Local 4H Chart
+
+```bash
+python3 scripts/serve_chart.py
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8000
+```
+
+The page is a local fullscreen canvas chart. It reads closed `BTCUSDT` 4H candles from SQLite and overlays the current support, active, and resistance zones calculated by `src/zones.py`.
 
 ## Run One Paper Signal Cycle
 
