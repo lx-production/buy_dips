@@ -4,13 +4,8 @@ timeframe: 4h
 database_path: data/prana_buy_the_dips.sqlite
 
 zones:
-  algorithm: pure_close
-  swing_order: 5
-  lookahead: 6
-  min_reversal_pct: 0.008
   zone_tolerance_pct: 0.0045
   min_touches: 2
-  max_zone_width_pct: 0.018
   role_buffer_pct: 0.0015
   internal_swing_order: 2
   external_swing_order: 5

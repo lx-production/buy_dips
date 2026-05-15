@@ -2,24 +2,16 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
 
-ZoneAlgorithm = Literal["pure_close", "structure_v1"]
-
-
 class ZoneConfig(BaseModel):
-    algorithm: ZoneAlgorithm = "pure_close"
-    swing_order: int = 5
-    lookahead: int = 6
-    min_reversal_pct: float = 0.008
     zone_tolerance_pct: float = 0.0045
     min_touches: int = 2
-    max_zone_width_pct: float = 0.018
     role_buffer_pct: float = 0.0015
     internal_swing_order: int = 2
     external_swing_order: int = 5

@@ -103,13 +103,8 @@ def _detect_and_store_zones(config: AppConfig, database_path: Path) -> dict[str,
         zc = config.zones
         zones_result = detect_support_resistance_zones(
             df,
-            algorithm=zc.algorithm,
-            swing_order=zc.swing_order,
-            lookahead=zc.lookahead,
-            min_reversal_pct=zc.min_reversal_pct,
             zone_tolerance_pct=zc.zone_tolerance_pct,
             min_touches=zc.min_touches,
-            max_zone_width_pct=zc.max_zone_width_pct,
             current_price=current_price,
             buffer_pct=zc.role_buffer_pct,
             internal_swing_order=zc.internal_swing_order,
@@ -119,7 +114,7 @@ def _detect_and_store_zones(config: AppConfig, database_path: Path) -> dict[str,
         )
     inserted = insert_zones(database_path, zones_result["all"], config.symbol, config.timeframe)
     print(f"Closed candles loaded: {len(df)}")
-    print(f"Zone algorithm: {config.zones.algorithm}")
+    print("Zone algorithm: structure_v1")
     print(f"Zones stored this run: {inserted}")
     return zones_result
 

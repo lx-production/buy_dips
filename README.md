@@ -84,28 +84,7 @@ python3 -m src.cli run-once
 
 This fetches the latest candles, stores them, excludes any currently open 4H candle from signal calculations, detects zones, generates one paper signal, and stores it in the `signals` table. A `HOLD` decision is stored just like any other decision.
 
-## Pure Close Support / Resistance Logic
-
-The baseline detector intentionally uses close prices only. Wick highs, wick lows, candle body percentiles, volume filters, RSI, and ML are not part of the `pure_close` algorithm.
-
-Support pivots are local close minima validated by a future close reversal.
-
-Resistance pivots are local close maxima validated by a future close reversal.
-
-Candidate pivot closes are clustered by price using the cluster median, with a maximum zone width guard to prevent oversized chain merges.
-
-Each zone stores:
-
-- `low`: lowest actual pivot close in the cluster
-- `high`: highest actual pivot close in the cluster
-- `mid`: average of `low` and `high`
-- `touches`: number of pivot closes in the cluster
-- `origin`: `support_pivot` or `resistance_pivot`
-- `role`: `support`, `resistance`, or `active` based on current price
-
-## Geometry-Based Zone Detector
-
-Set `zones.algorithm: structure_v1` in `config.yaml` to use the newer OHLC hybrid detector.
+## Structure-Based Zone Detector
 
 `structure_v1` treats candles as a time-price path:
 
