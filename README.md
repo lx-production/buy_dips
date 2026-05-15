@@ -86,7 +86,7 @@ This fetches the latest candles, stores them, excludes any currently open 4H can
 
 ## Pure Close Support / Resistance Logic
 
-The initial detector intentionally uses close prices only. Wick highs, wick lows, candle body percentiles, volume filters, RSI, and ML are not part of Phase 1.
+The baseline detector intentionally uses close prices only. Wick highs, wick lows, candle body percentiles, volume filters, RSI, and ML are not part of the `pure_close` algorithm.
 
 Support pivots are local close minima validated by a future close reversal.
 
@@ -102,6 +102,23 @@ Each zone stores:
 - `touches`: number of pivot closes in the cluster
 - `origin`: `support_pivot` or `resistance_pivot`
 - `role`: `support`, `resistance`, or `active` based on current price
+
+## Geometry-Based Zone Detector
+
+Set `zones.algorithm: structure_v1` in `config.yaml` to use the newer OHLC hybrid detector.
+
+`structure_v1` treats candles as a time-price path:
+
+- high/low/body ranges detect internal and external swing points
+- swing points form legs with ATR-normalized slope metadata
+- zones are built from external 4H swing points, not minor internal swings
+- every structure zone is a fixed 500 USD band from `low` to `high`
+- nearby fixed bands are consolidated so only the strongest macro zones remain
+- support bands are anchored to the lower base of their external swing-low group, not the group midpoint
+- candle closes confirm BOS/CHOCH-style structure breaks
+- flipped structure levels can become support or resistance
+
+The output remains compatible with the paper signal logic: every zone still includes `low`, `high`, `mid`, `width`, `width_pct`, `touches`, `origin`, `role`, `source_closes`, and `source_indexes`. Additional metadata such as `score`, `structure_role`, `broken_index`, `zone_width`, and `leg_ids` is included for inspection and later signal scoring.
 
 ## Safety Warning
 

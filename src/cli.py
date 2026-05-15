@@ -10,7 +10,7 @@ from .db import init_db, insert_signal, insert_zones, load_candles_df
 from .paper_trading import PAPER_MODE_WARNING, assert_paper_mode_only
 from .signals import generate_buy_the_dips_signal
 from .utils import ms_to_iso, resolve_path
-from .zones import detect_support_resistance_zones_pure_close
+from .zones import detect_support_resistance_zones
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -101,8 +101,9 @@ def _detect_and_store_zones(config: AppConfig, database_path: Path) -> dict[str,
     else:
         current_price = float(df.iloc[-1]["close"])
         zc = config.zones
-        zones_result = detect_support_resistance_zones_pure_close(
+        zones_result = detect_support_resistance_zones(
             df,
+            algorithm=zc.algorithm,
             swing_order=zc.swing_order,
             lookahead=zc.lookahead,
             min_reversal_pct=zc.min_reversal_pct,
@@ -111,9 +112,14 @@ def _detect_and_store_zones(config: AppConfig, database_path: Path) -> dict[str,
             max_zone_width_pct=zc.max_zone_width_pct,
             current_price=current_price,
             buffer_pct=zc.role_buffer_pct,
+            internal_swing_order=zc.internal_swing_order,
+            external_swing_order=zc.external_swing_order,
+            atr_period=zc.atr_period,
+            break_atr_mult=zc.break_atr_mult,
         )
     inserted = insert_zones(database_path, zones_result["all"], config.symbol, config.timeframe)
     print(f"Closed candles loaded: {len(df)}")
+    print(f"Zone algorithm: {config.zones.algorithm}")
     print(f"Zones stored this run: {inserted}")
     return zones_result
 

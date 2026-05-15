@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlparse
 from .config import AppConfig, load_config
 from .db import load_candles_df
 from .utils import resolve_path
-from .zones import detect_support_resistance_zones_pure_close
+from .zones import detect_support_resistance_zones
 
 
 DEFAULT_LIMIT = 500
@@ -63,8 +63,9 @@ def load_chart_payload(config: AppConfig, database_path: str | Path, limit: int 
 
     current_price = float(df.iloc[-1]["close"])
     zone_config = config.zones
-    zones = detect_support_resistance_zones_pure_close(
+    zones = detect_support_resistance_zones(
         df,
+        algorithm=zone_config.algorithm,
         swing_order=zone_config.swing_order,
         lookahead=zone_config.lookahead,
         min_reversal_pct=zone_config.min_reversal_pct,
@@ -73,6 +74,10 @@ def load_chart_payload(config: AppConfig, database_path: str | Path, limit: int 
         max_zone_width_pct=zone_config.max_zone_width_pct,
         current_price=current_price,
         buffer_pct=zone_config.role_buffer_pct,
+        internal_swing_order=zone_config.internal_swing_order,
+        external_swing_order=zone_config.external_swing_order,
+        atr_period=zone_config.atr_period,
+        break_atr_mult=zone_config.break_atr_mult,
     )
     support_zones = zones["support"]
     visible_df = df.tail(max(1, int(limit)))
