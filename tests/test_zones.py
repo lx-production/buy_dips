@@ -5,6 +5,7 @@ import pandas as pd
 from src.config import AppConfig
 from src.signals import generate_buy_the_dips_signal
 from src.zones import (
+    StructureCandidate,
     StructurePivot,
     _average_true_range,
     _consolidate_structure_zones,
@@ -12,6 +13,8 @@ from src.zones import (
     _find_structure_pivots,
     _fixed_structure_zone_bounds,
     _label_structure_pivots,
+    _make_structure_zones_distinct,
+    _zone_from_structure_cluster,
     detect_support_resistance_zones_structure_v1,
 )
 
@@ -138,6 +141,25 @@ def test_structure_v1_consolidates_nearby_fixed_zones() -> None:
     assert support_zones[0]["low"] == 79050.0
     assert support_zones[0]["high"] == 79550.0
     assert support_zones[0]["touches"] == 3
+
+
+def test_active_support_biased_cluster_remains_support() -> None:
+    cluster = [
+        _structure_candidate(price=78793.67, index=1, origin="structure_swing_low"),
+        _structure_candidate(price=78850.06, index=2, origin="flipped_resistance"),
+        _structure_candidate(price=78850.06, index=2, origin="structure_swing_high"),
+        _structure_candidate(price=79105.49, index=3, origin="flipped_resistance"),
+        _structure_candidate(price=79105.49, index=3, origin="structure_swing_high"),
+        _structure_candidate(price=79272.91, index=4, origin="flipped_resistance"),
+        _structure_candidate(price=79272.91, index=4, origin="structure_swing_high"),
+    ]
+
+    zone = _zone_from_structure_cluster(cluster, zone_width=500.0, current_price=79113.21, buffer_pct=0.0015)
+    distinct = _make_structure_zones_distinct([zone], zone_tolerance_pct=0.0045, current_price=79113.21, buffer_pct=0.0015)
+
+    assert distinct[0]["role"] == "support"
+    assert distinct[0]["price_state"] == "active"
+    assert distinct[0]["structure_bias"] == "support"
 
 
 def test_structure_v1_wick_pierce_does_not_confirm_break() -> None:
@@ -272,3 +294,14 @@ def _structure_zone(low: float, high: float, source_closes: list[float], score: 
         "zone_width": high - low,
         "leg_ids": [],
     }
+
+
+def _structure_candidate(price: float, index: int, origin: str) -> StructureCandidate:
+    return StructureCandidate(
+        price=price,
+        index=index,
+        origin=origin,
+        zone_width=500.0,
+        structure_role="mixed",
+        term="external",
+    )

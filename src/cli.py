@@ -1,9 +1,7 @@
 from __future__ import annotations
-
 import argparse
 from pathlib import Path
 from typing import Any
-
 from .candles import backfill_12_months, fetch_latest_candles
 from .config import AppConfig, load_config
 from .db import init_db, insert_signal, insert_zones, load_candles_df

@@ -3,14 +3,14 @@ symbol: BTCUSDT
 timeframe: 4h
 database_path: data/prana_buy_the_dips.sqlite
 
-zones:
-  zone_tolerance_pct: 0.0045
+zones: # values are fractions of price, not percent labels
+  zone_tolerance_pct: 0.0045 # 0.45%
   min_touches: 2
-  role_buffer_pct: 0.0015
+  role_buffer_pct: 0.0015 # 0.15%
   internal_swing_order: 2
   external_swing_order: 5
-  atr_period: 14
-  break_atr_mult: 0.2
+  atr_period: 14 # 14 candles
+  break_atr_mult: 0.2 # 0.2x ATR
 
 signals:
   near_support_pct_tight: 0.25

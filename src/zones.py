@@ -6,6 +6,7 @@ import pandas as pd
 
 
 ZoneRole = Literal["support", "resistance", "active"]
+StructureBias = Literal["support", "resistance", "mixed"]
 PivotKind = Literal["high", "low"]
 SwingTerm = Literal["internal", "external"]
 STRUCTURE_ZONE_WIDTH = 500.0
@@ -416,8 +417,11 @@ def _zone_from_structure_cluster(
     prices = [float(item.price) for item in cluster]
     indexes = [int(item.index) for item in cluster]
     zone_width = float(zone_width)
-    role = _classify_price_cluster_role(prices, current_price, buffer_pct)
-    low, high = _fixed_structure_zone_bounds(prices, role, zone_width)
+    price_state = _classify_price_cluster_role(prices, current_price, buffer_pct)
+    structure_bias = _structure_cluster_bias(cluster)
+    role = _resolve_structure_zone_role(price_state, structure_bias)
+    bounds_role = "active" if price_state == "active" else role
+    low, high = _fixed_structure_zone_bounds(prices, bounds_role, zone_width)
     mid = (low + high) / 2.0
     width = high - low
     width_pct = width / mid * 100.0 if mid else 0.0
@@ -442,6 +446,8 @@ def _zone_from_structure_cluster(
         "source_indexes": source_indexes,
         "score": float(score),
         "structure_role": _structure_cluster_role(cluster),
+        "structure_bias": structure_bias,
+        "price_state": price_state,
         "last_touch_index": max(indexes),
         "broken_index": max(broken_indexes) if broken_indexes else None,
         "zone_width": zone_width,
@@ -493,8 +499,11 @@ def _combine_structure_macro_group(
 
     source_closes = [float(price) for zone in group for price in zone["source_closes"]]
     source_indexes = [int(index) for zone in group for index in zone["source_indexes"]]
-    role = _classify_price_cluster_role(source_closes, current_price, buffer_pct)
-    low, high = _fixed_structure_zone_bounds(source_closes, role, zone_width)
+    price_state = _classify_price_cluster_role(source_closes, current_price, buffer_pct)
+    structure_bias = _combine_structure_biases([_coerce_structure_bias(zone.get("structure_bias", "mixed")) for zone in group])
+    role = _resolve_structure_zone_role(price_state, structure_bias)
+    bounds_role = "active" if price_state == "active" else role
+    low, high = _fixed_structure_zone_bounds(source_closes, bounds_role, zone_width)
     mid = (low + high) / 2.0
     width_pct = zone_width / mid * 100.0 if mid else 0.0
     broken_indexes = [zone.get("broken_index") for zone in group if zone.get("broken_index") is not None]
@@ -514,11 +523,61 @@ def _combine_structure_macro_group(
         "source_indexes": source_indexes,
         "score": float(sum(float(zone.get("score", 0.0)) for zone in group)),
         "structure_role": next(iter(structure_roles)) if len(structure_roles) == 1 else "mixed",
+        "structure_bias": structure_bias,
+        "price_state": price_state,
         "last_touch_index": max(source_indexes),
         "broken_index": max(broken_indexes) if broken_indexes else None,
         "zone_width": float(zone_width),
         "leg_ids": leg_ids,
     }
+
+
+def _resolve_structure_zone_role(price_state: ZoneRole, structure_bias: StructureBias) -> ZoneRole:
+    if price_state == "active" and structure_bias in ("support", "resistance"):
+        return structure_bias
+    return price_state
+
+
+def _structure_cluster_bias(cluster: list[StructureCandidate]) -> StructureBias:
+    support_score = 0
+    resistance_score = 0
+    for item in cluster:
+        support_weight, resistance_weight = _structure_candidate_bias_weights(item)
+        support_score += support_weight
+        resistance_score += resistance_weight
+    return _structure_bias_from_scores(support_score, resistance_score)
+
+
+def _structure_candidate_bias_weights(candidate: StructureCandidate) -> tuple[int, int]:
+    if candidate.origin == "flipped_resistance":
+        return (2, 0)
+    if candidate.origin == "flipped_support":
+        return (0, 2)
+    if candidate.origin == "structure_swing_low":
+        return (1, 0)
+    if candidate.origin == "structure_swing_high":
+        return (0, 1)
+    return (0, 0)
+
+
+def _combine_structure_biases(biases: list[StructureBias]) -> StructureBias:
+    support_score = sum(1 for bias in biases if bias == "support")
+    resistance_score = sum(1 for bias in biases if bias == "resistance")
+    return _structure_bias_from_scores(support_score, resistance_score)
+
+
+def _coerce_structure_bias(value: Any) -> StructureBias:
+    if value in ("support", "resistance", "mixed"):
+        return value
+    return "mixed"
+
+
+def _structure_bias_from_scores(support_score: int, resistance_score: int) -> StructureBias:
+    if support_score > resistance_score:
+        return "support"
+    if resistance_score > support_score:
+        return "resistance"
+    return "mixed"
 
 
 def _classify_price_cluster_role(prices: list[float], current_price: float, buffer_pct: float) -> ZoneRole:
@@ -604,17 +663,25 @@ def _make_structure_zones_distinct(
     current_price: float,
     buffer_pct: float,
 ) -> list[dict[str, Any]]:
+    normalized_zones: list[dict[str, Any]] = []
+    for zone in zones:
+        zone = dict(zone)
+        price_state = _classify_role(
+            low=float(zone["low"]),
+            high=float(zone["high"]),
+            current_price=current_price,
+            buffer_pct=buffer_pct,
+        )
+        structure_bias = _coerce_structure_bias(zone.get("structure_bias", "mixed"))
+        zone["price_state"] = price_state
+        zone["role"] = _resolve_structure_zone_role(price_state, structure_bias)
+        normalized_zones.append(zone)
+
     distinct: list[dict[str, Any]] = []
     for role in ("support", "active", "resistance"):
-        role_zones = sorted([zone for zone in zones if zone["role"] == role], key=lambda item: item["low"])
+        role_zones = sorted([zone for zone in normalized_zones if zone["role"] == role], key=lambda item: item["low"])
         for zone in role_zones:
             zone = dict(zone)
-            zone["role"] = _classify_role(
-                low=float(zone["low"]),
-                high=float(zone["high"]),
-                current_price=current_price,
-                buffer_pct=buffer_pct,
-            )
             if not distinct or distinct[-1]["role"] != zone["role"]:
                 distinct.append(zone)
                 continue

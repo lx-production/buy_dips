@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -25,12 +24,6 @@ def resolve_path(path: str | Path, base_dir: str | Path | None = None) -> Path:
         return candidate
     root = Path(base_dir) if base_dir is not None else Path.cwd()
     return (root / candidate).resolve()
-
-
-def percent_distance(price: float, level: float) -> float:
-    if price == 0:
-        return 0.0
-    return abs(price - level) / price * 100.0
 
 
 def json_default(value: Any) -> Any:
