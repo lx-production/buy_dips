@@ -1,13 +1,13 @@
 # PRANA Buy the Dips Bot
 
-Phase 1 is a local, Python-based foundation for a paper-only Buy the Dips system. It collects Binance Spot `BTCUSDT` 4H candles, stores raw candle data in SQLite, detects support and resistance zones from closed candle closes, generates paper signals, and logs every decision including `HOLD`.
+Phase 1 is a local, Python-based foundation for a paper-only Buy the Dips system. It collects Binance Spot `BTCUSDT` 4H candles, stores raw candle data in SQLite, detects support and resistance zones with the `structure_v1` detector (`src/zones.py`), generates paper signals, and logs every decision including `HOLD`.
 
 ## What Phase 1 Does
 
 - Fetches public Binance Spot `BTCUSDT` 4H klines.
 - Stores raw candle data permanently in local SQLite.
 - Uses only closed 4H candles for signal generation.
-- Detects support and resistance zones using candle close prices only.
+- Detects support, active, and resistance zones from closed 4H OHLC using `structure_v1` (swing structure, fixed-width bands, BOS/CHOCH-style breaks).
 - Stores detected zones with separate `origin` and current `role`.
 - Generates and stores paper signals.
 - Logs `HOLD`, `ALERT_ONLY`, `PREPARE_MANUAL_REVIEW`, and `STRONG_BUY_SIGNAL`.
@@ -60,7 +60,7 @@ Fetches roughly the **last 12 months** of public `BTCUSDT` 4H klines into SQLite
 python3 -m src.cli zones
 ```
 
-This loads closed candles from SQLite, detects pure-close zones, stores the zone snapshot, and prints support, active, and resistance zones.
+This loads closed candles from SQLite, runs `structure_v1` zone detection, stores the zone snapshot, and prints support, active, and resistance zones.
 
 ## Open Local 4H Chart
 
@@ -74,7 +74,7 @@ Then open:
 http://127.0.0.1:8000
 ```
 
-The page is a local fullscreen canvas chart. It reads closed `BTCUSDT` 4H candles from SQLite and overlays the current support, active, and resistance zones calculated by `src/zones.py`.
+The page is a local fullscreen canvas chart. It reads closed `BTCUSDT` 4H candles from SQLite and overlays support zones from `structure_v1` (`src/zones.py`).
 
 ## Run One Paper Signal Cycle
 
@@ -84,7 +84,9 @@ python3 -m src.cli run-once
 
 This fetches the latest candles, stores them, excludes any currently open 4H candle from signal calculations, detects zones, generates one paper signal, and stores it in the `signals` table. A `HOLD` decision is stored just like any other decision.
 
-## Structure-Based Zone Detector
+## Zone detection (`structure_v1`)
+
+Phase 1 uses **`structure_v1` only** for zones (implemented in `detect_support_resistance_zones` → `detect_support_resistance_zones_structure_v1`). Tune swing sensitivity and break thresholds under `zones:` in `config.yaml`.
 
 `structure_v1` treats candles as a time-price path:
 
@@ -98,6 +100,8 @@ This fetches the latest candles, stores them, excludes any currently open 4H can
 - flipped structure levels can become support or resistance
 
 The output remains compatible with the paper signal logic: every zone still includes `low`, `high`, `mid`, `width`, `width_pct`, `touches`, `origin`, `role`, `source_closes`, and `source_indexes`. Additional metadata such as `score`, `structure_role`, `broken_index`, `zone_width`, and `leg_ids` is included for inspection and later signal scoring.
+
+**`source_closes`** — one price per pivot touch that formed the zone (same length and order as `source_indexes`). Despite the name, these are **not** always the candle `close` from OHLC. Each value is the relevant **body edge** from that pivot bar: for swing lows, `min(open, close)`; for swing highs, `max(open, close)`. Wicks (`high` / `low`) are used to find swings and breaks, but zone touches and bounds use these body-edge anchors only. `touches` is `len(source_closes)`.
 
 ## Safety Warning
 

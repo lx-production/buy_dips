@@ -14,6 +14,7 @@ from .zones import detect_support_resistance_zones
 
 
 DEFAULT_LIMIT = 500
+VISIBLE_SUPPORT_ZONES_ABOVE_PRICE = 2
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -74,7 +75,7 @@ def load_chart_payload(config: AppConfig, database_path: str | Path, limit: int 
         atr_period=zone_config.atr_period,
         break_atr_mult=zone_config.break_atr_mult,
     )
-    support_zones = zones["support"]
+    support_zones = _visible_support_zones(zones["support"], current_price)
     visible_df = df.tail(max(1, int(limit)))
     candles = [
         {
@@ -95,6 +96,20 @@ def load_chart_payload(config: AppConfig, database_path: str | Path, limit: int 
         "zones": {"support": support_zones, "all": support_zones},
         "current_price": current_price,
     }
+
+
+def _visible_support_zones(
+    support_zones: list[dict[str, Any]],
+    current_price: float,
+    above_count: int = VISIBLE_SUPPORT_ZONES_ABOVE_PRICE,
+) -> list[dict[str, Any]]:
+    price = float(current_price)
+    below_or_touching = [zone for zone in support_zones if float(zone["low"]) <= price]
+    above = sorted(
+        [zone for zone in support_zones if float(zone["low"]) > price],
+        key=lambda zone: (float(zone["low"]) - price, -float(zone.get("score", 0.0)), -int(zone["touches"])),
+    )
+    return below_or_touching + above[: max(0, int(above_count))]
 
 
 def _make_handler(config: AppConfig, database_path: Path, default_limit: int) -> type[BaseHTTPRequestHandler]:

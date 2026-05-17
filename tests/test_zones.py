@@ -5,15 +5,17 @@ import pandas as pd
 from src.config import AppConfig
 from src.signals import generate_buy_the_dips_signal
 from src.zones import (
-    StructureCandidate,
+    ZoneStructureCandidate,
     StructurePivot,
     _average_true_range,
+    _build_structure_zones,
     _consolidate_structure_zones,
     _detect_structure_events,
     _find_structure_pivots,
     _fixed_structure_zone_bounds,
     _label_structure_pivots,
     _make_structure_zones_distinct,
+    _zone_distance_sort_key,
     _zone_from_structure_cluster,
     detect_support_resistance_zones_structure_v1,
 )
@@ -143,7 +145,7 @@ def test_structure_v1_consolidates_nearby_fixed_zones() -> None:
     assert support_zones[0]["touches"] == 3
 
 
-def test_active_support_biased_cluster_remains_support() -> None:
+def test_active_support_biased_cluster_remains_support_with_support_bounds() -> None:
     cluster = [
         _structure_candidate(price=78793.67, index=1, origin="structure_swing_low"),
         _structure_candidate(price=78850.06, index=2, origin="flipped_resistance"),
@@ -160,6 +162,61 @@ def test_active_support_biased_cluster_remains_support() -> None:
     assert distinct[0]["role"] == "support"
     assert distinct[0]["price_state"] == "active"
     assert distinct[0]["structure_bias"] == "support"
+    assert distinct[0]["low"] == 78772.91
+    assert distinct[0]["high"] == 79272.91
+
+
+def test_structure_v1_prefers_nearest_support_biased_flipped_resistance_zone() -> None:
+    candidates = [
+        _structure_candidate(price=77330.01, index=1, origin="flipped_support"),
+        _structure_candidate(price=77330.01, index=1, origin="structure_swing_low"),
+        _structure_candidate(price=77590.03, index=2, origin="flipped_resistance"),
+        _structure_candidate(price=77590.03, index=2, origin="structure_swing_high"),
+        _structure_candidate(price=77727.26, index=3, origin="flipped_support"),
+        _structure_candidate(price=77727.26, index=3, origin="structure_swing_low"),
+        _structure_candidate(price=77750.01, index=4, origin="flipped_support"),
+        _structure_candidate(price=77750.01, index=4, origin="structure_swing_low"),
+        _structure_candidate(price=77785.03, index=5, origin="flipped_resistance"),
+        _structure_candidate(price=77785.03, index=5, origin="structure_swing_high"),
+        _structure_candidate(price=78203.07, index=6, origin="structure_swing_low"),
+        _structure_candidate(price=78445.89, index=7, origin="flipped_resistance"),
+        _structure_candidate(price=78445.89, index=7, origin="structure_swing_high"),
+        _structure_candidate(price=78686.85, index=8, origin="flipped_resistance"),
+        _structure_candidate(price=78686.85, index=8, origin="structure_swing_high"),
+        _structure_candidate(price=78793.67, index=9, origin="structure_swing_low"),
+        _structure_candidate(price=78827.21, index=10, origin="flipped_support"),
+        _structure_candidate(price=78827.21, index=10, origin="structure_swing_low"),
+        _structure_candidate(price=78850.06, index=11, origin="flipped_resistance"),
+        _structure_candidate(price=78850.06, index=11, origin="structure_swing_high"),
+        _structure_candidate(price=79105.49, index=12, origin="flipped_resistance"),
+        _structure_candidate(price=79105.49, index=12, origin="structure_swing_high"),
+        _structure_candidate(price=79272.91, index=13, origin="flipped_resistance"),
+        _structure_candidate(price=79272.91, index=13, origin="structure_swing_high"),
+        _structure_candidate(price=79578.85, index=14, origin="flipped_support"),
+    ]
+
+    zones = _build_structure_zones(
+        candidates,
+        zone_width=500.0,
+        min_touches=2,
+        current_price=78148.05,
+        buffer_pct=0.0015,
+    )
+    distinct = _make_structure_zones_distinct(
+        zones,
+        zone_tolerance_pct=0.0045,
+        current_price=78148.05,
+        buffer_pct=0.0015,
+    )
+
+    support = sorted([zone for zone in distinct if zone["role"] == "support"], key=lambda zone: _zone_distance_sort_key(zone, 78148.05))
+    resistance = [zone for zone in distinct if zone["role"] == "resistance"]
+    assert support[0]["origin"] == "flipped_resistance"
+    assert support[0]["price_state"] == "resistance"
+    assert support[0]["low"] == 78772.91
+    assert support[0]["high"] == 79272.91
+    assert not any(zone["high"] == 77785.03 for zone in support)
+    assert resistance
 
 
 def test_structure_v1_wick_pierce_does_not_confirm_break() -> None:
@@ -296,8 +353,8 @@ def _structure_zone(low: float, high: float, source_closes: list[float], score: 
     }
 
 
-def _structure_candidate(price: float, index: int, origin: str) -> StructureCandidate:
-    return StructureCandidate(
+def _structure_candidate(price: float, index: int, origin: str) -> ZoneStructureCandidate:
+    return ZoneStructureCandidate(
         price=price,
         index=index,
         origin=origin,

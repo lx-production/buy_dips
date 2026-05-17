@@ -48,7 +48,7 @@ class StructureEvent:
 
 
 @dataclass
-class StructureCandidate:
+class ZoneStructureCandidate:
     price: float
     index: int
     origin: str
@@ -147,11 +147,24 @@ def detect_support_resistance_zones_structure_v1(
         buffer_pct=buffer_pct,
     )
 
-    support = sorted([zone for zone in zones if zone["role"] == "support"], key=lambda z: z["high"], reverse=True)
-    resistance = sorted([zone for zone in zones if zone["role"] == "resistance"], key=lambda z: z["low"])
+    support = sorted([zone for zone in zones if zone["role"] == "support"], key=lambda z: _zone_distance_sort_key(z, current_price))
+    resistance = sorted([zone for zone in zones if zone["role"] == "resistance"], key=lambda z: _zone_distance_sort_key(z, current_price))
     active = sorted([zone for zone in zones if zone["role"] == "active"], key=lambda z: abs(z["mid"] - current_price))
     all_zones = support + active + resistance
     return {"support": support, "resistance": resistance, "active": active, "all": all_zones}
+
+
+def _zone_distance_sort_key(zone: dict[str, Any], current_price: float) -> tuple[float, float, int]:
+    low = float(zone["low"])
+    high = float(zone["high"])
+    price = float(current_price)
+    if low <= price <= high:
+        distance = 0.0
+    elif price < low:
+        distance = low - price
+    else:
+        distance = price - high
+    return (distance, -float(zone.get("score", 0.0)), -int(zone["touches"]))
 
 
 def _coerce_ohlc(df: pd.DataFrame | None) -> pd.DataFrame | None:
@@ -319,7 +332,7 @@ def _structure_candidates(
     internal_legs: list[StructureLeg],
     external_legs: list[StructureLeg],
     zone_width: float,
-) -> list[StructureCandidate]:
+) -> list[ZoneStructureCandidate]:
     candidates = [
         _candidate_from_pivot(
             pivot,
@@ -353,9 +366,9 @@ def _candidate_from_pivot(
     zone_width: float,
     broken_index: int | None = None,
     leg_ids: tuple[int, ...] = (),
-) -> StructureCandidate:
+) -> ZoneStructureCandidate:
     price = float(pivot.body_price)
-    return StructureCandidate(
+    return ZoneStructureCandidate(
         price=price,
         index=int(pivot.index),
         origin=origin,
@@ -372,13 +385,13 @@ def _leg_ids_for_index(index: int, legs: list[StructureLeg]) -> tuple[int, ...]:
 
 
 def _build_structure_zones(
-    candidates: list[StructureCandidate],
+    candidates: list[ZoneStructureCandidate],
     zone_width: float,
     min_touches: int,
     current_price: float,
     buffer_pct: float,
 ) -> list[dict[str, Any]]:
-    clusters: list[list[StructureCandidate]] = []
+    clusters: list[list[ZoneStructureCandidate]] = []
     for candidate in sorted(candidates, key=lambda item: item.price):
         placed = False
         for cluster in clusters:
@@ -399,16 +412,21 @@ def _build_structure_zones(
 
 
 def _structure_candidate_matches_cluster(
-    candidate: StructureCandidate,
-    cluster: list[StructureCandidate],
+    candidate: ZoneStructureCandidate,
+    cluster: list[ZoneStructureCandidate],
     zone_width: float,
 ) -> bool:
+    candidate_bias = _structure_candidate_bias(candidate)
+    cluster_bias = _structure_candidate_group_bias(cluster)
+    if candidate_bias != "mixed" and cluster_bias != "mixed" and candidate_bias != cluster_bias:
+        return False
+
     prices = [item.price for item in cluster] + [candidate.price]
     return max(prices) - min(prices) <= zone_width
 
 
 def _zone_from_structure_cluster(
-    cluster: list[StructureCandidate],
+    cluster: list[ZoneStructureCandidate],
     zone_width: float,
     current_price: float,
     buffer_pct: float,
@@ -420,7 +438,7 @@ def _zone_from_structure_cluster(
     price_state = _classify_price_cluster_role(prices, current_price, buffer_pct)
     structure_bias = _structure_cluster_bias(cluster)
     role = _resolve_structure_zone_role(price_state, structure_bias)
-    bounds_role = "active" if price_state == "active" else role
+    bounds_role = _structure_bounds_role(price_state, structure_bias)
     low, high = _fixed_structure_zone_bounds(prices, bounds_role, zone_width)
     mid = (low + high) / 2.0
     width = high - low
@@ -428,7 +446,7 @@ def _zone_from_structure_cluster(
     broken_indexes = [item.broken_index for item in cluster if item.broken_index is not None]
     leg_ids = sorted({leg_id for item in cluster for leg_id in item.leg_ids})
     origin = _structure_cluster_origin(cluster, role)
-    source_closes = [float(item.price) for item in cluster]
+    source_closes = [float(item.price) for item in cluster] # item.price is the body anchor from the swing pivot candle
     source_indexes = [int(item.index) for item in cluster]
     external_count = sum(1 for item in cluster if item.term == "external")
     flipped_count = sum(1 for item in cluster if item.origin.startswith("flipped_"))
@@ -454,7 +472,7 @@ def _zone_from_structure_cluster(
         "leg_ids": leg_ids,
     }
 
-
+# Merges nearby zones into “macro” zones
 def _consolidate_structure_zones(
     zones: list[dict[str, Any]],
     zone_width: float,
@@ -477,9 +495,9 @@ def _consolidate_structure_zones(
             macro_zones.append(_combine_structure_macro_group(group, zone_width, current_price, buffer_pct))
     return _suppress_nearby_structure_zones(macro_zones)
 
-
+# Checks if a zone can be added to an existing macro group
 def _structure_zones_can_share_macro_group(group: list[dict[str, Any]], zone: dict[str, Any]) -> bool:
-    gap = float(zone["low"]) - float(group[-1]["high"])
+    gap = float(zone["low"]) - float(group[-1]["high"]) # compares the new zone’s low to the last zone in the group’s high
     if gap > STRUCTURE_MACRO_GAP:
         return False
     source_prices = [float(price) for item in group for price in item["source_closes"]] + [
@@ -502,7 +520,7 @@ def _combine_structure_macro_group(
     price_state = _classify_price_cluster_role(source_closes, current_price, buffer_pct)
     structure_bias = _combine_structure_biases([_coerce_structure_bias(zone.get("structure_bias", "mixed")) for zone in group])
     role = _resolve_structure_zone_role(price_state, structure_bias)
-    bounds_role = "active" if price_state == "active" else role
+    bounds_role = _structure_bounds_role(price_state, structure_bias)
     low, high = _fixed_structure_zone_bounds(source_closes, bounds_role, zone_width)
     mid = (low + high) / 2.0
     width_pct = zone_width / mid * 100.0 if mid else 0.0
@@ -533,12 +551,18 @@ def _combine_structure_macro_group(
 
 
 def _resolve_structure_zone_role(price_state: ZoneRole, structure_bias: StructureBias) -> ZoneRole:
-    if price_state == "active" and structure_bias in ("support", "resistance"):
+    if structure_bias in ("support", "resistance"):
         return structure_bias
     return price_state
 
 
-def _structure_cluster_bias(cluster: list[StructureCandidate]) -> StructureBias:
+def _structure_bounds_role(price_state: ZoneRole, structure_bias: StructureBias) -> ZoneRole:
+    if structure_bias in ("support", "resistance"):
+        return structure_bias
+    return price_state
+
+# scores the cluster from pivot origins (swing lows, swing highs, flipped levels)
+def _structure_cluster_bias(cluster: list[ZoneStructureCandidate]) -> StructureBias:
     support_score = 0
     resistance_score = 0
     for item in cluster:
@@ -548,7 +572,22 @@ def _structure_cluster_bias(cluster: list[StructureCandidate]) -> StructureBias:
     return _structure_bias_from_scores(support_score, resistance_score)
 
 
-def _structure_candidate_bias_weights(candidate: StructureCandidate) -> tuple[int, int]:
+def _structure_candidate_bias(candidate: ZoneStructureCandidate) -> StructureBias:
+    support_score, resistance_score = _structure_candidate_bias_weights(candidate)
+    return _structure_bias_from_scores(support_score, resistance_score)
+
+
+def _structure_candidate_group_bias(cluster: list[ZoneStructureCandidate]) -> StructureBias:
+    support_score = 0
+    resistance_score = 0
+    for item in cluster:
+        item_support_score, item_resistance_score = _structure_candidate_bias_weights(item)
+        support_score += item_support_score
+        resistance_score += item_resistance_score
+    return _structure_bias_from_scores(support_score, resistance_score)
+
+
+def _structure_candidate_bias_weights(candidate: ZoneStructureCandidate) -> tuple[int, int]:
     if candidate.origin == "flipped_resistance":
         return (2, 0)
     if candidate.origin == "flipped_support":
@@ -559,19 +598,19 @@ def _structure_candidate_bias_weights(candidate: StructureCandidate) -> tuple[in
         return (0, 1)
     return (0, 0)
 
-
+# counts how many zones said support vs resistance
 def _combine_structure_biases(biases: list[StructureBias]) -> StructureBias:
     support_score = sum(1 for bias in biases if bias == "support")
     resistance_score = sum(1 for bias in biases if bias == "resistance")
     return _structure_bias_from_scores(support_score, resistance_score)
 
-
+# makes sure the bias is valid
 def _coerce_structure_bias(value: Any) -> StructureBias:
     if value in ("support", "resistance", "mixed"):
         return value
     return "mixed"
 
-
+# pick the most dominant bias
 def _structure_bias_from_scores(support_score: int, resistance_score: int) -> StructureBias:
     if support_score > resistance_score:
         return "support"
@@ -598,12 +637,12 @@ def _fixed_structure_zone_bounds(prices: list[float], role: ZoneRole, zone_width
     mid = (min(prices) + max(prices)) / 2.0
     return mid - zone_width / 2.0, mid + zone_width / 2.0
 
-
+# prices from swing pivots (the source_closes for the zone)
 def _support_base_anchor(prices: list[float]) -> float:
-    sorted_prices = sorted(float(price) for price in prices)
-    if len(sorted_prices) <= 3:
+    sorted_prices = sorted(float(price) for price in prices) # Sort prices low → high
+    if len(sorted_prices) <= 10:
         return max(sorted_prices)
-    index = int(np.floor((len(sorted_prices) - 1) * 0.10))
+    index = int(np.floor((len(sorted_prices) - 1) * 0.10)) # More touches: use the price at the 10th percentile
     return sorted_prices[index]
 
 
@@ -626,7 +665,7 @@ def _structure_origin_from_origins(origins: set[str], role: ZoneRole) -> str:
         return "mixed_structure"
     return "mixed_structure"
 
-
+# Thins zones that are still too close, after macro merging
 def _suppress_nearby_structure_zones(zones: list[dict[str, Any]]) -> list[dict[str, Any]]:
     kept: list[dict[str, Any]] = []
     for role in ("support", "active", "resistance"):
@@ -643,12 +682,12 @@ def _structure_zone_rank(zone: dict[str, Any]) -> tuple[float, int, float]:
     return (float(zone.get("score", 0.0)), int(zone["touches"]), -float(zone["width_pct"]))
 
 
-def _structure_cluster_origin(cluster: list[StructureCandidate], role: ZoneRole) -> str:
+def _structure_cluster_origin(cluster: list[ZoneStructureCandidate], role: ZoneRole) -> str:
     origins = {item.origin for item in cluster}
     return _structure_origin_from_origins(origins, role)
 
 
-def _structure_cluster_role(cluster: list[StructureCandidate]) -> str:
+def _structure_cluster_role(cluster: list[ZoneStructureCandidate]) -> str:
     roles = [item.structure_role for item in cluster if item.structure_role]
     if not roles:
         return "unknown"
