@@ -109,6 +109,8 @@ def _detect_and_store_zones(config: AppConfig, database_path: Path) -> dict[str,
             external_swing_order=zc.external_swing_order,
             atr_period=zc.atr_period,
             break_atr_mult=zc.break_atr_mult,
+            external_min_swing_atr_mult=zc.external_min_swing_atr_mult,
+            external_min_swing_pct=zc.external_min_swing_pct,
         )
     inserted = insert_zones(database_path, zones_result["all"], config.symbol, config.timeframe)
     print(f"Closed candles loaded: {len(df)}")

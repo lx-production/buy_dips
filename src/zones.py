@@ -69,6 +69,8 @@ def detect_support_resistance_zones(
     external_swing_order: int = 5,
     atr_period: int = 14,
     break_atr_mult: float = 0.2,
+    external_min_swing_atr_mult: float = 4.0,
+    external_min_swing_pct: float = 2.5,
 ) -> dict[str, list[dict[str, Any]]]:
     return detect_support_resistance_zones_structure_v1(
         df,
@@ -80,6 +82,8 @@ def detect_support_resistance_zones(
         current_price=current_price,
         buffer_pct=buffer_pct,
         break_atr_mult=break_atr_mult,
+        external_min_swing_atr_mult=external_min_swing_atr_mult,
+        external_min_swing_pct=external_min_swing_pct,
     )
 
 
@@ -88,6 +92,8 @@ def detect_support_resistance_zones_structure_v1(
     internal_swing_order: int = 2,
     external_swing_order: int = 5,
     atr_period: int = 14,
+    external_min_swing_atr_mult: float = 4.0,
+    external_min_swing_pct: float = 2.5,
     zone_tolerance_pct: float = 0.0045,
     min_touches: int = 2,
     current_price: float | None = None,
@@ -111,7 +117,12 @@ def detect_support_resistance_zones_structure_v1(
         current_price = float(closes[-1])
 
     internal_pivots = _find_structure_pivots(ohlc, internal_swing_order, atr, "internal")
-    external_pivots = _find_structure_pivots(ohlc, external_swing_order, atr, "external")
+    raw_external_pivots = _find_structure_pivots(ohlc, external_swing_order, atr, "external")
+    external_pivots = _filter_prominent_structure_pivots(
+        raw_external_pivots,
+        min_swing_atr_mult=external_min_swing_atr_mult,
+        min_swing_pct=external_min_swing_pct,
+    )
     if not internal_pivots and not external_pivots:
         return empty
 
@@ -236,6 +247,50 @@ def _find_structure_pivots(
                 )
             )
     return sorted(pivots, key=lambda pivot: (pivot.index, 0 if pivot.kind == "low" else 1))
+
+
+def _filter_prominent_structure_pivots(
+    pivots: list[StructurePivot],
+    min_swing_atr_mult: float,
+    min_swing_pct: float,
+) -> list[StructurePivot]:
+    atr_mult = max(0.0, float(min_swing_atr_mult))
+    pct = max(0.0, float(min_swing_pct))
+    if not pivots or (atr_mult == 0.0 and pct == 0.0):
+        return list(pivots)
+
+    prominent: list[StructurePivot] = []
+    for pivot in sorted(pivots, key=lambda item: (item.index, 0 if item.kind == "low" else 1)):
+        if not prominent:
+            prominent.append(pivot)
+            continue
+
+        previous = prominent[-1]
+        if pivot.kind == previous.kind:
+            if _is_more_extreme_structure_pivot(pivot, previous):
+                prominent[-1] = pivot
+            continue
+
+        min_move = max(
+            _structure_pivot_min_move(previous, atr_mult=atr_mult, pct=pct),
+            _structure_pivot_min_move(pivot, atr_mult=atr_mult, pct=pct),
+        )
+        if abs(float(pivot.price) - float(previous.price)) >= min_move:
+            prominent.append(pivot)
+
+    return prominent
+
+
+def _is_more_extreme_structure_pivot(candidate: StructurePivot, current: StructurePivot) -> bool:
+    if candidate.kind == "high":
+        return candidate.price > current.price
+    return candidate.price < current.price
+
+
+def _structure_pivot_min_move(pivot: StructurePivot, atr_mult: float, pct: float) -> float:
+    atr_move = abs(float(pivot.atr)) * atr_mult
+    pct_move = abs(float(pivot.price)) * pct / 100.0
+    return max(atr_move, pct_move)
 
 
 def _label_structure_pivots(pivots: list[StructurePivot]) -> None:

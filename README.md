@@ -90,14 +90,17 @@ Phase 1 uses **`structure_v1` only** for zones (implemented in `detect_support_r
 
 `structure_v1` treats candles as a time-price path:
 
-- high/low/body ranges detect internal and external swing points
-- swing points form legs with ATR-normalized slope metadata
-- zones are built from external 4H swing points, not minor internal swings
+- high/low/body ranges detect raw internal and external swing points
+- external swing points are filtered into prominent 4H pivots using the configured ATR/percent reversal thresholds
+- prominent external pivots form legs with ATR-normalized slope metadata
+- zones are built from prominent external 4H swing points, not minor internal swings
 - every structure zone is a fixed 500 USD band from `low` to `high`
 - nearby fixed bands are consolidated so only the strongest macro zones remain
 - support bands are anchored to the lower base of their external swing-low group, not the group midpoint
 - candle closes confirm BOS/CHOCH-style structure breaks
 - flipped structure levels can become support or resistance
+
+The default prominent-pivot filter requires an external swing reversal of at least `max(4.0 * ATR, 2.5% of price)`. Set `external_min_swing_atr_mult: 0.0` and `external_min_swing_pct: 0.0` to inspect the raw local-extrema behavior. The chart hides internal pivot labels unless `show_internal_pivots: true` is set.
 
 The output remains compatible with the paper signal logic: every zone still includes `low`, `high`, `mid`, `width`, `width_pct`, `touches`, `origin`, `role`, `source_closes`, and `source_indexes`. Additional metadata such as `score`, `structure_role`, `broken_index`, `zone_width`, and `leg_ids` is included for inspection and later signal scoring.
 

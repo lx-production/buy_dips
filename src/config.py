@@ -16,6 +16,9 @@ class ZoneConfig(BaseModel):
     external_swing_order: int = 5
     atr_period: int = 14
     break_atr_mult: float = 0.2
+    external_min_swing_atr_mult: float = 4.0
+    external_min_swing_pct: float = 2.5
+    show_internal_pivots: bool = False
 
 
 class SignalConfig(BaseModel):

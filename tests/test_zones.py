@@ -11,6 +11,7 @@ from src.zones import (
     _build_structure_zones,
     _consolidate_structure_zones,
     _detect_structure_events,
+    _filter_prominent_structure_pivots,
     _find_structure_pivots,
     _fixed_structure_zone_bounds,
     _label_structure_pivots,
@@ -86,6 +87,8 @@ def test_structure_v1_clusters_external_pivots_with_fixed_500_dollar_width() -> 
         internal_swing_order=1,
         external_swing_order=2,
         atr_period=3,
+        external_min_swing_atr_mult=0.0,
+        external_min_swing_pct=0.0,
         min_touches=2,
         current_price=68000,
     )
@@ -257,6 +260,38 @@ def test_internal_and_external_structure_pivots_have_different_granularity() -> 
 
     assert len(internal) > len(external)
     assert external
+
+
+def test_prominent_structure_pivots_ignore_small_reversals_and_keep_extremes() -> None:
+    pivots = [
+        StructurePivot(index=1, kind="high", price=110.0, body_price=109.0, atr=1.0, term="external"),
+        StructurePivot(index=2, kind="high", price=112.0, body_price=111.0, atr=1.0, term="external"),
+        StructurePivot(index=3, kind="low", price=111.0, body_price=111.5, atr=1.0, term="external"),
+        StructurePivot(index=4, kind="high", price=115.0, body_price=114.0, atr=1.0, term="external"),
+        StructurePivot(index=5, kind="low", price=100.0, body_price=101.0, atr=1.0, term="external"),
+        StructurePivot(index=6, kind="low", price=98.0, body_price=99.0, atr=1.0, term="external"),
+        StructurePivot(index=7, kind="high", price=103.0, body_price=102.0, atr=1.0, term="external"),
+    ]
+
+    result = _filter_prominent_structure_pivots(pivots, min_swing_atr_mult=4.0, min_swing_pct=0.0)
+
+    assert [(pivot.index, pivot.kind, pivot.price) for pivot in result] == [
+        (4, "high", 115.0),
+        (6, "low", 98.0),
+        (7, "high", 103.0),
+    ]
+
+
+def test_prominent_structure_pivots_can_require_percent_move() -> None:
+    pivots = [
+        StructurePivot(index=1, kind="high", price=100.0, body_price=99.0, atr=0.0, term="external"),
+        StructurePivot(index=2, kind="low", price=94.0, body_price=95.0, atr=0.0, term="external"),
+        StructurePivot(index=3, kind="low", price=89.0, body_price=90.0, atr=0.0, term="external"),
+    ]
+
+    result = _filter_prominent_structure_pivots(pivots, min_swing_atr_mult=0.0, min_swing_pct=10.0)
+
+    assert [(pivot.index, pivot.kind, pivot.price) for pivot in result] == [(1, "high", 100.0), (3, "low", 89.0)]
 
 
 def test_structure_events_classify_bos_then_choch() -> None:
