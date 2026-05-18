@@ -246,6 +246,9 @@ INDEX_HTML = """<!doctype html>
     .support { background: #2ea043; }
     .internal { background: #79c0ff; }
     .external { background: #d2a8ff; }
+    .controls { display: flex; gap: 12px; margin-top: 10px; color: #c9d1d9; font-size: 12px; }
+    .toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
+    .toggle input { width: 14px; height: 14px; margin: 0; accent-color: #d2a8ff; }
     .error { position: fixed; inset: auto 22px 22px 22px; padding: 12px 14px; border-radius: 10px; color: #ffdcd7; background: rgba(248,81,73,.14); border: 1px solid rgba(248,81,73,.35); font-size: 13px; display: none; }
   </style>
 </head>
@@ -258,6 +261,12 @@ INDEX_HTML = """<!doctype html>
       <span><i class="dot support"></i>Support</span>
       <span><i class="dot external"></i>Prominent external pivots</span>
     </div>
+    <div class="controls">
+      <label class="toggle" title="Show or hide prominent external swing points">
+        <input type="checkbox" id="toggle-external-pivots" checked>
+        External pivots
+      </label>
+    </div>
   </div>
   <div class="error" id="error"></div>
   <script>
@@ -266,6 +275,7 @@ INDEX_HTML = """<!doctype html>
     const title = document.getElementById('title');
     const meta = document.getElementById('meta');
     const error = document.getElementById('error');
+    const toggleExternalPivots = document.getElementById('toggle-external-pivots');
     let chartData = null;
 
     async function load() {
@@ -313,9 +323,14 @@ INDEX_HTML = """<!doctype html>
       drawGrid(width, height, scale);
       drawZones(zones, width, scale);
       drawCandles(candles, scale);
-      drawPivots(chartData.pivots || [], candles, scale);
+      drawPivots(visiblePivots(chartData.pivots || []), candles, scale);
       drawPriceAxis(scale, width);
       drawTimeAxis(candles, scale, height);
+    }
+
+    function visiblePivots(pivots) {
+      if (toggleExternalPivots.checked) return pivots;
+      return pivots.filter(pivot => pivot.term !== 'external');
     }
 
     function yFor(price, scale) {
@@ -479,6 +494,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     window.addEventListener('resize', resize);
+    toggleExternalPivots.addEventListener('change', draw);
     resize();
     load().catch((err) => {
       error.style.display = 'block';

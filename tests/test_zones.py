@@ -13,9 +13,11 @@ from src.zones import (
     _detect_structure_events,
     _filter_prominent_structure_pivots,
     _find_structure_pivots,
+    _fill_structure_support_staircase_gaps,
     _fixed_structure_zone_bounds,
     _label_structure_pivots,
     _make_structure_zones_distinct,
+    _support_floor_candidates,
     _zone_distance_sort_key,
     _zone_from_structure_cluster,
     detect_support_resistance_zones_structure_v1,
@@ -222,6 +224,72 @@ def test_structure_v1_prefers_nearest_support_biased_flipped_resistance_zone() -
     assert resistance
 
 
+def test_structure_v1_adds_retested_long_wick_support_floor() -> None:
+    raw_external_pivots = [
+        StructurePivot(index=1, kind="low", price=72945.50, body_price=74935.00, atr=1910.03, term="external"),
+        StructurePivot(index=2, kind="low", price=74821.57, body_price=75023.43, atr=1047.59, term="external"),
+        StructurePivot(index=3, kind="low", price=74937.52, body_price=75563.86, atr=896.60, term="external"),
+    ]
+    prominent_pivots = [raw_external_pivots[-1]]
+
+    candidates = _support_floor_candidates(
+        raw_external_pivots=raw_external_pivots,
+        external_pivots=prominent_pivots,
+        external_legs=[],
+        zone_width=500.0,
+    )
+    zones = _build_structure_zones(
+        candidates,
+        zone_width=500.0,
+        min_touches=2,
+        current_price=76924.65,
+        buffer_pct=0.0015,
+    )
+
+    assert len(zones) == 1
+    assert zones[0]["origin"] == "structure_support_floor"
+    assert zones[0]["role"] == "support"
+    assert zones[0]["low"] == 74935.0
+    assert zones[0]["high"] == 75435.0
+    assert zones[0]["touches"] == 3
+
+
+def test_structure_v1_fills_large_support_gap_with_best_stair_step_zone() -> None:
+    zones = [
+        _structure_zone(low=65510.93, high=66010.93, source_closes=[65971.20, 66010.93], score=4.0),
+        _structure_zone(low=73301.80, high=73801.80, source_closes=[73611.10, 73801.80], score=5.0),
+    ]
+    raw_external_pivots = [
+        _high_pivot(index=1, price=67650.00, body_price=67502.16),
+        _high_pivot(index=2, price=68150.00, body_price=68076.01),
+        _high_pivot(index=3, price=70050.00, body_price=69968.87),
+        _high_pivot(index=4, price=70200.00, body_price=70131.48),
+        _high_pivot(index=5, price=70700.00, body_price=70641.82),
+        _high_pivot(index=6, price=70710.00, body_price=70652.73),
+        _high_pivot(index=7, price=70800.00, body_price=70731.45),
+        _high_pivot(index=8, price=70900.00, body_price=70828.43),
+        _high_pivot(index=9, price=70950.00, body_price=70854.66),
+    ]
+
+    filled = _fill_structure_support_staircase_gaps(
+        zones=zones,
+        raw_external_pivots=raw_external_pivots,
+        closes=pd.Series([65000.0] * 10 + [80000.0]).to_numpy(dtype=float),
+        break_atr_mult=0.0,
+        zone_width=500.0,
+        min_touches=2,
+        current_price=76924.65,
+        buffer_pct=0.0015,
+        zone_tolerance_pct=0.0045,
+    )
+
+    stair_steps = [zone for zone in filled if zone["origin"] == "stair_step_flipped_resistance"]
+    assert len(stair_steps) == 1
+    assert stair_steps[0]["low"] == 70354.66
+    assert stair_steps[0]["high"] == 70854.66
+    assert stair_steps[0]["touches"] == 7
+
+
 def test_structure_v1_wick_pierce_does_not_confirm_break() -> None:
     df = pd.DataFrame(
         {
@@ -396,4 +464,16 @@ def _structure_candidate(price: float, index: int, origin: str) -> ZoneStructure
         zone_width=500.0,
         structure_role="mixed",
         term="external",
+    )
+
+
+def _high_pivot(index: int, price: float, body_price: float) -> StructurePivot:
+    return StructurePivot(
+        index=index,
+        kind="high",
+        price=price,
+        body_price=body_price,
+        atr=0.0,
+        term="external",
+        structure_role="HH",
     )

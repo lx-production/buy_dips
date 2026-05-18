@@ -97,6 +97,8 @@ Phase 1 uses **`structure_v1` only** for zones (implemented in `detect_support_r
 - every structure zone is a fixed 500 USD band from `low` to `high`
 - nearby fixed bands are consolidated so only the strongest macro zones remain
 - support bands are anchored to the lower base of their external swing-low group, not the group midpoint
+- long-wick prominent swing lows can form `structure_support_floor` zones when the wick floor is retested by another external swing-low body
+- oversized support gaps can be filled with one `stair_step_flipped_resistance` zone from broken raw external swing highs
 - candle closes confirm BOS/CHOCH-style structure breaks
 - flipped structure levels can become support or resistance
 
@@ -104,7 +106,7 @@ The default prominent-pivot filter requires an external swing reversal of at lea
 
 The output remains compatible with the paper signal logic: every zone still includes `low`, `high`, `mid`, `width`, `width_pct`, `touches`, `origin`, `role`, `source_closes`, and `source_indexes`. Additional metadata such as `score`, `structure_role`, `broken_index`, `zone_width`, and `leg_ids` is included for inspection and later signal scoring.
 
-**`source_closes`** — one price per pivot touch that formed the zone (same length and order as `source_indexes`). Despite the name, these are **not** always the candle `close` from OHLC. Each value is the relevant **body edge** from that pivot bar: for swing lows, `min(open, close)`; for swing highs, `max(open, close)`. Wicks (`high` / `low`) are used to find swings and breaks, but zone touches and bounds use these body-edge anchors only. `touches` is `len(source_closes)`.
+**`source_closes`** — one price per pivot touch that formed the zone (same length and order as `source_indexes`). Despite the name, these are **not** always the candle `close` from OHLC. Most values are the relevant **body edge** from that pivot bar: for swing lows, `min(open, close)`; for swing highs, `max(open, close)`. `structure_support_floor` zones can also include a prominent swing-low wick floor when that floor is retested by another external swing-low body. `touches` is `len(source_closes)`.
 
 ## Safety Warning
 

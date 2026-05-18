@@ -9,10 +9,14 @@ ZoneRole = Literal["support", "resistance", "active"]
 StructureBias = Literal["support", "resistance", "mixed"]
 PivotKind = Literal["high", "low"]
 SwingTerm = Literal["internal", "external"]
+StructureBoundsStyle = Literal["body", "support_floor"]
 STRUCTURE_ZONE_WIDTH = 500.0
 STRUCTURE_MACRO_GAP = 300.0
 STRUCTURE_MACRO_MAX_SOURCE_SPAN = 2000.0
 STRUCTURE_IMPORTANT_ZONE_SPACING = 1600.0
+STRUCTURE_SUPPORT_FLOOR_RETEST_WIDTH_MULT = 0.2
+STRUCTURE_STAIR_STEP_MAX_SUPPORT_GAP = 4500.0
+STRUCTURE_STAIR_STEP_MAX_INSERTIONS = 6
 
 
 @dataclass
@@ -55,6 +59,7 @@ class ZoneStructureCandidate:
     zone_width: float
     structure_role: str
     term: SwingTerm
+    bounds_style: StructureBoundsStyle = "body"
     broken_index: int | None = None
     leg_ids: tuple[int, ...] = ()
 
@@ -138,6 +143,7 @@ def detect_support_resistance_zones_structure_v1(
     )
     candidates = _structure_candidates(
         internal_pivots=internal_pivots,
+        raw_external_pivots=raw_external_pivots,
         external_pivots=external_pivots,
         events=events,
         internal_legs=internal_legs,
@@ -156,6 +162,17 @@ def detect_support_resistance_zones_structure_v1(
         zone_tolerance_pct=zone_tolerance_pct,
         current_price=current_price,
         buffer_pct=buffer_pct,
+    )
+    zones = _fill_structure_support_staircase_gaps(
+        zones=zones,
+        raw_external_pivots=raw_external_pivots,
+        closes=closes,
+        break_atr_mult=break_atr_mult,
+        zone_width=STRUCTURE_ZONE_WIDTH,
+        min_touches=min_touches,
+        current_price=current_price,
+        buffer_pct=buffer_pct,
+        zone_tolerance_pct=zone_tolerance_pct,
     )
 
     support = sorted([zone for zone in zones if zone["role"] == "support"], key=lambda z: _zone_distance_sort_key(z, current_price))
@@ -382,6 +399,7 @@ def _detect_structure_events(
 
 def _structure_candidates(
     internal_pivots: list[StructurePivot],
+    raw_external_pivots: list[StructurePivot],
     external_pivots: list[StructurePivot],
     events: list[StructureEvent],
     internal_legs: list[StructureLeg],
@@ -412,6 +430,14 @@ def _structure_candidates(
                 zone_width=zone_width,
             )
         )
+    candidates.extend(
+        _support_floor_candidates(
+            raw_external_pivots=raw_external_pivots,
+            external_pivots=external_pivots,
+            external_legs=external_legs,
+            zone_width=zone_width,
+        )
+    )
     return sorted(candidates, key=lambda candidate: (candidate.price, candidate.index, candidate.origin))
 
 
@@ -431,6 +457,117 @@ def _candidate_from_pivot(
         structure_role=pivot.structure_role or ("SH" if pivot.kind == "high" else "SL"),
         term=pivot.term,
         broken_index=broken_index,
+        leg_ids=leg_ids,
+    )
+
+
+def _support_floor_candidates(
+    raw_external_pivots: list[StructurePivot],
+    external_pivots: list[StructurePivot],
+    external_legs: list[StructureLeg],
+    zone_width: float,
+) -> list[ZoneStructureCandidate]:
+    floor_candidates: list[ZoneStructureCandidate] = []
+    retest_tolerance = float(zone_width) * STRUCTURE_SUPPORT_FLOOR_RETEST_WIDTH_MULT
+    prominent_lows = [
+        pivot
+        for pivot in external_pivots
+        if pivot.kind == "low" and float(pivot.body_price) - float(pivot.price) >= float(zone_width)
+    ]
+    raw_lows = [pivot for pivot in raw_external_pivots if pivot.kind == "low"]
+
+    for prominent_low in prominent_lows:
+        floor_price = float(prominent_low.price)
+        floor_candidates.append(
+            _candidate_from_support_floor(
+                pivot=prominent_low,
+                price=floor_price,
+                origin="structure_swing_low_wick",
+                zone_width=zone_width,
+                leg_ids=_leg_ids_for_index(prominent_low.index, external_legs),
+            )
+        )
+        for raw_low in raw_lows:
+            if raw_low.index == prominent_low.index:
+                continue
+            body_floor = float(raw_low.body_price)
+            if abs(body_floor - floor_price) > retest_tolerance:
+                continue
+            floor_candidates.append(
+                _candidate_from_support_floor(
+                    pivot=raw_low,
+                    price=body_floor,
+                    origin="structure_swing_low_body_floor",
+                    zone_width=zone_width,
+                    leg_ids=_leg_ids_for_index(raw_low.index, external_legs),
+                )
+            )
+
+    return floor_candidates
+
+
+def _stair_step_support_candidates(
+    raw_external_pivots: list[StructurePivot],
+    closes: np.ndarray,
+    break_atr_mult: float,
+    zone_width: float,
+    lower_zone: dict[str, Any],
+    upper_zone: dict[str, Any],
+    current_price: float,
+    buffer_pct: float,
+) -> list[ZoneStructureCandidate]:
+    lower_high = float(lower_zone["high"])
+    upper_low = float(upper_zone["low"])
+    support_ceiling = float(current_price) * (1.0 - float(buffer_pct))
+    candidates: list[ZoneStructureCandidate] = []
+
+    for pivot in raw_external_pivots:
+        if pivot.kind != "high":
+            continue
+        price = float(pivot.body_price)
+        if price - float(zone_width) <= lower_high or price >= upper_low or price >= support_ceiling:
+            continue
+        if not _raw_high_is_confirmed_broken(pivot, closes, break_atr_mult):
+            continue
+        candidates.append(
+            ZoneStructureCandidate(
+                price=price,
+                index=int(pivot.index),
+                origin="stair_step_flipped_resistance",
+                zone_width=float(zone_width),
+                structure_role=pivot.structure_role or "H",
+                term=pivot.term,
+            )
+        )
+
+    return candidates
+
+
+def _raw_high_is_confirmed_broken(
+    pivot: StructurePivot,
+    closes: np.ndarray,
+    break_atr_mult: float,
+) -> bool:
+    threshold = max(0.0, float(pivot.atr) * float(break_atr_mult))
+    future_closes = closes[pivot.index + 1 :]
+    return bool(len(future_closes) and np.any(future_closes > float(pivot.price) + threshold))
+
+
+def _candidate_from_support_floor(
+    pivot: StructurePivot,
+    price: float,
+    origin: str,
+    zone_width: float,
+    leg_ids: tuple[int, ...] = (),
+) -> ZoneStructureCandidate:
+    return ZoneStructureCandidate(
+        price=float(price),
+        index=int(pivot.index),
+        origin=origin,
+        zone_width=float(zone_width),
+        structure_role=pivot.structure_role or "SL",
+        term=pivot.term,
+        bounds_style="support_floor",
         leg_ids=leg_ids,
     )
 
@@ -471,6 +608,9 @@ def _structure_candidate_matches_cluster(
     cluster: list[ZoneStructureCandidate],
     zone_width: float,
 ) -> bool:
+    if candidate.bounds_style != cluster[0].bounds_style:
+        return False
+
     candidate_bias = _structure_candidate_bias(candidate)
     cluster_bias = _structure_candidate_group_bias(cluster)
     if candidate_bias != "mixed" and cluster_bias != "mixed" and candidate_bias != cluster_bias:
@@ -494,14 +634,17 @@ def _zone_from_structure_cluster(
     structure_bias = _structure_cluster_bias(cluster)
     role = _resolve_structure_zone_role(price_state, structure_bias)
     bounds_role = _structure_bounds_role(price_state, structure_bias)
-    low, high = _fixed_structure_zone_bounds(prices, bounds_role, zone_width)
+    if _cluster_uses_support_floor_bounds(cluster):
+        low, high = _fixed_support_floor_zone_bounds(prices, zone_width)
+    else:
+        low, high = _fixed_structure_zone_bounds(prices, bounds_role, zone_width)
     mid = (low + high) / 2.0
     width = high - low
     width_pct = width / mid * 100.0 if mid else 0.0
     broken_indexes = [item.broken_index for item in cluster if item.broken_index is not None]
     leg_ids = sorted({leg_id for item in cluster for leg_id in item.leg_ids})
     origin = _structure_cluster_origin(cluster, role)
-    source_closes = [float(item.price) for item in cluster] # item.price is the body anchor from the swing pivot candle
+    source_closes = [float(item.price) for item in cluster]
     source_indexes = [int(item.index) for item in cluster]
     external_count = sum(1 for item in cluster if item.term == "external")
     flipped_count = sum(1 for item in cluster if item.origin.startswith("flipped_"))
@@ -643,6 +786,10 @@ def _structure_candidate_group_bias(cluster: list[ZoneStructureCandidate]) -> St
 
 
 def _structure_candidate_bias_weights(candidate: ZoneStructureCandidate) -> tuple[int, int]:
+    if candidate.origin in ("structure_swing_low_wick", "structure_swing_low_body_floor"):
+        return (1, 0)
+    if candidate.origin == "stair_step_flipped_resistance":
+        return (2, 0)
     if candidate.origin == "flipped_resistance":
         return (2, 0)
     if candidate.origin == "flipped_support":
@@ -692,12 +839,26 @@ def _fixed_structure_zone_bounds(prices: list[float], role: ZoneRole, zone_width
     mid = (min(prices) + max(prices)) / 2.0
     return mid - zone_width / 2.0, mid + zone_width / 2.0
 
+
+def _fixed_support_floor_zone_bounds(prices: list[float], zone_width: float) -> tuple[float, float]:
+    low = _support_floor_anchor(prices)
+    return low, low + float(zone_width)
+
+
 # prices from swing pivots (the source_closes for the zone)
 def _support_base_anchor(prices: list[float]) -> float:
     sorted_prices = sorted(float(price) for price in prices) # Sort prices low → high
     if len(sorted_prices) <= 10:
         return max(sorted_prices)
     index = int(np.floor((len(sorted_prices) - 1) * 0.10)) # More touches: use the price at the 10th percentile
+    return sorted_prices[index]
+
+
+def _support_floor_anchor(prices: list[float]) -> float:
+    sorted_prices = sorted(float(price) for price in prices)
+    if len(sorted_prices) <= 10:
+        return min(sorted_prices)
+    index = int(np.floor((len(sorted_prices) - 1) * 0.10))
     return sorted_prices[index]
 
 
@@ -710,6 +871,8 @@ def _resistance_base_anchor(prices: list[float]) -> float:
 
 
 def _structure_origin_from_origins(origins: set[str], role: ZoneRole) -> str:
+    if origins and all(origin in ("structure_swing_low_wick", "structure_swing_low_body_floor") for origin in origins):
+        return "structure_support_floor"
     if len(origins) == 1:
         return next(iter(origins))
     if role == "resistance" and "flipped_support" in origins:
@@ -749,6 +912,135 @@ def _structure_cluster_role(cluster: list[ZoneStructureCandidate]) -> str:
     if len(set(roles)) == 1:
         return roles[0]
     return "mixed"
+
+
+def _cluster_uses_support_floor_bounds(cluster: list[ZoneStructureCandidate]) -> bool:
+    return all(item.bounds_style == "support_floor" for item in cluster)
+
+
+def _fill_structure_support_staircase_gaps(
+    zones: list[dict[str, Any]],
+    raw_external_pivots: list[StructurePivot],
+    closes: np.ndarray,
+    break_atr_mult: float,
+    zone_width: float,
+    min_touches: int,
+    current_price: float,
+    buffer_pct: float,
+    zone_tolerance_pct: float,
+) -> list[dict[str, Any]]:
+    filled_zones = [dict(zone) for zone in zones]
+    for _ in range(STRUCTURE_STAIR_STEP_MAX_INSERTIONS):
+        gap_fill = _best_structure_support_staircase_gap_fill(
+            zones=filled_zones,
+            raw_external_pivots=raw_external_pivots,
+            closes=closes,
+            break_atr_mult=break_atr_mult,
+            zone_width=zone_width,
+            min_touches=min_touches,
+            current_price=current_price,
+            buffer_pct=buffer_pct,
+        )
+        if gap_fill is None:
+            break
+        filled_zones.append(gap_fill)
+        filled_zones = _make_structure_zones_distinct(
+            filled_zones,
+            zone_tolerance_pct=zone_tolerance_pct,
+            current_price=current_price,
+            buffer_pct=buffer_pct,
+        )
+    return filled_zones
+
+
+def _best_structure_support_staircase_gap_fill(
+    zones: list[dict[str, Any]],
+    raw_external_pivots: list[StructurePivot],
+    closes: np.ndarray,
+    break_atr_mult: float,
+    zone_width: float,
+    min_touches: int,
+    current_price: float,
+    buffer_pct: float,
+) -> dict[str, Any] | None:
+    support_zones = sorted(
+        [
+            zone
+            for zone in zones
+            if zone["role"] == "support" and _coerce_zone_price_state(zone, current_price, buffer_pct) == "support"
+        ],
+        key=lambda zone: float(zone["low"]),
+    )
+    best_zone: dict[str, Any] | None = None
+    best_rank: tuple[float, float, int, float] | None = None
+
+    for lower_zone, upper_zone in zip(support_zones, support_zones[1:]):
+        gap = float(upper_zone["low"]) - float(lower_zone["high"])
+        if gap <= STRUCTURE_STAIR_STEP_MAX_SUPPORT_GAP:
+            continue
+
+        candidates = _stair_step_support_candidates(
+            raw_external_pivots=raw_external_pivots,
+            closes=closes,
+            break_atr_mult=break_atr_mult,
+            zone_width=zone_width,
+            lower_zone=lower_zone,
+            upper_zone=upper_zone,
+            current_price=current_price,
+            buffer_pct=buffer_pct,
+        )
+        candidate_zones = _build_structure_zones(
+            candidates,
+            zone_width=zone_width,
+            min_touches=min_touches,
+            current_price=current_price,
+            buffer_pct=buffer_pct,
+        )
+        candidate_zones = [
+            zone
+            for zone in candidate_zones
+            if zone["role"] == "support"
+            and float(zone["low"]) > float(lower_zone["high"])
+            and float(zone["high"]) < float(upper_zone["low"])
+        ]
+        if not candidate_zones:
+            continue
+
+        selected = min(candidate_zones, key=lambda zone: _stair_step_gap_rank(zone, lower_zone, upper_zone))
+        rank = _stair_step_gap_rank(selected, lower_zone, upper_zone)
+        if best_rank is None or rank < best_rank:
+            best_zone = selected
+            best_rank = rank
+
+    return best_zone
+
+
+def _stair_step_gap_rank(
+    zone: dict[str, Any],
+    lower_zone: dict[str, Any],
+    upper_zone: dict[str, Any],
+) -> tuple[float, float, int, float]:
+    lower_gap = float(zone["low"]) - float(lower_zone["high"])
+    upper_gap = float(upper_zone["low"]) - float(zone["high"])
+    midpoint = (float(lower_zone["high"]) + float(upper_zone["low"])) / 2.0
+    return (
+        max(lower_gap, upper_gap),
+        -float(zone.get("score", 0.0)),
+        -int(zone["touches"]),
+        abs(float(zone["mid"]) - midpoint),
+    )
+
+
+def _coerce_zone_price_state(zone: dict[str, Any], current_price: float, buffer_pct: float) -> ZoneRole:
+    value = zone.get("price_state")
+    if value in ("support", "active", "resistance"):
+        return value
+    return _classify_role(
+        low=float(zone["low"]),
+        high=float(zone["high"]),
+        current_price=current_price,
+        buffer_pct=buffer_pct,
+    )
 
 
 def _make_structure_zones_distinct(
