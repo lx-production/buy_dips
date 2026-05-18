@@ -98,7 +98,7 @@ Phase 1 uses **`structure_v1` only** for zones (implemented in `detect_support_r
 - nearby fixed bands are consolidated so only the strongest macro zones remain
 - support bands are anchored to the lower base of their external swing-low group, not the group midpoint
 - long-wick prominent swing lows can form `structure_support_floor` zones when the wick floor is retested by another external swing-low body
-- oversized support gaps can be filled with one `stair_step_flipped_resistance` zone from broken raw external swing highs
+- oversized support gaps can be filled with `stair_step_flipped_resistance` zones from broken raw external swing highs
 - candle closes confirm BOS/CHOCH-style structure breaks
 - flipped structure levels can become support or resistance
 

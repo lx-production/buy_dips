@@ -254,27 +254,32 @@ def test_structure_v1_adds_retested_long_wick_support_floor() -> None:
     assert zones[0]["touches"] == 3
 
 
-def test_structure_v1_fills_large_support_gap_with_best_stair_step_zone() -> None:
+def test_structure_v1_fills_large_support_gap_with_balanced_stair_step_zones() -> None:
     zones = [
         _structure_zone(low=65510.93, high=66010.93, source_closes=[65971.20, 66010.93], score=4.0),
         _structure_zone(low=73301.80, high=73801.80, source_closes=[73611.10, 73801.80], score=5.0),
     ]
     raw_external_pivots = [
-        _high_pivot(index=1, price=67650.00, body_price=67502.16),
-        _high_pivot(index=2, price=68150.00, body_price=68076.01),
-        _high_pivot(index=3, price=70050.00, body_price=69968.87),
-        _high_pivot(index=4, price=70200.00, body_price=70131.48),
-        _high_pivot(index=5, price=70700.00, body_price=70641.82),
-        _high_pivot(index=6, price=70710.00, body_price=70652.73),
-        _high_pivot(index=7, price=70800.00, body_price=70731.45),
-        _high_pivot(index=8, price=70900.00, body_price=70828.43),
-        _high_pivot(index=9, price=70950.00, body_price=70854.66),
+        _high_pivot(index=1, price=67100.00, body_price=67014.91),
+        _high_pivot(index=2, price=67450.00, body_price=67383.66),
+        _high_pivot(index=3, price=67650.00, body_price=67502.16),
+        _high_pivot(index=4, price=67650.00, body_price=67515.00),
+        _high_pivot(index=5, price=67900.00, body_price=67825.91),
+        _high_pivot(index=6, price=68150.00, body_price=68076.01),
+        _high_pivot(index=7, price=68175.00, body_price=68106.44),
+        _high_pivot(index=8, price=70050.00, body_price=69968.87),
+        _high_pivot(index=9, price=70200.00, body_price=70131.48),
+        _high_pivot(index=10, price=70700.00, body_price=70641.82),
+        _high_pivot(index=11, price=70710.00, body_price=70652.73),
+        _high_pivot(index=12, price=70800.00, body_price=70731.45),
+        _high_pivot(index=13, price=70900.00, body_price=70828.43),
+        _high_pivot(index=14, price=70950.00, body_price=70854.66),
     ]
 
     filled = _fill_structure_support_staircase_gaps(
         zones=zones,
         raw_external_pivots=raw_external_pivots,
-        closes=pd.Series([65000.0] * 10 + [80000.0]).to_numpy(dtype=float),
+        closes=pd.Series([65000.0] * 15 + [80000.0]).to_numpy(dtype=float),
         break_atr_mult=0.0,
         zone_width=500.0,
         min_touches=2,
@@ -283,11 +288,14 @@ def test_structure_v1_fills_large_support_gap_with_best_stair_step_zone() -> Non
         zone_tolerance_pct=0.0045,
     )
 
-    stair_steps = [zone for zone in filled if zone["origin"] == "stair_step_flipped_resistance"]
-    assert len(stair_steps) == 1
-    assert stair_steps[0]["low"] == 70354.66
-    assert stair_steps[0]["high"] == 70854.66
-    assert stair_steps[0]["touches"] == 7
+    stair_steps = sorted(
+        [zone for zone in filled if zone["origin"] == "stair_step_flipped_resistance"],
+        key=lambda zone: zone["low"],
+    )
+    assert [(zone["low"], zone["high"], zone["touches"]) for zone in stair_steps] == [
+        (67606.44, 68106.44, 7),
+        (70354.66, 70854.66, 7),
+    ]
 
 
 def test_structure_v1_wick_pierce_does_not_confirm_break() -> None:
