@@ -9,10 +9,13 @@ from pydantic import BaseModel, Field
 
 
 class ZoneConfig(BaseModel):
+    zone_tolerance_pct: float = 0.0045
     min_touches: int = 2
+    role_buffer_pct: float = 0.0015
     internal_swing_order: int = 2
     external_swing_order: int = 5
     atr_period: int = 14
+    break_atr_mult: float = 0.2
     external_min_swing_atr_mult: float = 4.0
     external_min_swing_pct: float = 2.5
     show_internal_pivots: bool = False
