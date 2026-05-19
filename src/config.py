@@ -9,13 +9,10 @@ from pydantic import BaseModel, Field
 
 
 class ZoneConfig(BaseModel):
-    zone_tolerance_pct: float = 0.0045
     min_touches: int = 2
-    role_buffer_pct: float = 0.0015
     internal_swing_order: int = 2
     external_swing_order: int = 5
     atr_period: int = 14
-    break_atr_mult: float = 0.2
     external_min_swing_atr_mult: float = 4.0
     external_min_swing_pct: float = 2.5
     show_internal_pivots: bool = False
@@ -25,7 +22,6 @@ class SignalConfig(BaseModel):
     near_support_pct_tight: float = 0.25
     near_support_pct_medium: float = 0.50
     near_support_pct_loose: float = 1.00
-    near_resistance_pct: float = 0.50
     dip_lookback_candles: int = 20
     dip_threshold_1_pct: float = 3.0
     dip_threshold_2_pct: float = 5.0

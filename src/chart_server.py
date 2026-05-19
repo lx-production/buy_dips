@@ -74,14 +74,11 @@ def load_chart_payload(config: AppConfig, database_path: str | Path, limit: int 
     zone_config = config.zones
     zones = detect_support_resistance_zones(
         df,
-        zone_tolerance_pct=zone_config.zone_tolerance_pct,
         min_touches=zone_config.min_touches,
         current_price=current_price,
-        buffer_pct=zone_config.role_buffer_pct,
         internal_swing_order=zone_config.internal_swing_order,
         external_swing_order=zone_config.external_swing_order,
         atr_period=zone_config.atr_period,
-        break_atr_mult=zone_config.break_atr_mult,
         external_min_swing_atr_mult=zone_config.external_min_swing_atr_mult,
         external_min_swing_pct=zone_config.external_min_swing_pct,
     )

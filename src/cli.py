@@ -39,7 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
     subparsers.add_parser("init-db", help="Create SQLite tables.")
     subparsers.add_parser("backfill", help="Backfill approximately 12 months of BTCUSDT 4H candles.")
-    subparsers.add_parser("zones", help="Detect and store support/resistance zones from closed candles.")
+    subparsers.add_parser("zones", help="Detect and store support zones from closed candles.")
     subparsers.add_parser("run-once", help="Fetch latest candles, detect zones, generate and store one paper signal.")
     return parser
 
@@ -101,38 +101,34 @@ def _detect_and_store_zones(config: AppConfig, database_path: Path) -> dict[str,
         zc = config.zones
         zones_result = detect_support_resistance_zones(
             df,
-            zone_tolerance_pct=zc.zone_tolerance_pct,
             min_touches=zc.min_touches,
             current_price=current_price,
-            buffer_pct=zc.role_buffer_pct,
             internal_swing_order=zc.internal_swing_order,
             external_swing_order=zc.external_swing_order,
             atr_period=zc.atr_period,
-            break_atr_mult=zc.break_atr_mult,
             external_min_swing_atr_mult=zc.external_min_swing_atr_mult,
             external_min_swing_pct=zc.external_min_swing_pct,
         )
     inserted = insert_zones(database_path, zones_result["all"], config.symbol, config.timeframe)
     print(f"Closed candles loaded: {len(df)}")
-    print("Zone algorithm: structure_v1")
+    print("Zone algorithm: support_swing_lows_v1")
     print(f"Zones stored this run: {inserted}")
     return zones_result
 
 
 def _print_zones(zones_result: dict[str, list[dict[str, Any]]]) -> None:
-    for role in ("support", "active", "resistance"):
-        print(f"\n{role.upper()} ZONES")
-        role_zones = zones_result.get(role, [])
-        if not role_zones:
-            print("  none")
-            continue
-        for zone in role_zones:
-            print(
-                "  "
-                f"{zone['origin']} low={zone['low']:.2f} high={zone['high']:.2f} "
-                f"mid={zone['mid']:.2f} width_pct={zone['width_pct']:.3f}% "
-                f"touches={zone['touches']}"
-            )
+    print("\nSUPPORT ZONES")
+    support_zones = zones_result.get("support", [])
+    if not support_zones:
+        print("  none")
+        return
+    for zone in support_zones:
+        print(
+            "  "
+            f"{zone['origin']} low={zone['low']:.2f} high={zone['high']:.2f} "
+            f"mid={zone['mid']:.2f} width_pct={zone['width_pct']:.3f}% "
+            f"touches={zone['touches']}"
+        )
 
 
 def _print_signal(signal: dict[str, Any], signal_id: int, updated_candles: int) -> None:
@@ -146,7 +142,6 @@ def _print_signal(signal: dict[str, Any], signal_id: int, updated_candles: int) 
     print(f"Decision: {signal['decision']}")
     print(f"Score: {signal['signal_score']:.2f}")
     print(f"Distance to support: {_fmt_pct(signal.get('distance_to_support_pct'))}")
-    print(f"Distance to resistance: {_fmt_pct(signal.get('distance_to_resistance_pct'))}")
     print(f"Reason: {signal['reason']}")
 
 

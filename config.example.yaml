@@ -3,20 +3,19 @@ symbol: BTCUSDT
 timeframe: 4h
 database_path: data/prana_buy_the_dips.sqlite
 
-zones: # values are fractions of price, not percent labels
-  zone_tolerance_pct: 0.0045 # 0.45%
+zones:
   min_touches: 2
-  role_buffer_pct: 0.0015 # 0.15%
-  internal_swing_order: 2
+  internal_swing_order: 2 # chart debug labels only
   external_swing_order: 5
   atr_period: 14 # 14 candles
-  break_atr_mult: 0.2 # 0.2x ATR
+  external_min_swing_atr_mult: 4.0
+  external_min_swing_pct: 2.5
+  show_internal_pivots: false
 
 signals:
   near_support_pct_tight: 0.25
   near_support_pct_medium: 0.50
   near_support_pct_loose: 1.00
-  near_resistance_pct: 0.50
   dip_lookback_candles: 20
   dip_threshold_1_pct: 3.0
   dip_threshold_2_pct: 5.0

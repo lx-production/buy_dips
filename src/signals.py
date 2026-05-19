@@ -33,26 +33,17 @@ def generate_buy_the_dips_signal(df: pd.DataFrame, zones: dict[str, list[dict[st
     previous_price = float(closed_df.iloc[-2]["close"]) if len(closed_df) >= 2 else None
     latest_close_time = int(closed_df.iloc[-1]["close_time"]) if "close_time" in closed_df.columns else None
 
-    active_zones = zones.get("active", [])
     supports = [zone for zone in zones.get("support", []) if zone["high"] < price or zone["low"] <= price]
-    resistances = [zone for zone in zones.get("resistance", []) if zone["low"] > price or zone["high"] >= price]
     nearest_support = max(supports, key=lambda z: z["high"], default=None)
-    nearest_resistance = min(resistances, key=lambda z: z["low"], default=None)
+    nearest_resistance = None
 
     distance_to_support_pct = None
     if nearest_support is not None:
         distance_to_support_pct = max(0.0, (price - float(nearest_support["high"])) / price * 100.0)
     distance_to_resistance_pct = None
-    if nearest_resistance is not None:
-        distance_to_resistance_pct = max(0.0, (float(nearest_resistance["low"]) - price) / price * 100.0)
 
     score = 0.0
     components: list[dict[str, Any]] = []
-
-    inside_active = any(float(zone["low"]) <= price <= float(zone["high"]) for zone in active_zones)
-    if inside_active:
-        score += 20
-        components.append({"points": 20, "reason": "Price is inside an active support/resistance zone."})
 
     near_support = False
     signal_config = config.signals
@@ -73,11 +64,6 @@ def generate_buy_the_dips_signal(df: pd.DataFrame, zones: dict[str, list[dict[st
         if price < float(nearest_support["low"]):
             score -= 30
             components.append({"points": -30, "reason": "Price closed below nearest support low."})
-
-    if nearest_resistance is not None and distance_to_resistance_pct is not None:
-        if distance_to_resistance_pct <= signal_config.near_resistance_pct:
-            score -= 10
-            components.append({"points": -10, "reason": "Nearest resistance is within 0.50%."})
 
     if previous_price is not None and price > previous_price and near_support:
         score += 10
@@ -117,7 +103,6 @@ def generate_buy_the_dips_signal(df: pd.DataFrame, zones: dict[str, list[dict[st
             "paper_mode": True,
             "nearest_support": nearest_support,
             "nearest_resistance": nearest_resistance,
-            "active_zones": active_zones,
             "recent_close_high": recent_high,
             "recent_dip_pct": recent_dip_pct,
             "components": components,
