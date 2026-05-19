@@ -1,0 +1,226 @@
+from __future__ import annotations
+
+from typing import Any
+
+import numpy as np
+
+from .postprocess import _classify_price_state
+from .types import (
+    STRUCTURE_IMPORTANT_ZONE_SPACING,
+    STRUCTURE_MACRO_GAP,
+    STRUCTURE_MACRO_MAX_SOURCE_SPAN,
+    SupportCandidate,
+)
+
+
+def _build_support_zones(
+    candidates: list[SupportCandidate],
+    zone_width: float,
+    min_touches: int,
+    current_price: float,
+    buffer_pct: float,
+) -> list[dict[str, Any]]:
+    clusters: list[list[SupportCandidate]] = []
+    for candidate in sorted(candidates, key=lambda item: item.price):
+        placed = False
+        for cluster in clusters:
+            if _candidate_matches_cluster(candidate, cluster, zone_width):
+                cluster.append(candidate)
+                placed = True
+                break
+        if not placed:
+            clusters.append([candidate])
+
+    zones = [
+        _zone_from_support_cluster(cluster, zone_width, current_price, buffer_pct)
+        for cluster in clusters
+        if len({(item.index, item.origin) for item in cluster}) >= int(min_touches)
+    ]
+    return _consolidate_support_zones(zones, zone_width, current_price, buffer_pct)
+
+
+def _candidate_matches_cluster(
+    candidate: SupportCandidate,
+    cluster: list[SupportCandidate],
+    zone_width: float,
+) -> bool:
+    if candidate.bounds_style != cluster[0].bounds_style:
+        return False
+    prices = [item.price for item in cluster] + [candidate.price]
+    return max(prices) - min(prices) <= float(zone_width)
+
+
+def _zone_from_support_cluster(
+    cluster: list[SupportCandidate],
+    zone_width: float,
+    current_price: float,
+    buffer_pct: float,
+) -> dict[str, Any]:
+    cluster = sorted(cluster, key=lambda item: (item.price, item.index, item.origin))
+    prices = [float(item.price) for item in cluster]
+    indexes = [int(item.index) for item in cluster]
+    if _cluster_uses_support_floor_bounds(cluster):
+        low, high = _fixed_support_floor_zone_bounds(prices, zone_width)
+    else:
+        low, high = _fixed_support_zone_bounds(prices, zone_width)
+    mid = (low + high) / 2.0
+    width = high - low
+    broken_indexes = [item.broken_index for item in cluster if item.broken_index is not None]
+    flipped_count = sum(1 for item in cluster if item.origin.startswith("flipped_"))
+    return {
+        "origin": _support_origin(cluster),
+        "role": "support",
+        "low": float(low),
+        "high": float(high),
+        "mid": float(mid),
+        "width": float(width),
+        "width_pct": float(width / mid * 100.0) if mid else 0.0,
+        "touches": len(cluster),
+        "source_closes": prices,
+        "source_indexes": indexes,
+        "score": float(len(cluster) * 2 + flipped_count),
+        "structure_role": _support_cluster_role(cluster),
+        "structure_bias": "support",
+        "price_state": _classify_price_state(low, high, current_price, buffer_pct),
+        "last_touch_index": max(indexes),
+        "broken_index": max(broken_indexes) if broken_indexes else None,
+        "zone_width": float(zone_width),
+    }
+
+
+def _consolidate_support_zones(
+    zones: list[dict[str, Any]],
+    zone_width: float,
+    current_price: float,
+    buffer_pct: float,
+) -> list[dict[str, Any]]:
+    macro_zones: list[dict[str, Any]] = []
+    group: list[dict[str, Any]] = []
+    for zone in sorted(zones, key=lambda item: item["low"]):
+        if not group:
+            group = [zone]
+            continue
+        if _zones_can_share_macro_group(group, zone):
+            group.append(zone)
+        else:
+            macro_zones.append(_combine_support_macro_group(group, zone_width, current_price, buffer_pct))
+            group = [zone]
+    if group:
+        macro_zones.append(_combine_support_macro_group(group, zone_width, current_price, buffer_pct))
+    return _suppress_nearby_support_zones(macro_zones)
+
+
+def _zones_can_share_macro_group(group: list[dict[str, Any]], zone: dict[str, Any]) -> bool:
+    gap = float(zone["low"]) - float(group[-1]["high"])
+    if gap > STRUCTURE_MACRO_GAP:
+        return False
+    source_prices = [float(price) for item in group for price in item["source_closes"]] + [
+        float(price) for price in zone["source_closes"]
+    ]
+    return max(source_prices) - min(source_prices) <= STRUCTURE_MACRO_MAX_SOURCE_SPAN
+
+
+def _combine_support_macro_group(
+    group: list[dict[str, Any]],
+    zone_width: float,
+    current_price: float,
+    buffer_pct: float,
+) -> dict[str, Any]:
+    if len(group) == 1:
+        zone = dict(group[0])
+        zone["role"] = "support"
+        return zone
+
+    source_closes = [float(price) for zone in group for price in zone["source_closes"]]
+    source_indexes = [int(index) for zone in group for index in zone["source_indexes"]]
+    low, high = _fixed_support_zone_bounds(source_closes, zone_width)
+    mid = (low + high) / 2.0
+    origins = {str(zone["origin"]) for zone in group}
+    structure_roles = {str(zone.get("structure_role", "unknown")) for zone in group}
+    broken_indexes = [zone.get("broken_index") for zone in group if zone.get("broken_index") is not None]
+    return {
+        "origin": _support_origin_from_origins(origins),
+        "role": "support",
+        "low": float(low),
+        "high": float(high),
+        "mid": float(mid),
+        "width": float(zone_width),
+        "width_pct": float(zone_width / mid * 100.0) if mid else 0.0,
+        "touches": len(source_closes),
+        "source_closes": source_closes,
+        "source_indexes": source_indexes,
+        "score": float(sum(float(zone.get("score", 0.0)) for zone in group)),
+        "structure_role": next(iter(structure_roles)) if len(structure_roles) == 1 else "mixed",
+        "structure_bias": "support",
+        "price_state": _classify_price_state(low, high, current_price, buffer_pct),
+        "last_touch_index": max(source_indexes),
+        "broken_index": max(broken_indexes) if broken_indexes else None,
+        "zone_width": float(zone_width),
+    }
+
+
+def _suppress_nearby_support_zones(zones: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    kept: list[dict[str, Any]] = []
+    for zone in sorted(zones, key=_support_zone_rank, reverse=True):
+        if all(abs(float(zone["mid"]) - float(previous["mid"])) >= STRUCTURE_IMPORTANT_ZONE_SPACING for previous in kept):
+            kept.append(dict(zone))
+    return kept
+
+
+def _fixed_support_zone_bounds(prices: list[float], zone_width: float) -> tuple[float, float]:
+    high = _support_base_anchor(prices)
+    return high - float(zone_width), high
+
+
+def _fixed_support_floor_zone_bounds(prices: list[float], zone_width: float) -> tuple[float, float]:
+    low = _support_floor_anchor(prices)
+    return low, low + float(zone_width)
+
+
+def _support_base_anchor(prices: list[float]) -> float:
+    sorted_prices = sorted(float(price) for price in prices)
+    if len(sorted_prices) <= 10:
+        return max(sorted_prices)
+    index = int(np.floor((len(sorted_prices) - 1) * 0.10))
+    return sorted_prices[index]
+
+
+def _support_floor_anchor(prices: list[float]) -> float:
+    sorted_prices = sorted(float(price) for price in prices)
+    if len(sorted_prices) <= 10:
+        return min(sorted_prices)
+    index = int(np.floor((len(sorted_prices) - 1) * 0.10))
+    return sorted_prices[index]
+
+
+def _support_origin(cluster: list[SupportCandidate]) -> str:
+    return _support_origin_from_origins({item.origin for item in cluster})
+
+
+def _support_origin_from_origins(origins: set[str]) -> str:
+    if origins and all(origin in ("structure_swing_low_wick", "structure_swing_low_body_floor") for origin in origins):
+        return "structure_support_floor"
+    if len(origins) == 1:
+        return next(iter(origins))
+    if "flipped_resistance" in origins:
+        return "flipped_resistance"
+    if all(origin.startswith("structure_") for origin in origins):
+        return "mixed_structure"
+    return "mixed_structure"
+
+
+def _support_cluster_role(cluster: list[SupportCandidate]) -> str:
+    roles = [item.structure_role for item in cluster if item.structure_role]
+    if not roles:
+        return "unknown"
+    if len(set(roles)) == 1:
+        return roles[0]
+    return "mixed"
+
+
+def _cluster_uses_support_floor_bounds(cluster: list[SupportCandidate]) -> bool:
+    return all(item.bounds_style == "support_floor" for item in cluster)
+
+
+def _support_zone_rank(zone: dict[str, Any]) -> tuple[float, int, float]:
+    return (float(zone.get("score", 0.0)), int(zone["touches"]), -float(zone["width_pct"]))
