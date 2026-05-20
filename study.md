@@ -60,7 +60,7 @@ Key functions:
 
 What to understand:
 
-- `_find_structure_pivots` scans each candle with a left/right window called `swing_order`.
+- `_find_structure_pivots` scans each candle with a left/right window measured in `bars_each_side` (config feeds this via `internal_swing_order` / `external_swing_order`).
 - A pivot high must be the unique highest high in its window.
 - A pivot low must be the unique lowest low in its window.
 - Each pivot stores both wick price and body edge price:

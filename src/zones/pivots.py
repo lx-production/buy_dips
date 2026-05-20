@@ -8,24 +8,29 @@ from .types import StructurePivot, SwingTerm
 
 def _find_structure_pivots(
     ohlc: pd.DataFrame,
-    swing_order: int,
+    bars_each_side: int,
     atr: np.ndarray,
     term: SwingTerm,
 ) -> list[StructurePivot]:
-    order = max(1, int(swing_order))
-    if len(ohlc) < (order * 2 + 1):
+    bars_each_side = max(1, int(bars_each_side))
+    if len(ohlc) < (bars_each_side * 2 + 1):
         return []
-
+    
+    # convert the OHLC data to numpy arrays for faster computation
     highs = ohlc["high"].to_numpy(dtype=float)
     lows = ohlc["low"].to_numpy(dtype=float)
     opens = ohlc["open"].to_numpy(dtype=float)
     closes = ohlc["close"].to_numpy(dtype=float)
+
     pivots: list[StructurePivot] = []
-    for idx in range(order, len(ohlc) - order):
-        high_window = highs[idx - order : idx + order + 1]
-        low_window = lows[idx - order : idx + order + 1]
+
+    for idx in range(bars_each_side, len(ohlc) - bars_each_side):
+        high_window = highs[idx - bars_each_side : idx + bars_each_side + 1] # highs of candles on either side of the current candle
+        low_window = lows[idx - bars_each_side : idx + bars_each_side + 1] # lows of candles on either side of the current candle
         body_high = max(float(opens[idx]), float(closes[idx]))
         body_low = min(float(opens[idx]), float(closes[idx]))
+
+        # check if the current high is the highest high in the window and if it is unique
         if highs[idx] == float(np.max(high_window)) and np.count_nonzero(high_window == highs[idx]) == 1:
             pivots.append(
                 StructurePivot(
@@ -37,6 +42,7 @@ def _find_structure_pivots(
                     term=term,
                 )
             )
+        
         if lows[idx] == float(np.min(low_window)) and np.count_nonzero(low_window == lows[idx]) == 1:
             pivots.append(
                 StructurePivot(

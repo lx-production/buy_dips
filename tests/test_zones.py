@@ -180,8 +180,8 @@ def test_internal_and_external_structure_pivots_have_different_granularity() -> 
         period=3,
     )
 
-    internal = _find_structure_pivots(df, swing_order=1, atr=atr, term="internal")
-    external = _find_structure_pivots(df, swing_order=3, atr=atr, term="external")
+    internal = _find_structure_pivots(df, bars_each_side=1, atr=atr, term="internal")
+    external = _find_structure_pivots(df, bars_each_side=3, atr=atr, term="external")
 
     assert len(internal) > len(external)
     assert external

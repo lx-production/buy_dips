@@ -59,8 +59,8 @@ def detect_support_resistance_zones_structure_v1(
     if ohlc is None:
         return empty
 
-    order = max(1, int(external_swing_order))
-    if len(ohlc) < (order * 2 + 1):
+    bars_each_side = max(1, int(external_swing_order))
+    if len(ohlc) < (bars_each_side * 2 + 1):
         return empty
 
     highs = ohlc["high"].to_numpy(dtype=float)
@@ -70,7 +70,7 @@ def detect_support_resistance_zones_structure_v1(
     if current_price is None:
         current_price = float(closes[-1])
 
-    raw_external_pivots = _find_structure_pivots(ohlc, order, atr, "external")
+    raw_external_pivots = _find_structure_pivots(ohlc, bars_each_side, atr, "external")
     external_pivots = _filter_prominent_structure_pivots(
         raw_external_pivots,
         min_swing_atr_mult=external_min_swing_atr_mult,
