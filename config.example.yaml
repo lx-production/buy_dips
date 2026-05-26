@@ -4,7 +4,6 @@ timeframe: 4h
 database_path: data/prana_buy_the_dips.sqlite
 
 zones: # values ending in _pct are fractions of price, not percent labels
-  zone_tolerance_pct: 0.0045 # 0.45%
   min_touches: 2
   role_buffer_pct: 0.0015 # 0.15%
   internal_swing_order: 2

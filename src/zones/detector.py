@@ -14,24 +14,20 @@ from .types import STRUCTURE_ZONE_WIDTH
 
 def detect_support_resistance_zones(
     df: pd.DataFrame,
-    zone_tolerance_pct: float = 0.0045,
     min_touches: int = 2,
     current_price: float | None = None,
     buffer_pct: float = 0.0015,
-    internal_swing_order: int = 2,
-    external_swing_order: int = 5,
+    external_swing_order: int = 5, # 5 candles each side, or 20 hours on each side, or 40 + 4 hours total
     atr_period: int = 14,
     break_atr_mult: float = 0.2,
-    external_min_swing_atr_mult: float = 4.0,
+    external_min_swing_atr_mult: float = 4.0, # might be too strict, could be reduced if fine-tuning
     external_min_swing_pct: float = 2.5,
 ) -> dict[str, list[dict[str, Any]]]:
     return detect_support_resistance_zones_structure_v1(
         df,
-        zone_tolerance_pct=zone_tolerance_pct,
         min_touches=min_touches,
         current_price=current_price,
         buffer_pct=buffer_pct,
-        internal_swing_order=internal_swing_order,
         external_swing_order=external_swing_order,
         atr_period=atr_period,
         break_atr_mult=break_atr_mult,
@@ -42,18 +38,15 @@ def detect_support_resistance_zones(
 
 def detect_support_resistance_zones_structure_v1(
     df: pd.DataFrame,
-    internal_swing_order: int = 2,
     external_swing_order: int = 5,
     atr_period: int = 14,
     external_min_swing_atr_mult: float = 4.0,
     external_min_swing_pct: float = 2.5,
-    zone_tolerance_pct: float = 0.0045,
     min_touches: int = 2,
     current_price: float | None = None,
     buffer_pct: float = 0.0015,
     break_atr_mult: float = 0.2,
 ) -> dict[str, list[dict[str, Any]]]:
-    _ = internal_swing_order, zone_tolerance_pct
     empty = {"support": [], "resistance": [], "active": [], "all": []}
     ohlc = _coerce_ohlc(df)
     if ohlc is None:

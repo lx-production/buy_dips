@@ -35,11 +35,9 @@ def main() -> int:
     zone_config = config.zones
     zones = detect_support_resistance_zones(
         df,
-        zone_tolerance_pct=zone_config.zone_tolerance_pct,
         min_touches=zone_config.min_touches,
         current_price=float(df.iloc[-1]["close"]),
         buffer_pct=zone_config.role_buffer_pct,
-        internal_swing_order=zone_config.internal_swing_order,
         external_swing_order=zone_config.external_swing_order,
         atr_period=zone_config.atr_period,
         break_atr_mult=zone_config.break_atr_mult,

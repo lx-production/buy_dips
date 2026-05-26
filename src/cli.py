@@ -101,11 +101,9 @@ def _detect_and_store_zones(config: AppConfig, database_path: Path) -> dict[str,
         zc = config.zones
         zones_result = detect_support_resistance_zones(
             df,
-            zone_tolerance_pct=zc.zone_tolerance_pct,
             min_touches=zc.min_touches,
             current_price=current_price,
             buffer_pct=zc.role_buffer_pct,
-            internal_swing_order=zc.internal_swing_order,
             external_swing_order=zc.external_swing_order,
             atr_period=zc.atr_period,
             break_atr_mult=zc.break_atr_mult,

@@ -190,7 +190,7 @@ Important details:
 
 - `detect_support_resistance_zones` is the stable public wrapper.
 - `detect_support_resistance_zones_structure_v1` is the current implementation.
-- `internal_swing_order` and `zone_tolerance_pct` are accepted for compatibility but not used by this support-only v1 path.
+- `internal_swing_order` lives on `ZoneConfig` but is only used by the chart server to draw internal pivots; the detector itself only uses `external_swing_order`.
 - Empty or insufficient data returns empty zone lists.
 - Resistance and active lists are intentionally empty in this phase.
 

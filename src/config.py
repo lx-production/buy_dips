@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field
 
 
 class ZoneConfig(BaseModel):
-    zone_tolerance_pct: float = 0.0045
     min_touches: int = 2
     role_buffer_pct: float = 0.0015
     internal_swing_order: int = 2
