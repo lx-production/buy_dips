@@ -26,7 +26,7 @@ The main pipeline lives in `src/zones/detector.py`:
 5. Label pivots as `H`, `HH`, `LH`, `L`, `HL`, or `LL`.
 6. Convert pivots into support candidates.
 7. Cluster candidates into fixed-width zones.
-8. Remove overlaps, fill large staircase gaps, and sort zones by distance to price.
+8. Remove overlaps, suppress only very-near duplicate zones, fill large staircase gaps, and sort zones by distance to price.
 
 ## Block 1: OHLC And ATR
 
@@ -136,12 +136,15 @@ Important rules:
   - `low = support_floor`
   - `high = low + zone_width`
 - Macro consolidation can combine nearby small zones when their source prices still form one broader structure area.
+- After macro consolidation, the builder suppresses duplicate nearby zones using `STRUCTURE_IMPORTANT_ZONE_SPACING = 1000.0`.
+- That suppression is intentionally narrower than the old `$1600` spacing so adjacent BTC 4H levels can survive when they represent separate structure, such as a `73.3k` support band below a stronger `74.5k` band.
 
 Study questions:
 
 - Why does normal support use the upper edge as the anchor?
 - Why does wick-floor support use the lower edge as the anchor?
 - How does `min_touches` reduce weak zones?
+- What is the tradeoff when nearby-zone suppression is too wide?
 
 ## Block 5: Post-Processing
 
@@ -163,14 +166,22 @@ Post-processing makes the zone list usable:
 - Overlapping zones are reduced to the stronger zone.
 - Each zone gets a current `price_state`.
 - Large gaps between support zones can be filled with dense reclaimed-high clusters.
+- Staircase filling uses all structural zones as upper/lower boundaries, but only fills upward from a lower zone that is currently classified as `support`.
+- This matters when the next structural zone is `active` or just above current price: it can still act as the upper boundary for missing reclaimed-high support levels below it.
 - Final zones are sorted by distance to `current_price`, then score, then touches.
 
 The staircase fill is designed for markets that moved upward through multiple resistance levels. Those reclaimed highs may form intermediate support even if they were not part of the prominent pivot set.
+
+Example from the BTCUSDT 4H study:
+
+- The `73.3k` band came from existing body/reclaimed-high evidence, but used to be suppressed because it was too close to the stronger `74.5k` zone.
+- The `67.6k` and `70.4k` bands came from dense reclaimed-high clusters, but used to be skipped when the next boundary was not already classified as support.
 
 Study questions:
 
 - Why does staircase filling use raw external pivots instead of only prominent pivots?
 - What makes one overlapping support zone preferred over another?
+- Why should an active structural zone still be allowed to bound a gap-fill search?
 - Why sort by distance to current price at the end?
 
 ## Block 6: Detector Orchestration
@@ -232,6 +243,8 @@ Useful tests to start with:
 - `test_structure_v1_clusters_external_swing_lows_with_fixed_500_dollar_width`
 - `test_structure_v1_returns_reclaimed_highs_as_support_only`
 - `test_structure_v1_fills_large_support_gap_with_reclaimed_high_clusters`
+- `test_structure_v1_fills_staircase_gap_to_next_active_boundary`
+- `test_nearby_reclaimed_high_zone_survives_next_major_level`
 
 ## Mental Model
 

@@ -11,7 +11,7 @@ BoundsStyle = Literal["body", "support_floor"]
 STRUCTURE_ZONE_WIDTH = 500.0
 STRUCTURE_MACRO_GAP = 300.0
 STRUCTURE_MACRO_MAX_SOURCE_SPAN = 2000.0
-STRUCTURE_IMPORTANT_ZONE_SPACING = 1600.0
+STRUCTURE_IMPORTANT_ZONE_SPACING = 1000.0
 STRUCTURE_SUPPORT_FLOOR_RETEST_WIDTH_MULT = 0.2
 STRUCTURE_STAIR_STEP_MAX_SUPPORT_GAP = 4000.0
 STRUCTURE_STAIR_STEP_MAX_INSERTIONS = 6
@@ -32,7 +32,7 @@ class StructurePivot:
 class SupportCandidate:
     price: float
     index: int
-    origin: str
+    origin: str # reason for candidate creation
     structure_role: str
     bounds_style: BoundsStyle = "body"
     broken_index: int | None = None

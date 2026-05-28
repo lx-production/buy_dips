@@ -54,14 +54,13 @@ def _best_support_staircase_gap_fill(
 ) -> dict[str, Any] | None:
     from .build import _build_support_zones
 
-    support_zones = sorted(
-        [zone for zone in zones if _coerce_price_state(zone, current_price, buffer_pct) == "support"],
-        key=lambda zone: float(zone["low"]),
-    )
+    boundary_zones = sorted(zones, key=lambda zone: float(zone["low"]))
     best_zone: dict[str, Any] | None = None
     best_rank: tuple[float, float, int, float] | None = None
 
-    for lower_zone, upper_zone in zip(support_zones, support_zones[1:]):
+    for lower_zone, upper_zone in zip(boundary_zones, boundary_zones[1:]):
+        if _coerce_price_state(lower_zone, current_price, buffer_pct) != "support":
+            continue
         gap = float(upper_zone["low"]) - float(lower_zone["high"])
         if gap <= STRUCTURE_STAIR_STEP_MAX_SUPPORT_GAP:
             continue

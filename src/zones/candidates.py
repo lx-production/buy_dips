@@ -6,8 +6,8 @@ from .types import STRUCTURE_SUPPORT_FLOOR_RETEST_WIDTH_MULT, StructurePivot, Su
 
 
 def _support_candidates(
-    raw_external_pivots: list[StructurePivot],
-    external_pivots: list[StructurePivot],
+    raw_external_pivots: list[StructurePivot], # all pivots, including noisy ones
+    external_pivots: list[StructurePivot], # big, important swings
     closes: np.ndarray,
     break_atr_mult: float,
     zone_width: float,
@@ -35,7 +35,7 @@ def _candidate_from_pivot(
     broken_index: int | None = None,
 ) -> SupportCandidate:
     return SupportCandidate(
-        price=float(pivot.body_price),
+        price=float(pivot.body_price), # zones are drawn from bodies by default
         index=int(pivot.index),
         origin=origin,
         structure_role=pivot.structure_role or ("H" if pivot.kind == "high" else "L"),
@@ -78,7 +78,7 @@ def _support_floor_candidate(pivot: StructurePivot, price: float, origin: str) -
         bounds_style="support_floor",
     )
 
-
+# did _first_reclaim_index find anything?
 def _high_is_confirmed_reclaimed(
     pivot: StructurePivot,
     closes: np.ndarray,
@@ -86,15 +86,16 @@ def _high_is_confirmed_reclaimed(
 ) -> bool:
     return _first_reclaim_index(pivot, closes, break_atr_mult) is not None
 
-
+# find the first close above the pivot high plus an ATR-based threshold
 def _first_reclaim_index(
     pivot: StructurePivot,
     closes: np.ndarray,
     break_atr_mult: float,
 ) -> int | None:
     threshold = max(0.0, float(pivot.atr) * float(break_atr_mult))
-    future_closes = closes[pivot.index + 1 :]
-    offsets = np.flatnonzero(future_closes > float(pivot.price) + threshold)
+    future_closes = closes[pivot.index + 1 :] # all closes after the pivot bar
+    # relative indexes of future closes that are above the threshold
+    offsets = np.flatnonzero(future_closes > float(pivot.price) + threshold) # pivot.price is the wick price
     if not len(offsets):
         return None
-    return int(pivot.index + 1 + offsets[0])
+    return int(pivot.index + 1 + offsets[0]) # convert it back to an absolute index into the original closes array
