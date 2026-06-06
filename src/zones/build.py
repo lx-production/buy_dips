@@ -70,6 +70,7 @@ def _zone_from_support_cluster(
     return {
         "origin": _support_origin(cluster),
         "role": "support",
+        "bounds_style": cluster[0].bounds_style,
         "low": float(low),
         "high": float(high),
         "mid": float(mid),
@@ -111,6 +112,8 @@ def _consolidate_support_zones(
 
 
 def _zones_can_share_macro_group(group: list[dict[str, Any]], zone: dict[str, Any]) -> bool:
+    if not _bounds_styles_can_share_macro_group(group, zone):
+        return False
     gap = float(zone["low"]) - float(group[-1]["high"])
     if gap > STRUCTURE_MACRO_GAP:
         return False
@@ -118,6 +121,14 @@ def _zones_can_share_macro_group(group: list[dict[str, Any]], zone: dict[str, An
         float(price) for price in zone["source_closes"]
     ]
     return max(source_prices) - min(source_prices) <= STRUCTURE_MACRO_MAX_SOURCE_SPAN
+
+
+def _bounds_styles_can_share_macro_group(group: list[dict[str, Any]], zone: dict[str, Any]) -> bool:
+    zone_style = zone.get("bounds_style", "body")
+    group_styles = [item.get("bounds_style", "body") for item in group]
+    if len(set(group_styles)) == 1 and zone_style == group_styles[-1]:
+        return True
+    return group_styles[0] == "body" and "support_floor" not in group_styles and zone_style == "support_floor"
 
 
 def _combine_support_macro_group(
@@ -133,7 +144,11 @@ def _combine_support_macro_group(
 
     source_closes = [float(price) for zone in group for price in zone["source_closes"]]
     source_indexes = [int(index) for zone in group for index in zone["source_indexes"]]
-    low, high = _fixed_support_zone_bounds(source_closes, zone_width)
+    bounds_style = group[0].get("bounds_style", "body")
+    if bounds_style == "support_floor":
+        low, high = _fixed_support_floor_zone_bounds(source_closes, zone_width)
+    else:
+        low, high = _fixed_support_zone_bounds(source_closes, zone_width)
     mid = (low + high) / 2.0
     origins = {str(zone["origin"]) for zone in group}
     structure_roles = {str(zone.get("structure_role", "unknown")) for zone in group}
@@ -141,6 +156,7 @@ def _combine_support_macro_group(
     return {
         "origin": _support_origin_from_origins(origins),
         "role": "support",
+        "bounds_style": bounds_style,
         "low": float(low),
         "high": float(high),
         "mid": float(mid),

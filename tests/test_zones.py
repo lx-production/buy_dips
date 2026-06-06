@@ -241,6 +241,109 @@ def test_nearby_reclaimed_high_zone_survives_next_major_level() -> None:
     ]
 
 
+def test_support_floor_shelf_is_not_swallowed_by_body_macro_group() -> None:
+    candidates = [
+        SupportCandidate(
+            price=89202.47,
+            index=1,
+            origin="structure_swing_low_body_floor",
+            structure_role="HL",
+            bounds_style="support_floor",
+        ),
+        SupportCandidate(
+            price=89256.69,
+            index=2,
+            origin="structure_swing_low_wick",
+            structure_role="LL",
+            bounds_style="support_floor",
+        ),
+        SupportCandidate(price=89945.43, index=3, origin="flipped_resistance", structure_role="LH"),
+        SupportCandidate(price=90226.77, index=4, origin="structure_swing_low", structure_role="HL"),
+        SupportCandidate(
+            price=90405.02,
+            index=5,
+            origin="structure_swing_low_body_floor",
+            structure_role="HL",
+            bounds_style="support_floor",
+        ),
+        SupportCandidate(
+            price=90500.00,
+            index=6,
+            origin="structure_swing_low_wick",
+            structure_role="LL",
+            bounds_style="support_floor",
+        ),
+        SupportCandidate(
+            price=90504.70,
+            index=7,
+            origin="structure_swing_low_body_floor",
+            structure_role="HL",
+            bounds_style="support_floor",
+        ),
+        SupportCandidate(
+            price=90512.10,
+            index=8,
+            origin="structure_swing_low_body_floor",
+            structure_role="LL",
+            bounds_style="support_floor",
+        ),
+        SupportCandidate(
+            price=90791.10,
+            index=9,
+            origin="structure_swing_low_wick",
+            structure_role="HL",
+            bounds_style="support_floor",
+        ),
+        SupportCandidate(
+            price=90851.23,
+            index=10,
+            origin="structure_swing_low_body_floor",
+            structure_role="LL",
+            bounds_style="support_floor",
+        ),
+        SupportCandidate(
+            price=91157.44,
+            index=11,
+            origin="structure_swing_low_body_floor",
+            structure_role="HL",
+            bounds_style="support_floor",
+        ),
+        SupportCandidate(
+            price=91231.00,
+            index=12,
+            origin="structure_swing_low_wick",
+            structure_role="LL",
+            bounds_style="support_floor",
+        ),
+        SupportCandidate(
+            price=91530.45,
+            index=13,
+            origin="structure_swing_low_wick",
+            structure_role="LL",
+            bounds_style="support_floor",
+        ),
+        SupportCandidate(price=91683.90, index=14, origin="structure_swing_low", structure_role="HL"),
+        SupportCandidate(price=92130.21, index=15, origin="structure_swing_low", structure_role="LL"),
+    ]
+
+    zones = sorted(
+        _build_support_zones(
+            candidates,
+            zone_width=500.0,
+            min_touches=2,
+            current_price=100000.00,
+            buffer_pct=0.0015,
+        ),
+        key=lambda zone: zone["low"],
+    )
+
+    assert [(zone["low"], zone["high"], zone["origin"]) for zone in zones] == [
+        (89202.47, 89702.47, "structure_support_floor"),
+        (90351.23, 90851.23, "flipped_resistance"),
+        (91630.21, 92130.21, "structure_swing_low"),
+    ]
+
+
 def test_support_bands_anchor_to_support_base() -> None:
     low, high = _fixed_support_zone_bounds(
         [

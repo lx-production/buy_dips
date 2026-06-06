@@ -21,6 +21,8 @@ from .zones import (
 
 
 DEFAULT_LIMIT = 500
+ALL_CANDLES_LIMIT = "all"
+ONE_DAY_MS = 86_400_000
 VISIBLE_SUPPORT_ZONES_ABOVE_PRICE = 2
 
 
@@ -50,41 +52,36 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def load_chart_payload(config: AppConfig, database_path: str | Path, limit: int = DEFAULT_LIMIT) -> dict[str, Any]:
-    df = load_candles_df(
+def load_chart_payload(
+    config: AppConfig,
+    database_path: str | Path,
+    limit: int | None = DEFAULT_LIMIT,
+    timeframe: str | None = None,
+) -> dict[str, Any]:
+    selected_timeframe = _normalize_timeframe(timeframe, config.timeframe)
+    df = _load_chart_candles_df(
         database_path=database_path,
-        exchange=config.exchange,
-        symbol=config.symbol,
-        timeframe=config.timeframe,
-        only_closed=True,
-        limit=None,
+        config=config,
+        selected_timeframe=selected_timeframe,
     )
+    zone_df = _load_zone_candles_df(config=config, database_path=database_path)
     if df.empty:
         return {
             "exchange": config.exchange,
             "symbol": config.symbol,
-            "timeframe": config.timeframe,
+            "timeframe": selected_timeframe,
             "candles": [],
             "zones": {"support": [], "all": []},
             "pivots": [],
             "current_price": None,
+            "total_candles": 0,
         }
 
     current_price = float(df.iloc[-1]["close"])
     zone_config = config.zones
-    zones = detect_support_resistance_zones(
-        df,
-        min_touches=zone_config.min_touches,
-        current_price=current_price,
-        buffer_pct=zone_config.role_buffer_pct,
-        external_swing_order=zone_config.external_swing_order,
-        atr_period=zone_config.atr_period,
-        break_atr_mult=zone_config.break_atr_mult,
-        external_min_swing_atr_mult=zone_config.external_min_swing_atr_mult,
-        external_min_swing_pct=zone_config.external_min_swing_pct,
-    )
+    zones = _detect_chart_zones(df=zone_df, current_price=current_price, zone_config=zone_config)
     support_zones = _visible_support_zones(zones["support"], current_price)
-    visible_df = df.tail(max(1, int(limit)))
+    visible_df = df if limit is None else df.tail(max(1, int(limit)))
     visible_start_index = max(0, len(df) - len(visible_df))
     pivots = _chart_pivots(
         df=df,
@@ -110,12 +107,91 @@ def load_chart_payload(config: AppConfig, database_path: str | Path, limit: int 
     return {
         "exchange": config.exchange,
         "symbol": config.symbol,
-        "timeframe": config.timeframe,
+        "timeframe": selected_timeframe,
         "candles": candles,
         "zones": {"support": support_zones, "all": support_zones},
         "pivots": pivots,
         "current_price": current_price,
+        "total_candles": len(df),
     }
+
+
+def _detect_chart_zones(df: Any, current_price: float, zone_config: Any) -> dict[str, list[dict[str, Any]]]:
+    if df.empty:
+        return {"support": [], "resistance": [], "active": [], "all": []}
+    return detect_support_resistance_zones(
+        df,
+        min_touches=zone_config.min_touches,
+        current_price=current_price,
+        buffer_pct=zone_config.role_buffer_pct,
+        external_swing_order=zone_config.external_swing_order,
+        atr_period=zone_config.atr_period,
+        break_atr_mult=zone_config.break_atr_mult,
+        external_min_swing_atr_mult=zone_config.external_min_swing_atr_mult,
+        external_min_swing_pct=zone_config.external_min_swing_pct,
+    )
+
+
+def _load_zone_candles_df(config: AppConfig, database_path: str | Path) -> Any:
+    config_timeframe = _normalize_timeframe(config.timeframe, config.timeframe)
+    return load_candles_df(
+        database_path=database_path,
+        exchange=config.exchange,
+        symbol=config.symbol,
+        timeframe=config_timeframe,
+        only_closed=True,
+        limit=None,
+    )
+
+
+def _load_chart_candles_df(config: AppConfig, database_path: str | Path, selected_timeframe: str) -> Any:
+    df = load_candles_df(
+        database_path=database_path,
+        exchange=config.exchange,
+        symbol=config.symbol,
+        timeframe=selected_timeframe,
+        only_closed=True,
+        limit=None,
+    )
+    config_timeframe = _normalize_timeframe(config.timeframe, config.timeframe)
+    if not df.empty or selected_timeframe != "1d" or config_timeframe == selected_timeframe:
+        return df
+
+    base_df = load_candles_df(
+        database_path=database_path,
+        exchange=config.exchange,
+        symbol=config.symbol,
+        timeframe=config_timeframe,
+        only_closed=True,
+        limit=None,
+    )
+    return _aggregate_candles_to_daily(base_df)
+
+
+def _aggregate_candles_to_daily(df: Any) -> Any:
+    if df.empty:
+        return df
+
+    daily = df.copy()
+    daily["day_open_time"] = (daily["open_time"].astype("int64") // ONE_DAY_MS) * ONE_DAY_MS
+    grouped = daily.groupby("day_open_time", as_index=False, sort=True).agg(
+        {
+            "exchange": "first",
+            "symbol": "first",
+            "open_time": "first",
+            "close_time": "max",
+            "open": "first",
+            "high": "max",
+            "low": "min",
+            "close": "last",
+            "volume": "sum",
+            "is_closed": "min",
+            "fetched_at": "max",
+        }
+    )
+    grouped["timeframe"] = "1d"
+    grouped["open_time"] = grouped["day_open_time"].astype("int64")
+    return grouped.drop(columns=["day_open_time"])
 
 
 def _chart_pivots(
@@ -190,7 +266,13 @@ def _make_handler(config: AppConfig, database_path: Path, default_limit: int) ->
             if parsed.path == "/api/chart":
                 query = parse_qs(parsed.query)
                 limit = _parse_limit(query.get("limit", [str(default_limit)])[0], default_limit)
-                payload = load_chart_payload(config=config, database_path=database_path, limit=limit)
+                timeframe = query.get("timeframe", [config.timeframe])[0]
+                payload = load_chart_payload(
+                    config=config,
+                    database_path=database_path,
+                    limit=limit,
+                    timeframe=timeframe,
+                )
                 self._send_json(payload)
                 return
             self.send_error(404, "Not found")
@@ -217,12 +299,19 @@ def _make_handler(config: AppConfig, database_path: Path, default_limit: int) ->
     return ChartHandler
 
 
-def _parse_limit(raw: str, fallback: int) -> int:
+def _parse_limit(raw: str, fallback: int) -> int | None:
+    if raw.strip().lower() == ALL_CANDLES_LIMIT:
+        return None
     try:
         value = int(raw)
     except ValueError:
         return fallback
     return min(max(value, 50), 2000)
+
+
+def _normalize_timeframe(raw: str | None, fallback: str) -> str:
+    value = (raw or "").strip().lower()
+    return value or fallback.strip().lower()
 
 
 INDEX_HTML = """<!doctype html>
@@ -244,7 +333,9 @@ INDEX_HTML = """<!doctype html>
     .support { background: #2ea043; }
     .internal { background: #79c0ff; }
     .external { background: #d2a8ff; }
-    .controls { display: flex; gap: 12px; margin-top: 10px; color: #c9d1d9; font-size: 12px; }
+    .controls { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; color: #c9d1d9; font-size: 12px; }
+    .field { display: inline-flex; align-items: center; gap: 6px; }
+    .field select { color: #e6edf3; background: rgba(13,17,23,.88); border: 1px solid rgba(255,255,255,.14); border-radius: 7px; padding: 3px 7px; font: inherit; }
     .toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
     .toggle input { width: 14px; height: 14px; margin: 0; accent-color: #d2a8ff; }
     .error { position: fixed; inset: auto 22px 22px 22px; padding: 12px 14px; border-radius: 10px; color: #ffdcd7; background: rgba(248,81,73,.14); border: 1px solid rgba(248,81,73,.35); font-size: 13px; display: none; }
@@ -260,6 +351,13 @@ INDEX_HTML = """<!doctype html>
       <span><i class="dot external"></i>Prominent external pivots</span>
     </div>
     <div class="controls">
+      <label class="field">
+        View
+        <select id="view-select">
+          <option value="4h-recent">4H recent (500)</option>
+          <option value="1d-all">1D all candles</option>
+        </select>
+      </label>
       <label class="toggle" title="Show or hide prominent external swing points">
         <input type="checkbox" id="toggle-external-pivots" checked>
         External pivots
@@ -273,15 +371,23 @@ INDEX_HTML = """<!doctype html>
     const title = document.getElementById('title');
     const meta = document.getElementById('meta');
     const error = document.getElementById('error');
+    const viewSelect = document.getElementById('view-select');
     const toggleExternalPivots = document.getElementById('toggle-external-pivots');
+    const viewOptions = {
+      '4h-recent': { timeframe: '4h', limit: '500' },
+      '1d-all': { timeframe: '1d', limit: 'all' }
+    };
     let chartData = null;
 
     async function load() {
-      const response = await fetch('/api/chart?limit=600');
+      error.style.display = 'none';
+      const params = new URLSearchParams(viewOptions[viewSelect.value] || viewOptions['4h-recent']);
+      const response = await fetch(`/api/chart?${params.toString()}`);
       if (!response.ok) throw new Error(`Chart API failed: ${response.status}`);
       chartData = await response.json();
       title.textContent = `${chartData.symbol} ${chartData.timeframe.toUpperCase()}`;
-      meta.textContent = `${chartData.candles.length} closed candles • last close ${formatPrice(chartData.current_price)}`;
+      const candleText = formatCandleCount(chartData.candles.length, chartData.total_candles);
+      meta.textContent = `${candleText} • last close ${formatPrice(chartData.current_price)}`;
       draw();
     }
 
@@ -487,18 +593,30 @@ INDEX_HTML = """<!doctype html>
       return Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 });
     }
 
+    function formatCandleCount(visibleCount, totalCount) {
+      if (Number.isFinite(totalCount) && totalCount > visibleCount) {
+        return `${visibleCount} of ${totalCount} closed candles`;
+      }
+      return `${visibleCount} closed candles`;
+    }
+
     function formatDate(value) {
       return new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
     }
 
     window.addEventListener('resize', resize);
+    viewSelect.addEventListener('change', () => {
+      load().catch(showLoadError);
+    });
     toggleExternalPivots.addEventListener('change', draw);
     resize();
-    load().catch((err) => {
+    load().catch(showLoadError);
+
+    function showLoadError(err) {
       error.style.display = 'block';
       error.textContent = err.message;
       drawCentered('Unable to load chart data.');
-    });
+    }
   </script>
 </body>
 </html>
