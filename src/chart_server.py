@@ -20,7 +20,7 @@ from .zones import (
 )
 
 
-DEFAULT_LIMIT = 500
+DEFAULT_LIMIT = 400
 ALL_CANDLES_LIMIT = "all"
 ONE_DAY_MS = 86_400_000
 VISIBLE_SUPPORT_ZONES_ABOVE_PRICE = 2
@@ -257,11 +257,13 @@ def _visible_support_zones(
 
 
 def _make_handler(config: AppConfig, database_path: Path, default_limit: int) -> type[BaseHTTPRequestHandler]:
+    index_html = _build_index_html(default_limit)
+
     class ChartHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
             if parsed.path in ("/", "/index.html"):
-                self._send_text(INDEX_HTML, "text/html; charset=utf-8")
+                self._send_text(index_html, "text/html; charset=utf-8")
                 return
             if parsed.path == "/api/chart":
                 query = parse_qs(parsed.query)
@@ -314,7 +316,11 @@ def _normalize_timeframe(raw: str | None, fallback: str) -> str:
     return value or fallback.strip().lower()
 
 
-INDEX_HTML = """<!doctype html>
+def _build_index_html(default_limit: int) -> str:
+    return _INDEX_HTML_TEMPLATE.replace("__LIMIT__", str(default_limit))
+
+
+_INDEX_HTML_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -354,7 +360,7 @@ INDEX_HTML = """<!doctype html>
       <label class="field">
         View
         <select id="view-select">
-          <option value="4h-recent">4H recent (500)</option>
+          <option value="4h-recent">4H recent (__LIMIT__)</option>
           <option value="1d-all">1D all candles</option>
         </select>
       </label>
@@ -374,7 +380,7 @@ INDEX_HTML = """<!doctype html>
     const viewSelect = document.getElementById('view-select');
     const toggleExternalPivots = document.getElementById('toggle-external-pivots');
     const viewOptions = {
-      '4h-recent': { timeframe: '4h', limit: '500' },
+      '4h-recent': { timeframe: '4h', limit: '__LIMIT__' },
       '1d-all': { timeframe: '1d', limit: 'all' }
     };
     let chartData = null;

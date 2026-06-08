@@ -22,11 +22,13 @@ The main pipeline lives in `src/zones/detector.py`:
 1. Clean OHLC data.
 2. Compute ATR.
 3. Find raw external swing pivots.
-4. Filter those pivots into prominent structure.
-5. Label pivots as `H`, `HH`, `LH`, `L`, `HL`, or `LL`.
-6. Convert pivots into support candidates.
+4. Filter those pivots into prominent structure. Return empty zones if none survive.
+5. Label both raw and prominent pivots as `H`, `HH`, `LH`, `L`, `HL`, or `LL`.
+6. Convert pivots into support candidates (prominent lows/reclaimed highs plus wick-floor evidence from raw lows).
 7. Cluster candidates into fixed-width zones.
-8. Remove overlaps, suppress only very-near duplicate zones, fill large staircase gaps, and sort zones by distance to price.
+8. Macro-consolidate nearby zones, suppress only very-near duplicate zones, remove overlaps, fill large staircase gaps, and sort zones by distance to price.
+
+Fixed constants live in `src/zones/types.py`. Runtime tuning comes from `ZoneConfig` in `config.yaml` (`external_swing_order`, `min_touches`, `role_buffer_pct`, and the ATR/swing thresholds).
 
 ## Block 1: OHLC And ATR
 
@@ -60,7 +62,8 @@ Key functions:
 
 What to understand:
 
-- `_find_structure_pivots` scans each candle with a left/right window measured in `bars_each_side` (config feeds this via `internal_swing_order` / `external_swing_order`).
+- `_find_structure_pivots` scans each candle with a left/right window measured in `bars_each_side`.
+- The detector uses `external_swing_order` from config. `internal_swing_order` is chart-only and only runs when `show_internal_pivots` is enabled.
 - A pivot high must be the unique highest high in its window.
 - A pivot low must be the unique lowest low in its window.
 - Each pivot stores both wick price and body edge price:
@@ -96,12 +99,14 @@ Support candidates are raw evidence points. They are not zones yet.
 
 The algorithm creates support candidates from:
 
-- Prominent swing lows: `structure_swing_low`
-- Reclaimed swing highs: `flipped_resistance`
-- Long-wick low floors: `structure_swing_low_wick`
-- Retests near those wick floors: `structure_swing_low_body_floor`
+- Prominent swing lows: `structure_swing_low` (uses body price)
+- Reclaimed swing highs: `flipped_resistance` (uses body price)
+- Long-wick low floors: `structure_swing_low_wick` (uses wick price, `bounds_style = support_floor`)
+- Retests near those wick floors: `structure_swing_low_body_floor` (uses body price, `bounds_style = support_floor`)
 
-Reclaimed highs matter because old resistance can become support. `_first_reclaim_index` looks forward after a high pivot and finds the first close above the pivot high plus an ATR-based threshold.
+A prominent low qualifies for wick-floor evidence when `body_price - wick_price >= zone_width` (currently `$500`). Retests must land within `20%` of zone width (`STRUCTURE_SUPPORT_FLOOR_RETEST_WIDTH_MULT = 0.2`, so `$100` today).
+
+Reclaimed highs matter because old resistance can become support. `_first_reclaim_index` looks forward after a high pivot and finds the first close above the pivot wick high plus `break_atr_mult * ATR` (default `0.2 * ATR`).
 
 Study questions:
 
@@ -126,18 +131,24 @@ Candidates become zones by clustering nearby source prices.
 
 Important rules:
 
-- Candidates only cluster when their prices fit inside the fixed zone width.
+- Candidates only cluster when their prices fit inside the fixed zone width and share the same `bounds_style` (`body` vs `support_floor` never mix in one cluster).
 - The current fixed width is `STRUCTURE_ZONE_WIDTH = 500.0`.
-- A zone needs at least `min_touches` unique source touches.
+- A zone needs at least `min_touches` unique source touches, counted as distinct `(index, origin)` pairs in the cluster.
 - Normal support zones anchor downward from the support base:
   - `high = support_base`
   - `low = high - zone_width`
+  - For clusters with more than 10 source prices, `support_base` is the 10th percentile of sorted prices (not simply the max). Smaller clusters use the max price.
 - Support-floor zones anchor upward from the wick/body floor:
   - `low = support_floor`
   - `high = low + zone_width`
-- Macro consolidation can combine nearby small zones when their source prices still form one broader structure area.
-- After macro consolidation, the builder suppresses duplicate nearby zones using `STRUCTURE_IMPORTANT_ZONE_SPACING = 1000.0`.
+  - Large clusters use the 10th percentile of sorted prices as the floor anchor; smaller clusters use the min price.
+- Macro consolidation can combine nearby small zones when:
+  - the gap between zones is `<= STRUCTURE_MACRO_GAP` (`300.0`)
+  - all source prices in the group span `<= STRUCTURE_MACRO_MAX_SOURCE_SPAN` (`2000.0`)
+  - `bounds_style` rules allow grouping (body zones can absorb a trailing support-floor shelf)
+- After macro consolidation, the builder suppresses duplicate nearby zones using `STRUCTURE_IMPORTANT_ZONE_SPACING = 1000.0`, keeping the stronger zone by score, then touches, then narrower width.
 - That suppression is intentionally narrower than the old `$1600` spacing so adjacent BTC 4H levels can survive when they represent separate structure, such as a `73.3k` support band below a stronger `74.5k` band.
+- Zone score starts as `touches * 2 + flipped_resistance_count`.
 
 Study questions:
 
@@ -163,11 +174,17 @@ What to understand:
 
 Post-processing makes the zone list usable:
 
-- Overlapping zones are reduced to the stronger zone.
-- Each zone gets a current `price_state`.
+- Overlapping zones are reduced to the stronger zone (score, then touches, then narrower width).
+- Each zone gets a current `price_state` using `role_buffer_pct` (passed as `buffer_pct`, default `0.15%`):
+  - `support`: zone high is below price minus the buffer
+  - `active`: price is inside or near the zone
+  - `resistance`: zone low is above price plus the buffer
 - Large gaps between support zones can be filled with dense reclaimed-high clusters.
-- Staircase filling uses all structural zones as upper/lower boundaries, but only fills upward from a lower zone that is currently classified as `support`.
+- A gap must exceed `STRUCTURE_STAIR_STEP_MAX_SUPPORT_GAP` (`4000.0`) to qualify.
+- Staircase filling uses all current zones as upper/lower boundaries, but only fills upward from a lower zone that is currently classified as `support`.
 - This matters when the next structural zone is `active` or just above current price: it can still act as the upper boundary for missing reclaimed-high support levels below it.
+- Staircase candidates come from raw external high pivots with origin `stair_step_flipped_resistance`. They must be reclaimed, sit strictly between the two boundary zones, and stay below `current_price * (1 - buffer_pct)`.
+- The filler runs up to `STRUCTURE_STAIR_STEP_MAX_INSERTIONS` (`6`) times. After each insertion it re-runs overlap cleanup.
 - Final zones are sorted by distance to `current_price`, then score, then touches.
 
 The staircase fill is designed for markets that moved upward through multiple resistance levels. Those reclaimed highs may form intermediate support even if they were not part of the prominent pivot set.
@@ -202,8 +219,9 @@ Important details:
 - `detect_support_resistance_zones` is the stable public wrapper.
 - `detect_support_resistance_zones_structure_v1` is the current implementation.
 - `internal_swing_order` lives on `ZoneConfig` but is only used by the chart server to draw internal pivots; the detector itself only uses `external_swing_order`.
-- Empty or insufficient data returns empty zone lists.
-- Resistance and active lists are intentionally empty in this phase.
+- Empty OHLC, insufficient bars for the swing window, or zero prominent external pivots all return empty zone lists.
+- `_support_candidates` receives both `raw_external_pivots` (all swings) and `external_pivots` (prominent swings).
+- Resistance and active top-level lists are intentionally empty in this phase; use each zone's `price_state` instead.
 
 Study question:
 
@@ -213,17 +231,18 @@ Study question:
 
 Every support zone includes:
 
-- `origin`: what kind of evidence formed the zone.
+- `origin`: what kind of evidence formed the zone (`structure_swing_low`, `flipped_resistance`, `structure_support_floor`, `stair_step_flipped_resistance`, `mixed_structure`, etc.).
 - `role`: currently always `"support"`.
+- `bounds_style`: `"body"` or `"support_floor"`.
 - `low`, `high`, `mid`: zone boundaries.
 - `width`, `width_pct`: zone size.
-- `touches`: number of source touches.
+- `touches`: number of source touches in the cluster.
 - `source_closes`: source prices used to form the zone. These are often body edges, not literal candle closes.
 - `source_indexes`: candle indexes for the source touches.
-- `score`: simple strength score.
+- `score`: `touches * 2 + flipped_resistance_count`.
 - `structure_role`: pivot role such as `HL`, `LL`, `HH`, or `mixed`.
 - `structure_bias`: currently `"support"`.
-- `price_state`: current position of price relative to the zone.
+- `price_state`: current position of price relative to the zone (`support`, `active`, or `resistance`).
 - `last_touch_index`: latest source candle index.
 - `broken_index`: reclaim candle index for flipped resistance evidence, when available.
 - `zone_width`: fixed width used to build the zone.
@@ -240,11 +259,16 @@ Useful tests to start with:
 
 - `test_internal_and_external_structure_pivots_have_different_granularity`
 - `test_prominent_structure_pivots_ignore_small_reversals_and_keep_extremes`
+- `test_prominent_structure_pivots_can_require_percent_move`
 - `test_structure_v1_clusters_external_swing_lows_with_fixed_500_dollar_width`
 - `test_structure_v1_returns_reclaimed_highs_as_support_only`
+- `test_structure_v1_adds_retested_long_wick_support_floor`
+- `test_support_bands_anchor_to_support_base`
+- `test_support_floor_shelf_is_not_swallowed_by_body_macro_group`
 - `test_structure_v1_fills_large_support_gap_with_reclaimed_high_clusters`
 - `test_structure_v1_fills_staircase_gap_to_next_active_boundary`
 - `test_nearby_reclaimed_high_zone_survives_next_major_level`
+- `test_structure_v1_output_is_signal_compatible`
 
 ## Mental Model
 
