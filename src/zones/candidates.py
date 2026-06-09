@@ -28,7 +28,8 @@ def _support_candidates(
     candidates.extend(_support_floor_candidates(raw_external_pivots, external_pivots, zone_width))
     return sorted(candidates, key=lambda item: (item.price, item.index, item.origin))
 
-
+# body-style candidates. Default bounds_style is "body"
+# shared by both paths — lows and reclaimed highs
 def _candidate_from_pivot(
     pivot: StructurePivot,
     origin: str,
@@ -38,11 +39,13 @@ def _candidate_from_pivot(
         price=float(pivot.body_price), # zones are drawn from bodies by default
         index=int(pivot.index),
         origin=origin,
+        # sets metadata on the candidate
         structure_role=pivot.structure_role or ("H" if pivot.kind == "high" else "L"),
         broken_index=broken_index,
     )
 
-
+# Handles a special case: a prominent low where the wick is far below the body
+# wick-floor support candidates
 def _support_floor_candidates(
     raw_external_pivots: list[StructurePivot],
     external_pivots: list[StructurePivot],
@@ -58,12 +61,14 @@ def _support_floor_candidates(
 
     candidates: list[SupportCandidate] = []
     for prominent_low in prominent_lows:
-        floor_price = float(prominent_low.price)
+        floor_price = float(prominent_low.price) # wick low
         candidates.append(_support_floor_candidate(prominent_low, floor_price, "structure_swing_low_wick"))
+        # For that floor_price, scan all low pivots and ask: “Did any other low’s body come back near this wick floor?”
         for raw_low in raw_lows:
             if raw_low.index == prominent_low.index:
-                continue
+                continue # skip the same candle — already handled as the wick
             body_floor = float(raw_low.body_price)
+            # other raw lows whose body is within retest tolerance of that wick floor
             if abs(body_floor - floor_price) <= retest_tolerance:
                 candidates.append(_support_floor_candidate(raw_low, body_floor, "structure_swing_low_body_floor"))
     return candidates

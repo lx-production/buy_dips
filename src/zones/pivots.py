@@ -59,8 +59,8 @@ def _find_structure_pivots(
 
 def _filter_prominent_structure_pivots(
     pivots: list[StructurePivot],
-    min_swing_atr_mult: float,
-    min_swing_pct: float,
+    min_swing_atr_mult: float, # default 4x
+    min_swing_pct: float, # default 2.5%
 ) -> list[StructurePivot]:
     atr_mult = max(0.0, float(min_swing_atr_mult))
     pct = max(0.0, float(min_swing_pct))
@@ -74,6 +74,8 @@ def _filter_prominent_structure_pivots(
             continue
 
         previous = prominent[-1]
+
+        # Same kind as the last kept pivot -> merge, keep the more extreme one
         if pivot.kind == previous.kind:
             if _is_more_extreme_structure_pivot(pivot, previous):
                 prominent[-1] = pivot
@@ -83,9 +85,12 @@ def _filter_prominent_structure_pivots(
             _structure_pivot_min_move(previous, atr_mult=atr_mult, pct=pct),
             _structure_pivot_min_move(pivot, atr_mult=atr_mult, pct=pct),
         )
+
+        # Opposite kind (high after low, or low after high) → only keep if the move is big enough
         if abs(float(pivot.price) - float(previous.price)) >= min_move:
             prominent.append(pivot)
-
+    
+    # Alternating highs and lows (starting with whichever pivot came first), with each reversal large enough to pass min_move.
     return prominent
 
 
@@ -94,7 +99,7 @@ def _is_more_extreme_structure_pivot(candidate: StructurePivot, current: Structu
         return candidate.price > current.price
     return candidate.price < current.price
 
-
+# minimum move that qualifies as a real swing
 def _structure_pivot_min_move(pivot: StructurePivot, atr_mult: float, pct: float) -> float:
     atr_move = abs(float(pivot.atr)) * atr_mult
     pct_move = abs(float(pivot.price)) * pct / 100.0

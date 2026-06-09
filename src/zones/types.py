@@ -12,7 +12,7 @@ STRUCTURE_ZONE_WIDTH = 500.0
 STRUCTURE_MACRO_GAP = 300.0
 STRUCTURE_MACRO_MAX_SOURCE_SPAN = 2000.0
 STRUCTURE_IMPORTANT_ZONE_SPACING = 1000.0
-STRUCTURE_SUPPORT_FLOOR_RETEST_WIDTH_MULT = 0.2
+STRUCTURE_SUPPORT_FLOOR_RETEST_WIDTH_MULT = 0.2 # 20% of zone width
 STRUCTURE_STAIR_STEP_MAX_SUPPORT_GAP = 4000.0
 STRUCTURE_STAIR_STEP_MAX_INSERTIONS = 6
 
@@ -21,18 +21,18 @@ STRUCTURE_STAIR_STEP_MAX_INSERTIONS = 6
 class StructurePivot:
     index: int
     kind: PivotKind
-    price: float
+    price: float # wick price
     body_price: float
     atr: float
     term: SwingTerm
-    structure_role: str | None = None
+    structure_role: str | None = None # H, HH, L, LL, etc.
 
 
 @dataclass
 class SupportCandidate:
     price: float
     index: int
-    origin: str # reason for candidate creation
+    origin: str # reasons for candidates creation (structure_swing_low, flipped_resistance, structure_swing_low_wick, structure_swing_low_body_floor)
     structure_role: str
     bounds_style: BoundsStyle = "body"
     broken_index: int | None = None
