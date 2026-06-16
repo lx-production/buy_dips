@@ -26,7 +26,7 @@ The main pipeline lives in `src/zones/detector.py`:
 5. Label both raw and prominent pivots as `H`, `HH`, `LH`, `L`, `HL`, or `LL`.
 6. Convert pivots into support candidates (prominent lows/reclaimed highs plus wick-floor evidence from raw lows).
 7. Cluster candidates into fixed-width zones.
-8. Macro-consolidate nearby zones, suppress only very-near duplicate zones, remove overlaps, fill large staircase gaps, and sort zones by distance to price.
+8. Macro-consolidate nearby zones, collapse adjacent duplicate bands, suppress remaining close zones by midpoint, remove overlaps, fill large staircase gaps, and sort zones by distance to price.
 
 Fixed constants live in `src/zones/types.py`. Runtime tuning comes from `ZoneConfig` in `config.yaml` (`external_swing_order`, `min_touches`, `role_buffer_pct`, and the ATR/swing thresholds).
 
@@ -146,8 +146,10 @@ Important rules:
   - the gap between zones is `<= STRUCTURE_MACRO_GAP` (`300.0`)
   - all source prices in the group span `<= STRUCTURE_MACRO_MAX_SOURCE_SPAN` (`2000.0`)
   - `bounds_style` rules allow grouping (body zones can absorb a trailing support-floor shelf)
-- After macro consolidation, the builder suppresses duplicate nearby zones using `STRUCTURE_IMPORTANT_ZONE_SPACING = 1000.0`, keeping the stronger zone by score, then touches, then narrower width.
-- That suppression is intentionally narrower than the old `$1600` spacing so adjacent BTC 4H levels can survive when they represent separate structure, such as a `73.3k` support band below a stronger `74.5k` band.
+- After macro consolidation, the builder suppresses duplicate nearby zones in two passes:
+  - Adjacent bands with the same `bounds_style` and edge gap `< STRUCTURE_ADJACENT_ZONE_MIN_GAP` (`650.0`) collapse to the upper zone unless the lower band has at least `STRUCTURE_ADJACENT_STRONGER_TOUCH_MARGIN` (`3`) more touches. That keeps a dense `65.9k` shelf with `10` touches while still dropping a weaker `63.0k` band below `64.0k` (`8` vs `6` touches).
+  - Remaining zones use `STRUCTURE_IMPORTANT_ZONE_SPACING = 1000.0` midpoint spacing, keeping the stronger zone by score, then touches, then narrower width.
+- That spacing is intentionally narrower than the old `$1600` midpoint rule so adjacent BTC 4H levels can survive when they represent separate structure, such as a `73.3k` support band below a stronger `74.5k` band (`721` edge gap).
 - Zone score starts as `touches * 2 + flipped_resistance_count`.
 
 Study questions:
@@ -192,6 +194,8 @@ The staircase fill is designed for markets that moved upward through multiple re
 Example from the BTCUSDT 4H study:
 
 - The `73.3k` band came from existing body/reclaimed-high evidence, but used to be suppressed because it was too close to the stronger `74.5k` zone.
+- The `63.0k` flipped-resistance band used to survive below `64.0k` because midpoint spacing was `$1081` even though the edge gap was only `$581`. Adjacent body-band collapse now drops the lower shelf when it is not much stronger (`8` vs `6` touches).
+- The `65.9k` band with `10` touches used to disappear when weaker `66.7k` and `67.7k` neighbors chained on top of it during collapse. The stronger-touch margin now keeps that shelf.
 - The `67.6k` and `70.4k` bands came from dense reclaimed-high clusters, but used to be skipped when the next boundary was not already classified as support.
 
 Study questions:
@@ -268,6 +272,8 @@ Useful tests to start with:
 - `test_structure_v1_fills_large_support_gap_with_reclaimed_high_clusters`
 - `test_structure_v1_fills_staircase_gap_to_next_active_boundary`
 - `test_nearby_reclaimed_high_zone_survives_next_major_level`
+- `test_adjacent_close_support_zone_collapses_to_upper_band`
+- `test_stronger_adjacent_lower_support_zone_survives_weak_upper_neighbors`
 - `test_structure_v1_output_is_signal_compatible`
 
 ## Mental Model

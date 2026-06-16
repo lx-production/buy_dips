@@ -241,6 +241,51 @@ def test_nearby_reclaimed_high_zone_survives_next_major_level() -> None:
     ]
 
 
+def test_adjacent_close_support_zone_collapses_to_upper_band() -> None:
+    lower_band = [
+        SupportCandidate(price=63206.70 + offset, index=index, origin="flipped_resistance", structure_role="H")
+        for index, offset in enumerate([-150.0, -80.0, 0.0, 40.0, 60.0, 90.0, 120.0, 150.0], start=1)
+    ]
+    upper_band = [
+        SupportCandidate(price=64288.00 + offset, index=index, origin="flipped_resistance", structure_role="H")
+        for index, offset in enumerate([-120.0, -60.0, 0.0, 50.0, 90.0, 130.0], start=20)
+    ]
+
+    zones = sorted(
+        _build_support_zones(
+            lower_band + upper_band,
+            zone_width=500.0,
+            min_touches=2,
+            current_price=66148.00,
+            buffer_pct=0.0015,
+        ),
+        key=lambda zone: zone["low"],
+    )
+
+    assert [(zone["low"], zone["high"], zone["touches"]) for zone in zones] == [
+        (63918.00, 64418.00, 6),
+    ]
+
+
+def test_stronger_adjacent_lower_support_zone_survives_weak_upper_neighbors() -> None:
+    from src.zones.build import _collapse_adjacent_close_support_zones
+
+    zones = [
+        {"low": 64038.00, "high": 64538.00, "mid": 64288.00, "touches": 6, "score": 13.0, "origin": "flipped_resistance", "bounds_style": "body", "width_pct": 0.778},
+        {"low": 65898.00, "high": 66398.00, "mid": 66148.00, "touches": 10, "score": 21.0, "origin": "flipped_resistance", "bounds_style": "body", "width_pct": 0.756},
+        {"low": 66699.98, "high": 67199.98, "mid": 66949.98, "touches": 7, "score": 16.0, "origin": "flipped_resistance", "bounds_style": "body", "width_pct": 0.746},
+        {"low": 67665.35, "high": 68165.35, "mid": 67915.35, "touches": 2, "score": 5.0, "origin": "flipped_resistance", "bounds_style": "body", "width_pct": 0.736},
+    ]
+
+    collapsed = sorted(_collapse_adjacent_close_support_zones(zones), key=lambda zone: zone["low"])
+
+    assert [(zone["low"], zone["high"], zone["touches"]) for zone in collapsed] == [
+        (64038.00, 64538.00, 6),
+        (65898.00, 66398.00, 10),
+        (67665.35, 68165.35, 2),
+    ]
+
+
 def test_support_floor_shelf_is_not_swallowed_by_body_macro_group() -> None:
     candidates = [
         SupportCandidate(

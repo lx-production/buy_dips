@@ -6,6 +6,8 @@ import numpy as np
 
 from .postprocess import _classify_price_state
 from .types import (
+    STRUCTURE_ADJACENT_STRONGER_TOUCH_MARGIN,
+    STRUCTURE_ADJACENT_ZONE_MIN_GAP,
     STRUCTURE_IMPORTANT_ZONE_SPACING,
     STRUCTURE_MACRO_GAP,
     STRUCTURE_MACRO_MAX_SOURCE_SPAN,
@@ -176,10 +178,34 @@ def _combine_support_macro_group(
 
 
 def _suppress_nearby_support_zones(zones: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    collapsed = _collapse_adjacent_close_support_zones(zones)
     kept: list[dict[str, Any]] = []
-    for zone in sorted(zones, key=_support_zone_rank, reverse=True):
-        if all(abs(float(zone["mid"]) - float(previous["mid"])) >= STRUCTURE_IMPORTANT_ZONE_SPACING for previous in kept):
+    for zone in sorted(collapsed, key=_support_zone_rank, reverse=True):
+        if all(
+            abs(float(zone["mid"]) - float(previous["mid"])) >= STRUCTURE_IMPORTANT_ZONE_SPACING
+            for previous in kept
+        ):
             kept.append(dict(zone))
+    return kept
+
+
+def _collapse_adjacent_close_support_zones(zones: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    kept: list[dict[str, Any]] = []
+    for zone in sorted(zones, key=lambda item: float(item["low"])):
+        zone = dict(zone)
+        if not kept:
+            kept.append(zone)
+            continue
+        previous = kept[-1]
+        gap = float(zone["low"]) - float(previous["high"])
+        same_bounds_style = zone.get("bounds_style", "body") == previous.get("bounds_style", "body")
+        if same_bounds_style and gap < STRUCTURE_ADJACENT_ZONE_MIN_GAP:
+            touch_margin = int(previous["touches"]) - int(zone["touches"])
+            if touch_margin >= STRUCTURE_ADJACENT_STRONGER_TOUCH_MARGIN:
+                continue
+            kept[-1] = zone
+        else:
+            kept.append(zone)
     return kept
 
 
