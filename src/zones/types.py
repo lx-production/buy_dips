@@ -32,7 +32,7 @@ class StructurePivot:
 
 @dataclass
 class SupportCandidate:
-    price: float
+    price: float # zone anchor price — body by default; wick when origin is structure_swing_low_wick
     index: int
     origin: str # reasons for candidates creation (structure_swing_low, flipped_resistance, structure_swing_low_wick, structure_swing_low_body_floor)
     structure_role: str

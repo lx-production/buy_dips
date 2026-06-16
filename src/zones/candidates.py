@@ -4,7 +4,7 @@ import numpy as np
 
 from .types import STRUCTURE_SUPPORT_FLOOR_RETEST_WIDTH_MULT, StructurePivot, SupportCandidate
 
-
+# builds candidates from three sources, then sorts them by price
 def _support_candidates(
     raw_external_pivots: list[StructurePivot], # all pivots, including noisy ones
     external_pivots: list[StructurePivot], # big, important swings
@@ -83,7 +83,7 @@ def _support_floor_candidate(pivot: StructurePivot, price: float, origin: str) -
         bounds_style="support_floor",
     )
 
-# did _first_reclaim_index find anything?
+# did _first_reclaim_index find anything (not None)?
 def _high_is_confirmed_reclaimed(
     pivot: StructurePivot,
     closes: np.ndarray,
