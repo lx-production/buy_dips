@@ -26,7 +26,7 @@ The main pipeline lives in `src/zones/detector.py`:
 5. Label both raw and prominent pivots as `H`, `HH`, `LH`, `L`, `HL`, or `LL`.
 6. Convert pivots into support candidates (prominent lows/reclaimed highs plus wick-floor evidence from raw lows).
 7. Cluster candidates into fixed-width zones.
-8. Macro-consolidate nearby zones, collapse adjacent duplicate bands, suppress remaining close zones by midpoint, remove overlaps, fill large staircase gaps, and sort zones by distance to price.
+8. Macro-consolidate nearby zones, collapse adjacent duplicate bands, suppress remaining close zones by midpoint, remove overlaps, fill large staircase gaps, and sort zones by price from low to high.
 
 Fixed constants live in `src/zones/types.py`. Runtime tuning comes from `ZoneConfig` in `config.yaml` (`external_swing_order`, `min_touches`, `role_buffer_pct`, and the ATR/swing thresholds).
 
@@ -134,10 +134,10 @@ Important rules:
 - Candidates only cluster when their prices fit inside the fixed zone width and share the same `bounds_style` (`body` vs `support_floor` never mix in one cluster).
 - The current fixed width is `STRUCTURE_ZONE_WIDTH = 500.0`.
 - A zone needs at least `min_touches` unique source touches, counted as distinct `(index, origin)` pairs in the cluster.
-- Normal support zones anchor downward from the support base:
-  - `high = support_base`
+- Normal support zones anchor downward from the support upper anchor:
+  - `high = support_upper_anchor`
   - `low = high - zone_width`
-  - For clusters with more than 10 source prices, `support_base` is the 10th percentile of sorted prices (not simply the max). Smaller clusters use the max price.
+  - For clusters with more than 10 source prices, `support_upper_anchor` is the 10th percentile of sorted prices (not simply the max). Smaller clusters use the max price.
 - Support-floor zones anchor upward from the wick/body floor:
   - `low = support_floor`
   - `high = low + zone_width`
@@ -146,6 +146,14 @@ Important rules:
   - the gap between zones is `<= STRUCTURE_MACRO_GAP` (`300.0`)
   - all source prices in the group span `<= STRUCTURE_MACRO_MAX_SOURCE_SPAN` (`2000.0`)
   - `bounds_style` rules allow grouping (body zones can absorb a trailing support-floor shelf)
+- After macro consolidation, a body swing-low zone can bridge to the next support-floor zone when:
+  - the lower zone is `structure_swing_low`
+  - the upper zone is `structure_support_floor`
+  - the edge gap between them is `<= STRUCTURE_BODY_FLOOR_BRIDGE_MAX_GAP` (`1000.0`)
+  - the upper floor zone confirms the bridge, but does not stretch the output width
+  - the bridge zone uses the lower zone high as `low` and `low + STRUCTURE_ZONE_WIDTH` as `high`
+  - this consumes the two bracket shelves plus any lower support-floor companion built from the same swing-low indexes
+  - the result is one fixed-width mixed-structure band over the manual support area
 - After macro consolidation, the builder suppresses duplicate nearby zones in two passes:
   - Adjacent bands with the same `bounds_style` and edge gap `< STRUCTURE_ADJACENT_ZONE_MIN_GAP` (`650.0`) collapse to the upper zone unless the lower band has at least `STRUCTURE_ADJACENT_STRONGER_TOUCH_MARGIN` (`3`) more touches. That keeps a dense `65.9k` shelf with `10` touches while still dropping a weaker `63.0k` band below `64.0k` (`8` vs `6` touches).
   - Remaining zones use `STRUCTURE_IMPORTANT_ZONE_SPACING = 1000.0` midpoint spacing, keeping the stronger zone by score, then touches, then narrower width.
@@ -170,7 +178,6 @@ Key functions:
 - `_best_support_staircase_gap_fill`
 - `_stair_step_support_candidates`
 - `_classify_price_state`
-- `_zone_distance_sort_key`
 
 What to understand:
 
@@ -187,7 +194,7 @@ Post-processing makes the zone list usable:
 - This matters when the next structural zone is `active` or just above current price: it can still act as the upper boundary for missing reclaimed-high support levels below it.
 - Staircase candidates come from raw external high pivots with origin `stair_step_flipped_resistance`. They must be reclaimed, sit strictly between the two boundary zones, and stay below `current_price * (1 - buffer_pct)`.
 - The filler runs up to `STRUCTURE_STAIR_STEP_MAX_INSERTIONS` (`6`) times. After each insertion it re-runs overlap cleanup.
-- Final zones are sorted by distance to `current_price`, then score, then touches.
+- Final zones are sorted by price from low to high.
 
 The staircase fill is designed for markets that moved upward through multiple resistance levels. Those reclaimed highs may form intermediate support even if they were not part of the prominent pivot set.
 
@@ -203,7 +210,7 @@ Study questions:
 - Why does staircase filling use raw external pivots instead of only prominent pivots?
 - What makes one overlapping support zone preferred over another?
 - Why should an active structural zone still be allowed to bound a gap-fill search?
-- Why sort by distance to current price at the end?
+- Why sort final support zones by price from low to high?
 
 ## Block 6: Detector Orchestration
 
@@ -267,7 +274,7 @@ Useful tests to start with:
 - `test_structure_v1_clusters_external_swing_lows_with_fixed_500_dollar_width`
 - `test_structure_v1_returns_reclaimed_highs_as_support_only`
 - `test_structure_v1_adds_retested_long_wick_support_floor`
-- `test_support_bands_anchor_to_support_base`
+- `test_support_bands_anchor_to_support_upper_anchor`
 - `test_support_floor_shelf_is_not_swallowed_by_body_macro_group`
 - `test_structure_v1_fills_large_support_gap_with_reclaimed_high_clusters`
 - `test_structure_v1_fills_staircase_gap_to_next_active_boundary`

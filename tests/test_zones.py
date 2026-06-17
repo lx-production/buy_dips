@@ -389,7 +389,85 @@ def test_support_floor_shelf_is_not_swallowed_by_body_macro_group() -> None:
     ]
 
 
-def test_support_bands_anchor_to_support_base() -> None:
+def test_body_low_and_nearby_floor_gap_bridges_to_manual_support_band() -> None:
+    candidates = [
+        SupportCandidate(
+            price=56078.54,
+            index=1031,
+            origin="structure_swing_low_wick",
+            structure_role="HL",
+            bounds_style="support_floor",
+        ),
+        SupportCandidate(
+            price=56552.82,
+            index=392,
+            origin="structure_swing_low_wick",
+            structure_role="LL",
+            bounds_style="support_floor",
+        ),
+        SupportCandidate(price=57046.34, index=1031, origin="structure_swing_low", structure_role="HL"),
+        SupportCandidate(price=57500.00, index=392, origin="structure_swing_low", structure_role="LL"),
+        SupportCandidate(
+            price=58396.95,
+            index=1052,
+            origin="structure_swing_low_body_floor",
+            structure_role="HL",
+            bounds_style="support_floor",
+        ),
+        SupportCandidate(
+            price=58402.00,
+            index=719,
+            origin="structure_swing_low_wick",
+            structure_role="LL",
+            bounds_style="support_floor",
+        ),
+        SupportCandidate(
+            price=58898.85,
+            index=1108,
+            origin="structure_swing_low_body_floor",
+            structure_role="LL",
+            bounds_style="support_floor",
+        ),
+        SupportCandidate(
+            price=58946.00,
+            index=1366,
+            origin="structure_swing_low_wick",
+            structure_role="HL",
+            bounds_style="support_floor",
+        ),
+        SupportCandidate(
+            price=59005.00,
+            index=52,
+            origin="structure_swing_low_wick",
+            structure_role="L",
+            bounds_style="support_floor",
+        ),
+        SupportCandidate(
+            price=59130.91,
+            index=4984,
+            origin="structure_swing_low_wick",
+            structure_role="LL",
+            bounds_style="support_floor",
+        ),
+    ]
+
+    zones = sorted(
+        _build_support_zones(
+            candidates,
+            zone_width=500.0,
+            min_touches=2,
+            current_price=65851.99,
+            buffer_pct=0.0015,
+        ),
+        key=lambda zone: zone["low"],
+    )
+
+    assert [(zone["low"], zone["high"], zone["origin"]) for zone in zones] == [
+        (57500.00, 58000.00, "mixed_structure"),
+    ]
+
+
+def test_support_bands_anchor_to_support_upper_anchor() -> None:
     low, high = _fixed_support_zone_bounds(
         [
             65776.47,

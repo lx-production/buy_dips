@@ -192,15 +192,3 @@ def _classify_price_state(low: float, high: float, current_price: float, buffer_
         return "resistance"
     return "active"
 
-
-def _zone_distance_sort_key(zone: dict[str, Any], current_price: float) -> tuple[float, float, int]:
-    low = float(zone["low"])
-    high = float(zone["high"])
-    price = float(current_price)
-    if low <= price <= high:
-        distance = 0.0
-    elif price < low:
-        distance = low - price
-    else:
-        distance = price - high
-    return (distance, -float(zone.get("score", 0.0)), -int(zone["touches"]))

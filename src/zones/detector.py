@@ -8,7 +8,7 @@ from .build import _build_support_zones
 from .candidates import _support_candidates
 from .ohlc import _average_true_range, _coerce_ohlc
 from .pivots import _filter_prominent_structure_pivots, _find_structure_pivots, _label_structure_pivots
-from .postprocess import _fill_support_staircase_gaps, _make_support_zones_distinct, _zone_distance_sort_key
+from .postprocess import _fill_support_staircase_gaps, _make_support_zones_distinct
 from .types import STRUCTURE_ZONE_WIDTH
 
 
@@ -100,5 +100,5 @@ def detect_support_resistance_zones_structure_v1(
         buffer_pct=buffer_pct,
     )
 
-    support = sorted(zones, key=lambda zone: _zone_distance_sort_key(zone, float(current_price)))
+    support = sorted(zones, key=lambda zone: float(zone["low"]))
     return {"support": support, "resistance": [], "active": [], "all": support}
