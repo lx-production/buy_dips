@@ -93,7 +93,7 @@ def _zone_from_support_cluster(
         "zone_width": float(zone_width),
     }
 
-# Walk sorted zones, build macro groups, call _combine_support_macro_group, then hand off to suppression
+# Walk sorted zones, low to high, build macro groups, call _combine_support_macro_group, then hand off to suppression
 def _consolidate_support_zones(
     zones: list[dict[str, Any]],
     zone_width: float,
@@ -102,11 +102,11 @@ def _consolidate_support_zones(
 ) -> list[dict[str, Any]]:
     macro_zones: list[dict[str, Any]] = []
     group: list[dict[str, Any]] = []
-    for zone in sorted(zones, key=lambda item: item["low"]):
+    for zone in sorted(zones, key=lambda item: item["low"]): # Zones are walked low → high
         if not group:
             group = [zone]
             continue
-        if _zones_can_share_macro_group(group, zone):
+        if _zone_can_join_macro_group(group, zone):
             group.append(zone)
         else:
             macro_zones.append(_combine_support_macro_group(group, zone_width, current_price, buffer_pct))
@@ -117,23 +117,27 @@ def _consolidate_support_zones(
     return _suppress_nearby_support_zones(macro_zones)
 
 # Gap ≤ 300 USD, source span ≤ 2000 USD, plus bounds-style check
-def _zones_can_share_macro_group(group: list[dict[str, Any]], zone: dict[str, Any]) -> bool:
+def _zone_can_join_macro_group(group: list[dict[str, Any]], zone: dict[str, Any]) -> bool:
     if not _bounds_styles_can_share_macro_group(group, zone):
         return False
+    # check against the trailing edge of the group: group[-1]["high"]
     gap = float(zone["low"]) - float(group[-1]["high"])
     if gap > STRUCTURE_MACRO_GAP:
         return False
+    # Gather every touch price from the group plus the candidate zone
     source_prices = [float(price) for item in group for price in item["source_closes"]] + [
         float(price) for price in zone["source_closes"]
     ]
     return max(source_prices) - min(source_prices) <= STRUCTURE_MACRO_MAX_SOURCE_SPAN
 
 # Can a body zone and a floor zone merge?
+# One-way only: a body group can absorb one trailing floor shelf. A floor-first group cannot absorb a body zone the same way
 def _bounds_styles_can_share_macro_group(group: list[dict[str, Any]], zone: dict[str, Any]) -> bool:
-    zone_style = zone.get("bounds_style", "body")
-    group_styles = [item.get("bounds_style", "body") for item in group]
+    zone_style = zone.get("bounds_style", "body") # if "bounds_style" is missing, it defaults to "body"
+    group_styles = [item.get("bounds_style", "body") for item in group] # if "bounds_style" is missing, it defaults to "body"
     if len(set(group_styles)) == 1 and zone_style == group_styles[-1]:
         return True
+    # the first zone defines the group type for the special mixed rule: a body-first group may absorb one trailing support_floor shelf
     return group_styles[0] == "body" and "support_floor" not in group_styles and zone_style == "support_floor"
 
 # Merge a group of zones into one wider zone (or pass through if only one)
@@ -150,11 +154,16 @@ def _combine_support_macro_group(
 
     source_closes = [float(price) for zone in group for price in zone["source_closes"]]
     source_indexes = [int(index) for zone in group for index in zone["source_indexes"]]
+    
+    # Determine the bounds style for the new zone based on the first zone in the group
     bounds_style = group[0].get("bounds_style", "body")
-    if bounds_style == "support_floor":
+
+    if bounds_style == "support_floor": # anchor at the low side
         low, high = _fixed_support_floor_zone_bounds(source_closes, zone_width)
-    else:
+    
+    else: # anchor at the high side
         low, high = _fixed_support_zone_bounds(source_closes, zone_width)
+    
     mid = (low + high) / 2.0
     origins = {str(zone["origin"]) for zone in group}
     structure_roles = {str(zone.get("structure_role", "unknown")) for zone in group}

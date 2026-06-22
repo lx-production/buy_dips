@@ -131,10 +131,10 @@ Candidates become zones by clustering nearby source prices.
 
 Important rules:
 
-- Candidates only cluster when their prices fit inside the fixed zone width and share the same `bounds_style` (`body` vs `support_floor` never mix in one cluster).
+- Candidates only cluster when their prices fit inside the fixed zone width and share the same `bounds_style` (`body` vs `support_floor` never mix in one cluster). Different candidate types use different prices and different ways to draw the zone. They can be combined later (macro consolidation, body–floor bridge), but not in the initial clustering step.
 - The current fixed width is `STRUCTURE_ZONE_WIDTH = 500.0`.
 - A zone needs at least `min_touches` unique source touches, counted as distinct `(index, origin)` pairs in the cluster.
-- Normal support zones anchor downward from the support upper anchor:
+- Normal body zones anchor downward from the support upper anchor:
   - `high = support_upper_anchor`
   - `low = high - zone_width`
   - For clusters with more than 10 source prices, `support_upper_anchor` is the 10th percentile of sorted prices (not simply the max). Smaller clusters use the max price.
