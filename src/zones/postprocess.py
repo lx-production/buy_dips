@@ -5,6 +5,7 @@ from typing import Any
 import numpy as np
 
 from .candidates import _first_reclaim_index, _high_is_confirmed_reclaimed
+from .state import _classify_price_state
 from .types import (
     STRUCTURE_STAIR_STEP_MAX_INSERTIONS,
     STRUCTURE_STAIR_STEP_MAX_SUPPORT_GAP,
@@ -183,12 +184,3 @@ def _coerce_price_state(zone: dict[str, Any], current_price: float, buffer_pct: 
     if value in ("support", "active", "resistance"):
         return str(value)
     return _classify_price_state(float(zone["low"]), float(zone["high"]), current_price, buffer_pct)
-
-
-def _classify_price_state(low: float, high: float, current_price: float, buffer_pct: float) -> str:
-    if high < current_price * (1 - buffer_pct):
-        return "support"
-    if low > current_price * (1 + buffer_pct):
-        return "resistance"
-    return "active"
-

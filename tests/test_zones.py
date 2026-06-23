@@ -57,6 +57,98 @@ def test_structure_v1_clusters_external_swing_lows_with_fixed_500_dollar_width()
     assert zone["width"] == 500.0
 
 
+def test_macro_merge_preserves_complete_zone_metadata() -> None:
+    candidates = [
+        SupportCandidate(price=1000.0, index=1, origin="structure_swing_low", structure_role="L"),
+        SupportCandidate(price=1100.0, index=2, origin="structure_swing_low", structure_role="L"),
+        SupportCandidate(price=1700.0, index=3, origin="structure_swing_low", structure_role="L"),
+        SupportCandidate(price=1800.0, index=4, origin="structure_swing_low", structure_role="L"),
+    ]
+
+    zones = _build_support_zones(
+        candidates,
+        zone_width=500.0,
+        min_touches=2,
+        current_price=3000.0,
+        buffer_pct=0.0015,
+    )
+
+    assert zones == [
+        {
+            "origin": "structure_swing_low",
+            "role": "support",
+            "bounds_style": "body",
+            "low": 1300.0,
+            "high": 1800.0,
+            "mid": 1550.0,
+            "width": 500.0,
+            "width_pct": 500.0 / 1550.0 * 100.0,
+            "touches": 4,
+            "source_closes": [1000.0, 1100.0, 1700.0, 1800.0],
+            "source_indexes": [1, 2, 3, 4],
+            "score": 8.0,
+            "structure_role": "L",
+            "structure_bias": "support",
+            "price_state": "support",
+            "last_touch_index": 4,
+            "broken_index": None,
+            "zone_width": 500.0,
+        }
+    ]
+
+
+def test_body_floor_bridge_preserves_complete_zone_metadata() -> None:
+    candidates = [
+        SupportCandidate(price=1000.0, index=1, origin="structure_swing_low", structure_role="L"),
+        SupportCandidate(price=1100.0, index=2, origin="structure_swing_low", structure_role="L"),
+        SupportCandidate(
+            price=1500.0,
+            index=3,
+            origin="structure_swing_low_wick",
+            structure_role="LL",
+            bounds_style="support_floor",
+        ),
+        SupportCandidate(
+            price=1550.0,
+            index=4,
+            origin="structure_swing_low_body_floor",
+            structure_role="LL",
+            bounds_style="support_floor",
+        ),
+    ]
+
+    zones = _build_support_zones(
+        candidates,
+        zone_width=500.0,
+        min_touches=2,
+        current_price=3000.0,
+        buffer_pct=0.0015,
+    )
+
+    assert zones == [
+        {
+            "origin": "mixed_structure",
+            "role": "support",
+            "bounds_style": "body",
+            "low": 1100.0,
+            "high": 1600.0,
+            "mid": 1350.0,
+            "width": 500.0,
+            "width_pct": 500.0 / 1350.0 * 100.0,
+            "touches": 4,
+            "source_closes": [1000.0, 1100.0, 1500.0, 1550.0],
+            "source_indexes": [1, 2, 3, 4],
+            "score": 8.0,
+            "structure_role": "mixed",
+            "structure_bias": "support",
+            "price_state": "support",
+            "last_touch_index": 4,
+            "broken_index": None,
+            "zone_width": 500.0,
+        }
+    ]
+
+
 def test_structure_v1_returns_reclaimed_highs_as_support_only() -> None:
     df = pd.DataFrame(
         {

@@ -25,8 +25,8 @@ The main pipeline lives in `src/zones/detector.py`:
 4. Filter those pivots into prominent structure. Return empty zones if none survive.
 5. Label both raw and prominent pivots as `H`, `HH`, `LH`, `L`, `HL`, or `LL`.
 6. Convert pivots into support candidates (prominent lows/reclaimed highs plus wick-floor evidence from raw lows).
-7. Cluster candidates into fixed-width zones.
-8. Macro-consolidate nearby zones, collapse adjacent duplicate bands, suppress remaining close zones by midpoint, remove overlaps, fill large staircase gaps, and sort zones by price from low to high.
+7. Build fixed-width zones through four ordered stages: cluster candidates, merge macro groups, bridge confirmed body/floor pairs, then suppress nearby duplicates.
+8. Remove overlaps, fill large staircase gaps, and sort zones by price from low to high.
 
 Fixed constants live in `src/zones/types.py`. Runtime tuning comes from `ZoneConfig` in `config.yaml` (`external_swing_order`, `min_touches`, `role_buffer_pct`, and the ATR/swing thresholds).
 
@@ -115,19 +115,32 @@ Study questions:
 
 ## Block 4: Building Zones
 
-Read: `src/zones/build.py`
+Read: `src/zones/build.py`, then `src/zones/factory.py`
 
 Key functions:
 
 - `_build_support_zones`
-- `_zone_from_support_cluster`
-- `_fixed_support_zone_bounds`
-- `_fixed_support_floor_zone_bounds`
-- `_consolidate_support_zones`
+- `_cluster_support_candidates`
+- `_merge_support_macro_groups`
+- `_bridge_body_floor_support_gaps`
+- `_suppress_nearby_support_zones`
+- `factory._zone_from_support_cluster`
+- `factory._make_support_zone`
+- `factory._fixed_support_zone_bounds`
+- `factory._fixed_support_floor_zone_bounds`
 
 What to understand:
 
-Candidates become zones by clustering nearby source prices.
+`_build_support_zones` is the table of contents for this block. It deliberately runs four transformations in order:
+
+1. Cluster compatible candidates and discard clusters below `min_touches`.
+2. Merge compatible clusters into macro zones.
+3. Replace confirmed body/floor pairs with bridge zones.
+4. Collapse adjacent duplicates and enforce midpoint spacing.
+
+The order is part of the algorithm. These rules use different thresholds and precedence, so combining them into one generic merge pass would change behavior.
+
+`build.py` owns those policies. `factory.py` owns zone representation: calculating bounds, aggregating candidate metadata, and producing the standard zone dictionary. All initial, macro-merged, and bridged zones go through `_make_support_zone`, which prevents their output fields from drifting apart.
 
 Important rules:
 
@@ -160,6 +173,12 @@ Important rules:
 - That spacing is intentionally narrower than the old `$1600` midpoint rule so adjacent BTC 4H levels can survive when they represent separate structure, such as a `73.3k` support band below a stronger `74.5k` band (`721` edge gap).
 - Zone score starts as `touches * 2 + flipped_resistance_count`.
 
+Implementation boundaries:
+
+- `build.py`: clustering, macro grouping, body/floor bridging, and nearby-zone selection policy.
+- `factory.py`: bounds, anchors, origin/role aggregation, and construction of complete zone dictionaries.
+- `state.py`: shared `support`/`active`/`resistance` price-state classification, used by both building and post-processing without a circular import.
+
 Study questions:
 
 - Why does normal support use the upper edge as the anchor?
@@ -169,7 +188,7 @@ Study questions:
 
 ## Block 5: Post-Processing
 
-Read: `src/zones/postprocess.py`
+Read: `src/zones/postprocess.py` and `src/zones/state.py`
 
 Key functions:
 
@@ -177,7 +196,7 @@ Key functions:
 - `_fill_support_staircase_gaps`
 - `_best_support_staircase_gap_fill`
 - `_stair_step_support_candidates`
-- `_classify_price_state`
+- `state._classify_price_state`
 
 What to understand:
 

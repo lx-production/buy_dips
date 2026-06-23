@@ -1,8 +1,12 @@
 {
     "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
     "python.terminal.activateEnvironment": true,
+    "python-envs.terminal.autoActivationType": "shellStartup",
+    "terminal.integrated.env.osx": {
+        "VIRTUAL_ENV": "${workspaceFolder}/.venv",
+        "PATH": "${workspaceFolder}/.venv/bin:${env:PATH}"
+    },
     "[python]": {
         "editor.inlayHints.enabled": "off"
     }
 }
-
