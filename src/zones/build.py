@@ -20,6 +20,8 @@ from .types import (
 )
 
 
+# Turn support candidates into final zones: cluster, filter weak clusters, merge
+# macro groups, bridge body/floor pairs, then drop nearby duplicates.
 def _build_support_zones(
     candidates: list[SupportCandidate],
     zone_width: float,
@@ -38,6 +40,7 @@ def _build_support_zones(
     return _suppress_nearby_support_zones(zones)
 
 
+# Group candidates whose prices fit within zone_width and share the same bounds_style.
 def _cluster_support_candidates(
     candidates: list[SupportCandidate],
     zone_width: float,
@@ -53,6 +56,7 @@ def _cluster_support_candidates(
     return clusters
 
 
+# Return True when a candidate matches an existing cluster's bounds_style and price span.
 def _candidate_matches_cluster(
     candidate: SupportCandidate,
     cluster: list[SupportCandidate],
@@ -64,11 +68,13 @@ def _candidate_matches_cluster(
     return max(prices) - min(prices) <= float(zone_width)
 
 
+# Return True when the cluster has at least min_touches unique (index, origin) pairs.
 def _has_minimum_unique_touches(cluster: list[SupportCandidate], min_touches: int) -> bool:
     unique_touches = {(item.index, item.origin) for item in cluster}
     return len(unique_touches) >= int(min_touches)
 
 
+# Merge nearby compatible zones into larger macro zones, scanning low to high.
 def _merge_support_macro_groups(
     zones: list[Zone],
     zone_width: float,
@@ -87,6 +93,7 @@ def _merge_support_macro_groups(
     return macro_zones
 
 
+# Return True when a zone is close enough and compatible to join the current macro group.
 def _zone_can_join_macro_group(group: list[Zone], zone: Zone) -> bool:
     if not _bounds_styles_can_share_macro_group(group, zone):
         return False
@@ -98,6 +105,7 @@ def _zone_can_join_macro_group(group: list[Zone], zone: Zone) -> bool:
     return max(source_prices) - min(source_prices) <= STRUCTURE_MACRO_MAX_SOURCE_SPAN
 
 
+# Return True when bounds_style rules allow these zones to share one macro group.
 def _bounds_styles_can_share_macro_group(group: list[Zone], zone: Zone) -> bool:
     zone_style = zone.get("bounds_style", "body")
     group_styles = [item.get("bounds_style", "body") for item in group]
@@ -106,6 +114,7 @@ def _bounds_styles_can_share_macro_group(group: list[Zone], zone: Zone) -> bool:
     return group_styles[0] == "body" and "support_floor" not in group_styles and zone_style == "support_floor"
 
 
+# Combine a macro group into one zone, or return the single zone unchanged.
 def _combine_support_macro_group(
     group: list[Zone],
     zone_width: float,
@@ -142,6 +151,7 @@ def _combine_support_macro_group(
     )
 
 
+# Replace confirmed body swing-low + support-floor pairs with one bridge zone each.
 def _bridge_body_floor_support_gaps(
     zones: list[Zone],
     zone_width: float,
@@ -162,6 +172,7 @@ def _bridge_body_floor_support_gaps(
     return [dict(zone) for index, zone in indexed_zones if index not in consumed_indexes] + bridges
 
 
+# Build one bridge zone from a body swing-low below a confirming support-floor shelf.
 def _body_floor_support_bridge(
     lower_zone: Zone,
     upper_zone: Zone,
@@ -208,6 +219,7 @@ def _body_floor_support_bridge(
     )
 
 
+# Find support-floor zones that share source candles with a body zone and sit just below it.
 def _body_floor_companion_indexes(
     indexed_zones: list[tuple[int, Zone]],
     body_zone: Zone,
@@ -226,6 +238,7 @@ def _body_floor_companion_indexes(
     return companion_indexes
 
 
+# Drop duplicate nearby zones: collapse tight neighbors, then enforce midpoint spacing.
 def _suppress_nearby_support_zones(zones: list[Zone]) -> list[Zone]:
     collapsed = _collapse_adjacent_close_support_zones(zones)
     kept: list[Zone] = []
@@ -238,6 +251,7 @@ def _suppress_nearby_support_zones(zones: list[Zone]) -> list[Zone]:
     return kept
 
 
+# When two same-style zones overlap or sit too close, keep the stronger one.
 def _collapse_adjacent_close_support_zones(zones: list[Zone]) -> list[Zone]:
     kept: list[Zone] = []
     for zone in sorted(zones, key=lambda item: float(item["low"])):
@@ -258,5 +272,6 @@ def _collapse_adjacent_close_support_zones(zones: list[Zone]) -> list[Zone]:
     return kept
 
 
+# Rank zones for spacing: higher score and touches win; narrower width breaks ties.
 def _support_zone_rank(zone: Zone) -> tuple[float, int, float]:
     return (float(zone.get("score", 0.0)), int(zone["touches"]), -float(zone["width_pct"]))

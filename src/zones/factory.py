@@ -10,6 +10,7 @@ from .types import BoundsStyle, SupportCandidate
 Zone = dict[str, Any]
 
 
+# Build one support zone dict from a cluster of candidates (bounds, score, metadata).
 def _zone_from_support_cluster(
     cluster: list[SupportCandidate],
     zone_width: float,
@@ -41,6 +42,7 @@ def _zone_from_support_cluster(
     )
 
 
+# Assemble the standard zone dictionary with derived fields (mid, width_pct, price_state).
 def _make_support_zone(
     *,
     origin: str,
@@ -84,6 +86,7 @@ def _make_support_zone(
     }
 
 
+# Pick body-style or support-floor bounds based on bounds_style.
 def _fixed_support_bounds(
     prices: list[float],
     zone_width: float,
@@ -94,16 +97,19 @@ def _fixed_support_bounds(
     return _fixed_support_zone_bounds(prices, zone_width)
 
 
+# Body zone: anchor high from prices, extend downward by zone_width.
 def _fixed_support_zone_bounds(prices: list[float], zone_width: float) -> tuple[float, float]:
     high = _support_upper_anchor(prices)
     return high - float(zone_width), high
 
 
+# Support-floor zone: anchor low from prices, extend upward by zone_width.
 def _fixed_support_floor_zone_bounds(prices: list[float], zone_width: float) -> tuple[float, float]:
     low = _support_floor_anchor(prices)
     return low, low + float(zone_width)
 
 
+# Upper anchor for body zones: max price, or 10th percentile when cluster is large.
 def _support_upper_anchor(prices: list[float]) -> float:
     sorted_prices = sorted(float(price) for price in prices)
     if len(sorted_prices) <= 10:
@@ -111,6 +117,7 @@ def _support_upper_anchor(prices: list[float]) -> float:
     return _lower_decile(sorted_prices)
 
 
+# Floor anchor for support-floor zones: min price, or 10th percentile when cluster is large.
 def _support_floor_anchor(prices: list[float]) -> float:
     sorted_prices = sorted(float(price) for price in prices)
     if len(sorted_prices) <= 10:
@@ -118,11 +125,13 @@ def _support_floor_anchor(prices: list[float]) -> float:
     return _lower_decile(sorted_prices)
 
 
+# Return the price at the 10th percentile index of a sorted price list.
 def _lower_decile(sorted_prices: list[float]) -> float:
     index = int((len(sorted_prices) - 1) * 0.10)
     return sorted_prices[index]
 
 
+# Collapse multiple candidate origins into one zone origin label.
 def _support_origin_from_origins(origins: set[str]) -> str:
     floor_origins = {"structure_swing_low_wick", "structure_swing_low_body_floor"}
     if origins and origins.issubset(floor_origins):
@@ -134,6 +143,7 @@ def _support_origin_from_origins(origins: set[str]) -> str:
     return "mixed_structure"
 
 
+# Derive structure_role from the cluster: single role, mixed, or unknown.
 def _support_cluster_role(cluster: list[SupportCandidate]) -> str:
     roles = {item.structure_role for item in cluster if item.structure_role}
     if not roles:
@@ -143,6 +153,7 @@ def _support_cluster_role(cluster: list[SupportCandidate]) -> str:
     return "mixed"
 
 
+# Return the latest non-None index from an iterable, or None if all are missing.
 def _latest_defined(values: Iterable[int | None]) -> int | None:
     defined = [int(value) for value in values if value is not None]
     return max(defined) if defined else None
