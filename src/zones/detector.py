@@ -4,11 +4,12 @@ from typing import Any
 
 import pandas as pd
 
-from .build import _build_support_zones
+from .build import _build_support_zones, _suppress_nearby_support_zones
 from .candidates import _support_candidates
 from .ohlc import _average_true_range, _coerce_ohlc
 from .pivots import _filter_prominent_structure_pivots, _find_structure_pivots, _label_structure_pivots
 from .postprocess import _fill_support_staircase_gaps, _make_support_zones_distinct
+from .reactions import _build_local_reaction_zones
 from .types import STRUCTURE_ZONE_WIDTH
 
 
@@ -64,6 +65,7 @@ def detect_support_resistance_zones_structure_v1(
         current_price = float(closes[-1])
 
     raw_external_pivots = _find_structure_pivots(ohlc, bars_each_side, atr, "external")
+    internal_pivots = _find_structure_pivots(ohlc, 1, atr, "internal")
     external_pivots = _filter_prominent_structure_pivots(
         raw_external_pivots,
         min_swing_atr_mult=external_min_swing_atr_mult,
@@ -74,6 +76,7 @@ def detect_support_resistance_zones_structure_v1(
 
     _label_structure_pivots(raw_external_pivots)
     _label_structure_pivots(external_pivots)
+    _label_structure_pivots(internal_pivots)
     candidates = _support_candidates(
         raw_external_pivots=raw_external_pivots,
         external_pivots=external_pivots,
@@ -88,6 +91,16 @@ def detect_support_resistance_zones_structure_v1(
         current_price=float(current_price),
         buffer_pct=buffer_pct,
     )
+    local_reaction_zones = _build_local_reaction_zones(
+        internal_pivots=internal_pivots,
+        closes=closes,
+        break_atr_mult=break_atr_mult,
+        zone_width=STRUCTURE_ZONE_WIDTH,
+        min_touches=min_touches,
+        current_price=float(current_price),
+        buffer_pct=buffer_pct,
+    )
+    zones = _suppress_nearby_support_zones(zones + local_reaction_zones)
     zones = _make_support_zones_distinct(zones, current_price=float(current_price), buffer_pct=buffer_pct)
     zones = _fill_support_staircase_gaps(
         zones=zones,

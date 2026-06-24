@@ -8,6 +8,7 @@ from src.zones import (
     StructurePivot,
     SupportCandidate,
     _average_true_range,
+    _build_local_reaction_zones,
     _filter_prominent_structure_pivots,
     _fill_support_staircase_gaps,
     _find_structure_pivots,
@@ -198,6 +199,37 @@ def test_structure_v1_adds_retested_long_wick_support_floor() -> None:
         "structure_swing_low_body_floor",
         "structure_swing_low_body_floor",
     ]
+
+
+def test_local_reaction_zones_use_recent_base_and_retested_rejection_bounds() -> None:
+    pivots = [
+        _pivot(index=1, kind="high", price=101.0, body_price=100.0),
+        _pivot(index=2, kind="high", price=103.0, body_price=102.0),
+        _pivot(index=3, kind="low", price=103.0, body_price=110.0),
+        _pivot(index=4, kind="low", price=95.0, body_price=105.0),
+        _pivot(index=5, kind="low", price=94.0, body_price=106.0),
+        _pivot(index=10, kind="low", price=200.0, body_price=206.0),
+        _pivot(index=12, kind="high", price=198.0, body_price=197.0),
+        _pivot(index=14, kind="low", price=201.0, body_price=204.0),
+        _pivot(index=16, kind="low", price=199.0, body_price=205.0),
+    ]
+
+    zones = _build_local_reaction_zones(
+        internal_pivots=pivots,
+        closes=pd.Series([300.0] * 20).to_numpy(dtype=float),
+        break_atr_mult=0.0,
+        zone_width=10.0,
+        min_touches=2,
+        current_price=250.0,
+        buffer_pct=0.0015,
+    )
+
+    assert [(zone["low"], zone["high"], zone["touches"]) for zone in zones] == [
+        (102.0, 110.0, 5),
+        (200.0, 206.0, 4),
+    ]
+    assert all(zone["origin"] == "local_reaction_support" for zone in zones)
+    assert all(zone["bounds_style"] == "local_reaction" for zone in zones)
 
 
 def test_structure_v1_fills_large_support_gap_with_reclaimed_high_clusters() -> None:
@@ -706,4 +738,16 @@ def _high_pivot(index: int, price: float, body_price: float) -> StructurePivot:
         atr=0.0,
         term="external",
         structure_role="H",
+    )
+
+
+def _pivot(index: int, kind: str, price: float, body_price: float) -> StructurePivot:
+    return StructurePivot(
+        index=index,
+        kind=kind,
+        price=price,
+        body_price=body_price,
+        atr=0.0,
+        term="internal",
+        structure_role="H" if kind == "high" else "L",
     )

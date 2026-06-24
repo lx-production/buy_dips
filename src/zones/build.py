@@ -8,6 +8,7 @@ from .factory import (
     _support_origin_from_origins,
     _zone_from_support_cluster,
 )
+
 from .types import (
     STRUCTURE_ADJACENT_STRONGER_TOUCH_MARGIN,
     STRUCTURE_ADJACENT_ZONE_MIN_GAP,

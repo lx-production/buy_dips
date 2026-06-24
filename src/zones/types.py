@@ -6,7 +6,7 @@ from typing import Literal
 
 PivotKind = Literal["high", "low"]
 SwingTerm = Literal["internal", "external"]
-BoundsStyle = Literal["body", "support_floor"] # how the zone edges are anchored
+BoundsStyle = Literal["body", "support_floor", "local_reaction"] # how the zone edges are anchored
 
 STRUCTURE_ZONE_WIDTH = 500.0
 STRUCTURE_MACRO_GAP = 300.0
@@ -18,6 +18,7 @@ STRUCTURE_BODY_FLOOR_BRIDGE_MAX_GAP = 1000.0
 STRUCTURE_SUPPORT_FLOOR_RETEST_WIDTH_MULT = 0.2 # 20% of zone width
 STRUCTURE_STAIR_STEP_MAX_SUPPORT_GAP = 4000.0
 STRUCTURE_STAIR_STEP_MAX_INSERTIONS = 6
+STRUCTURE_LOCAL_REACTION_LOOKBACK_BARS = 120
 
 
 @dataclass
