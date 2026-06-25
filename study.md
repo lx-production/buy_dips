@@ -26,7 +26,7 @@ The main pipeline lives in `src/zones/detector.py`:
 5. Label raw, prominent, and internal pivots as `H`, `HH`, `LH`, `L`, `HL`, or `LL`.
 6. Convert external pivots into support candidates (prominent lows/reclaimed highs plus wick-floor evidence from raw lows).
 7. Build fixed-width zones through four ordered stages: cluster candidates, merge macro groups, bridge confirmed body/floor pairs, then suppress nearby duplicates.
-8. Build recent variable-width reaction zones from repeated internal lows and reclaimed internal highs, then let stronger recent evidence replace nearby stale macro zones.
+8. Build recent variable-width reaction zones from repeated internal lows and reclaimed internal highs, add retested-flip zones when greedy clusters split the evidence, then select a clean local ladder before overlaying it with macro zones.
 9. Remove overlaps, fill large staircase gaps, and sort zones by price from low to high.
 
 Fixed constants live in `src/zones/types.py`. Runtime tuning comes from `ZoneConfig` in `config.yaml` (`external_swing_order`, `min_touches`, `role_buffer_pct`, and the ATR/swing thresholds).
@@ -95,6 +95,8 @@ Key functions:
 - `_first_reclaim_index`
 - `_build_local_reaction_zones`
 - `_zone_from_local_reaction_cluster`
+- `_build_retested_flip_zones`
+- `_select_local_reaction_zones`
 
 What to understand:
 
@@ -111,17 +113,21 @@ A prominent low qualifies for wick-floor evidence when `body_price - wick_price 
 
 Reclaimed highs matter because old resistance can become support. `_first_reclaim_index` looks forward after a high pivot and finds the first close above the pivot wick high plus `break_atr_mult * ATR` (default `0.2 * ATR`).
 
-The recent-reaction path complements that macro evidence. It examines only the latest `120` candles (20 days on 4H), clusters one-bar internal pivot body prices inside the same `$500` maximum span, and requires both:
+The recent-reaction path complements that macro evidence. It examines only the latest `150` candles (25 days on 4H), clusters one-bar internal pivot body prices inside the same `$500` maximum span, and requires both:
 
-- at least `min_touches` distinct internal lows
+- at least `max(2, min_touches)` distinct internal lows
 - at least one reclaimed internal high in the cluster
 
-Unlike macro zones, these bands use observed structure for variable-width bounds. The upper edge is the highest low-body anchor in the cluster. If reclaimed resistance existed before that low, the strongest such body sets the lower edge; otherwise the anchor candle's wick sets the lower edge. A recent reaction band must be no wider than `$500` and must be fully below the buffered current price.
+Unlike macro zones, these bands use observed structure for variable-width bounds. The upper edge is the highest low-body anchor in the cluster. If reclaimed resistance existed before that low, the strongest such body sets the lower edge; otherwise the anchor candle's wick sets the lower edge. A recent reaction band must be no wider than `$500`; it may sit above current price, and `price_state` records whether it is currently support, active, or resistance.
+
+Greedy price clustering can split useful local evidence. For example, a reclaimed high can land in one cluster while later low-body retests land just above it in the next cluster. `_build_retested_flip_zones` handles that case by pairing a reclaimed internal high with the first later low body above it, then collecting later held lows up to that first retest price. This creates a body-to-body local zone without broadening the original cluster span rule.
+
+After normal local clusters and retested-flip zones are built, `_select_local_reaction_zones` keeps a clean recent ladder. It drops very thin local bands, groups nearby local candidates into the same ladder slot, prefers retested-flip zones inside a slot, then prefers the lower band. This prevents dense recent noise from swallowing the first meaningful reaction levels.
 
 This produces the June 2026 BTC examples without broadening every historical zone:
 
-- `61,056.47–61,328.00`: recent reclaimed resistance plus repeated low bodies; it replaces the stale `61,360.82–61,860.82` macro band.
-- `62,205.00–62,545.99`: a wick-to-body rejection validated by later internal lows.
+- `61,056.47-61,328.00`: recent reclaimed resistance plus repeated low bodies; it is produced by the retested-flip path after greedy clustering splits the high and held lows.
+- `62,205.00-62,545.99`: a local low wick-to-body reaction validated by later internal lows; the larger 150-candle lookback includes the source candle.
 
 Study questions:
 
@@ -199,12 +205,12 @@ Important rules:
   - Remaining zones use `STRUCTURE_IMPORTANT_ZONE_SPACING = 1000.0` midpoint spacing, keeping the stronger zone by score, then touches, then narrower width.
 - That spacing is intentionally narrower than the old `$1600` midpoint rule so adjacent BTC 4H levels can survive when they represent separate structure, such as a `73.3k` support band below a stronger `74.5k` band (`721` edge gap).
 - Zone score starts as `touches * 2 + flipped_resistance_count`.
-- Recent reaction zones use `bounds_style = local_reaction`. They join the fixed-width zones only after both paths are built; the normal score/spacing rule decides whether a recent band replaces a nearby macro band.
+- Recent reaction zones use `bounds_style = local_reaction`. They are selected into a local ladder inside `reactions.py` first, then join the fixed-width zones. The final global spacing still decides whether a recent band replaces a nearby macro band.
 
 Implementation boundaries:
 
 - `build.py`: clustering, macro grouping, body/floor bridging, and nearby-zone selection policy.
-- `reactions.py`: recent internal evidence, variable reaction bounds, and the 120-candle freshness window.
+- `reactions.py`: recent internal evidence, variable reaction bounds, retested-flip recovery, local ladder selection, and the 150-candle freshness window.
 - `factory.py`: bounds, anchors, origin/role aggregation, and construction of complete zone dictionaries.
 - `state.py`: shared `support`/`active`/`resistance` price-state classification, used by both building and post-processing without a circular import.
 
@@ -292,7 +298,7 @@ Study question:
 
 Every support zone includes:
 
-- `origin`: what kind of evidence formed the zone (`structure_swing_low`, `flipped_resistance`, `structure_support_floor`, `local_reaction_support`, `stair_step_flipped_resistance`, `mixed_structure`, etc.).
+- `origin`: what kind of evidence formed the zone (`structure_swing_low`, `flipped_resistance`, `structure_support_floor`, `local_reaction_support`, `local_retested_flip_support`, `stair_step_flipped_resistance`, `mixed_structure`, etc.).
 - `role`: currently always `"support"`.
 - `bounds_style`: `"body"`, `"support_floor"`, or `"local_reaction"`.
 - `low`, `high`, `mid`: zone boundaries.
@@ -325,6 +331,8 @@ Useful tests to start with:
 - `test_structure_v1_returns_reclaimed_highs_as_support_only`
 - `test_structure_v1_adds_retested_long_wick_support_floor`
 - `test_local_reaction_zones_use_recent_base_and_retested_rejection_bounds`
+- `test_local_retested_flip_zone_survives_split_greedy_clusters`
+- `test_local_reaction_zone_can_use_local_low_wick_to_body_bounds`
 - `test_support_bands_anchor_to_support_upper_anchor`
 - `test_support_floor_shelf_is_not_swallowed_by_body_macro_group`
 - `test_structure_v1_fills_large_support_gap_with_reclaimed_high_clusters`

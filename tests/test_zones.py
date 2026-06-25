@@ -232,6 +232,56 @@ def test_local_reaction_zones_use_recent_base_and_retested_rejection_bounds() ->
     assert all(zone["bounds_style"] == "local_reaction" for zone in zones)
 
 
+def test_local_retested_flip_zone_survives_split_greedy_clusters() -> None:
+    pivots = [
+        _pivot(index=1, kind="low", price=95.0, body_price=96.0),
+        _pivot(index=2, kind="low", price=96.0, body_price=97.0),
+        _pivot(index=3, kind="high", price=100.0, body_price=100.0),
+        _pivot(index=5, kind="low", price=102.0, body_price=103.0),
+        _pivot(index=6, kind="low", price=101.5, body_price=102.0),
+    ]
+
+    zones = _build_local_reaction_zones(
+        internal_pivots=pivots,
+        closes=pd.Series([99.0, 99.0, 99.0, 101.0, 102.0, 103.0, 101.0]).to_numpy(dtype=float),
+        break_atr_mult=0.0,
+        zone_width=5.0,
+        min_touches=2,
+        current_price=99.0,
+        buffer_pct=0.0015,
+    )
+
+    assert any(
+        zone["origin"] == "local_retested_flip_support"
+        and zone["low"] == 100.0
+        and zone["high"] == 103.0
+        and zone["price_state"] == "resistance"
+        for zone in zones
+    )
+
+
+def test_local_reaction_zone_can_use_local_low_wick_to_body_bounds() -> None:
+    pivots = [
+        _pivot(index=1, kind="low", price=100.0, body_price=106.0),
+        _pivot(index=2, kind="high", price=102.0, body_price=102.0),
+        _pivot(index=3, kind="low", price=103.0, body_price=104.0),
+    ]
+
+    zones = _build_local_reaction_zones(
+        internal_pivots=pivots,
+        closes=pd.Series([101.0, 106.0, 102.0, 104.0]).to_numpy(dtype=float),
+        break_atr_mult=0.0,
+        zone_width=10.0,
+        min_touches=2,
+        current_price=109.0,
+        buffer_pct=0.0015,
+    )
+
+    assert [(zone["low"], zone["high"], zone["origin"], zone["bounds_style"]) for zone in zones] == [
+        (100.0, 106.0, "local_reaction_support", "local_reaction")
+    ]
+
+
 def test_structure_v1_fills_large_support_gap_with_reclaimed_high_clusters() -> None:
     zones = [
         _support_zone(low=65510.93, high=66010.93, source_closes=[65971.20, 66010.93], score=4.0),
