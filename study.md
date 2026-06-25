@@ -67,9 +67,11 @@ What to understand:
 - The detector uses `external_swing_order` from config for major structure. It also uses a fixed one-bar internal window for recent reaction zones. `internal_swing_order` remains a chart-debug setting and only controls the optional internal pivots drawn by the chart server.
 - A pivot high must be the unique highest high in its window.
 - A pivot low must be the unique lowest low in its window.
-- Each pivot stores both wick price and body edge price:
-  - High pivot body price: `max(open, close)`
-  - Low pivot body price: `min(open, close)`
+- Each `StructurePivot` stores both `wick_price` and `body_price`:
+  - High pivot `wick_price`: candle high
+  - Low pivot `wick_price`: candle low
+  - High pivot `body_price`: `max(open, close)`
+  - Low pivot `body_price`: `min(open, close)`
 - `_filter_prominent_structure_pivots` reduces noisy raw pivots into larger structure swings.
 - A move is prominent when it clears the configured ATR or percent threshold.
 - `_label_structure_pivots` labels structure:

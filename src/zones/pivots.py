@@ -36,7 +36,7 @@ def _find_structure_pivots(
                 StructurePivot(
                     index=idx,
                     kind="high",
-                    price=float(highs[idx]),
+                    wick_price=float(highs[idx]),
                     body_price=body_high,
                     atr=float(atr[idx]),
                     term=term,
@@ -48,7 +48,7 @@ def _find_structure_pivots(
                 StructurePivot(
                     index=idx,
                     kind="low",
-                    price=float(lows[idx]),
+                    wick_price=float(lows[idx]),
                     body_price=body_low,
                     atr=float(atr[idx]),
                     term=term,
@@ -87,7 +87,7 @@ def _filter_prominent_structure_pivots(
         )
 
         # Opposite kind (high after low, or low after high) → only keep if the move is big enough
-        if abs(float(pivot.price) - float(previous.price)) >= min_move:
+        if abs(float(pivot.wick_price) - float(previous.wick_price)) >= min_move:
             prominent.append(pivot)
     
     # Alternating highs and lows (starting with whichever pivot came first), with each reversal large enough to pass min_move.
@@ -96,13 +96,13 @@ def _filter_prominent_structure_pivots(
 
 def _is_more_extreme_structure_pivot(candidate: StructurePivot, current: StructurePivot) -> bool:
     if candidate.kind == "high":
-        return candidate.price > current.price
-    return candidate.price < current.price
+        return candidate.wick_price > current.wick_price
+    return candidate.wick_price < current.wick_price
 
 # minimum move that qualifies as a real swing
 def _structure_pivot_min_move(pivot: StructurePivot, atr_mult: float, pct: float) -> float:
     atr_move = abs(float(pivot.atr)) * atr_mult
-    pct_move = abs(float(pivot.price)) * pct / 100.0
+    pct_move = abs(float(pivot.wick_price)) * pct / 100.0
     return max(atr_move, pct_move)
 
 
@@ -114,11 +114,11 @@ def _label_structure_pivots(pivots: list[StructurePivot]) -> None:
             if previous_high is None:
                 pivot.structure_role = "H"
             else:
-                pivot.structure_role = "HH" if pivot.price > previous_high else "LH"
-            previous_high = pivot.price
+                pivot.structure_role = "HH" if pivot.wick_price > previous_high else "LH"
+            previous_high = pivot.wick_price
         else:
             if previous_low is None:
                 pivot.structure_role = "L"
             else:
-                pivot.structure_role = "HL" if pivot.price > previous_low else "LL"
-            previous_low = pivot.price
+                pivot.structure_role = "HL" if pivot.wick_price > previous_low else "LL"
+            previous_low = pivot.wick_price

@@ -25,7 +25,7 @@ STRUCTURE_LOCAL_REACTION_LOOKBACK_BARS = 150
 class StructurePivot:
     index: int
     kind: PivotKind
-    price: float # wick price
+    wick_price: float
     body_price: float
     atr: float
     term: SwingTerm

@@ -182,9 +182,9 @@ def test_structure_v1_returns_reclaimed_highs_as_support_only() -> None:
 
 def test_structure_v1_adds_retested_long_wick_support_floor() -> None:
     raw_external_pivots = [
-        StructurePivot(index=1, kind="low", price=72945.50, body_price=74935.00, atr=1910.03, term="external"),
-        StructurePivot(index=2, kind="low", price=74821.57, body_price=75023.43, atr=1047.59, term="external"),
-        StructurePivot(index=3, kind="low", price=74937.52, body_price=75563.86, atr=896.60, term="external"),
+        StructurePivot(index=1, kind="low", wick_price=72945.50, body_price=74935.00, atr=1910.03, term="external"),
+        StructurePivot(index=2, kind="low", wick_price=74821.57, body_price=75023.43, atr=1047.59, term="external"),
+        StructurePivot(index=3, kind="low", wick_price=74937.52, body_price=75563.86, atr=896.60, term="external"),
     ]
     prominent_pivots = [raw_external_pivots[-1]]
 
@@ -203,15 +203,15 @@ def test_structure_v1_adds_retested_long_wick_support_floor() -> None:
 
 def test_local_reaction_zones_use_recent_base_and_retested_rejection_bounds() -> None:
     pivots = [
-        _pivot(index=1, kind="high", price=101.0, body_price=100.0),
-        _pivot(index=2, kind="high", price=103.0, body_price=102.0),
-        _pivot(index=3, kind="low", price=103.0, body_price=110.0),
-        _pivot(index=4, kind="low", price=95.0, body_price=105.0),
-        _pivot(index=5, kind="low", price=94.0, body_price=106.0),
-        _pivot(index=10, kind="low", price=200.0, body_price=206.0),
-        _pivot(index=12, kind="high", price=198.0, body_price=197.0),
-        _pivot(index=14, kind="low", price=201.0, body_price=204.0),
-        _pivot(index=16, kind="low", price=199.0, body_price=205.0),
+        _pivot(index=1, kind="high", wick_price=101.0, body_price=100.0),
+        _pivot(index=2, kind="high", wick_price=103.0, body_price=102.0),
+        _pivot(index=3, kind="low", wick_price=103.0, body_price=110.0),
+        _pivot(index=4, kind="low", wick_price=95.0, body_price=105.0),
+        _pivot(index=5, kind="low", wick_price=94.0, body_price=106.0),
+        _pivot(index=10, kind="low", wick_price=200.0, body_price=206.0),
+        _pivot(index=12, kind="high", wick_price=198.0, body_price=197.0),
+        _pivot(index=14, kind="low", wick_price=201.0, body_price=204.0),
+        _pivot(index=16, kind="low", wick_price=199.0, body_price=205.0),
     ]
 
     zones = _build_local_reaction_zones(
@@ -234,11 +234,11 @@ def test_local_reaction_zones_use_recent_base_and_retested_rejection_bounds() ->
 
 def test_local_retested_flip_zone_survives_split_greedy_clusters() -> None:
     pivots = [
-        _pivot(index=1, kind="low", price=95.0, body_price=96.0),
-        _pivot(index=2, kind="low", price=96.0, body_price=97.0),
-        _pivot(index=3, kind="high", price=100.0, body_price=100.0),
-        _pivot(index=5, kind="low", price=102.0, body_price=103.0),
-        _pivot(index=6, kind="low", price=101.5, body_price=102.0),
+        _pivot(index=1, kind="low", wick_price=95.0, body_price=96.0),
+        _pivot(index=2, kind="low", wick_price=96.0, body_price=97.0),
+        _pivot(index=3, kind="high", wick_price=100.0, body_price=100.0),
+        _pivot(index=5, kind="low", wick_price=102.0, body_price=103.0),
+        _pivot(index=6, kind="low", wick_price=101.5, body_price=102.0),
     ]
 
     zones = _build_local_reaction_zones(
@@ -262,9 +262,9 @@ def test_local_retested_flip_zone_survives_split_greedy_clusters() -> None:
 
 def test_local_reaction_zone_can_use_local_low_wick_to_body_bounds() -> None:
     pivots = [
-        _pivot(index=1, kind="low", price=100.0, body_price=106.0),
-        _pivot(index=2, kind="high", price=102.0, body_price=102.0),
-        _pivot(index=3, kind="low", price=103.0, body_price=104.0),
+        _pivot(index=1, kind="low", wick_price=100.0, body_price=106.0),
+        _pivot(index=2, kind="high", wick_price=102.0, body_price=102.0),
+        _pivot(index=3, kind="low", wick_price=103.0, body_price=104.0),
     ]
 
     zones = _build_local_reaction_zones(
@@ -288,20 +288,20 @@ def test_structure_v1_fills_large_support_gap_with_reclaimed_high_clusters() -> 
         _support_zone(low=73301.80, high=73801.80, source_closes=[73611.10, 73801.80], score=5.0),
     ]
     raw_external_pivots = [
-        _high_pivot(index=1, price=67100.00, body_price=67014.91),
-        _high_pivot(index=2, price=67450.00, body_price=67383.66),
-        _high_pivot(index=3, price=67650.00, body_price=67502.16),
-        _high_pivot(index=4, price=67650.00, body_price=67515.00),
-        _high_pivot(index=5, price=67900.00, body_price=67825.91),
-        _high_pivot(index=6, price=68150.00, body_price=68076.01),
-        _high_pivot(index=7, price=68175.00, body_price=68106.44),
-        _high_pivot(index=8, price=70050.00, body_price=69968.87),
-        _high_pivot(index=9, price=70200.00, body_price=70131.48),
-        _high_pivot(index=10, price=70700.00, body_price=70641.82),
-        _high_pivot(index=11, price=70710.00, body_price=70652.73),
-        _high_pivot(index=12, price=70800.00, body_price=70731.45),
-        _high_pivot(index=13, price=70900.00, body_price=70828.43),
-        _high_pivot(index=14, price=70950.00, body_price=70854.66),
+        _high_pivot(index=1, wick_price=67100.00, body_price=67014.91),
+        _high_pivot(index=2, wick_price=67450.00, body_price=67383.66),
+        _high_pivot(index=3, wick_price=67650.00, body_price=67502.16),
+        _high_pivot(index=4, wick_price=67650.00, body_price=67515.00),
+        _high_pivot(index=5, wick_price=67900.00, body_price=67825.91),
+        _high_pivot(index=6, wick_price=68150.00, body_price=68076.01),
+        _high_pivot(index=7, wick_price=68175.00, body_price=68106.44),
+        _high_pivot(index=8, wick_price=70050.00, body_price=69968.87),
+        _high_pivot(index=9, wick_price=70200.00, body_price=70131.48),
+        _high_pivot(index=10, wick_price=70700.00, body_price=70641.82),
+        _high_pivot(index=11, wick_price=70710.00, body_price=70652.73),
+        _high_pivot(index=12, wick_price=70800.00, body_price=70731.45),
+        _high_pivot(index=13, wick_price=70900.00, body_price=70828.43),
+        _high_pivot(index=14, wick_price=70950.00, body_price=70854.66),
     ]
 
     filled = _fill_support_staircase_gaps(
@@ -332,20 +332,20 @@ def test_structure_v1_fills_staircase_gap_to_next_active_boundary() -> None:
     ]
     zones[1]["price_state"] = "active"
     raw_external_pivots = [
-        _high_pivot(index=1, price=67100.00, body_price=67014.91),
-        _high_pivot(index=2, price=67450.00, body_price=67383.66),
-        _high_pivot(index=3, price=67650.00, body_price=67502.16),
-        _high_pivot(index=4, price=67650.00, body_price=67515.00),
-        _high_pivot(index=5, price=67900.00, body_price=67825.91),
-        _high_pivot(index=6, price=68150.00, body_price=68076.01),
-        _high_pivot(index=7, price=68175.00, body_price=68106.44),
-        _high_pivot(index=8, price=70050.00, body_price=69968.87),
-        _high_pivot(index=9, price=70200.00, body_price=70131.48),
-        _high_pivot(index=10, price=70700.00, body_price=70641.82),
-        _high_pivot(index=11, price=70710.00, body_price=70652.73),
-        _high_pivot(index=12, price=70800.00, body_price=70731.45),
-        _high_pivot(index=13, price=70900.00, body_price=70828.43),
-        _high_pivot(index=14, price=70950.00, body_price=70854.66),
+        _high_pivot(index=1, wick_price=67100.00, body_price=67014.91),
+        _high_pivot(index=2, wick_price=67450.00, body_price=67383.66),
+        _high_pivot(index=3, wick_price=67650.00, body_price=67502.16),
+        _high_pivot(index=4, wick_price=67650.00, body_price=67515.00),
+        _high_pivot(index=5, wick_price=67900.00, body_price=67825.91),
+        _high_pivot(index=6, wick_price=68150.00, body_price=68076.01),
+        _high_pivot(index=7, wick_price=68175.00, body_price=68106.44),
+        _high_pivot(index=8, wick_price=70050.00, body_price=69968.87),
+        _high_pivot(index=9, wick_price=70200.00, body_price=70131.48),
+        _high_pivot(index=10, wick_price=70700.00, body_price=70641.82),
+        _high_pivot(index=11, wick_price=70710.00, body_price=70652.73),
+        _high_pivot(index=12, wick_price=70800.00, body_price=70731.45),
+        _high_pivot(index=13, wick_price=70900.00, body_price=70828.43),
+        _high_pivot(index=14, wick_price=70950.00, body_price=70854.66),
     ]
 
     filled = _fill_support_staircase_gaps(
@@ -681,18 +681,18 @@ def test_internal_and_external_structure_pivots_have_different_granularity() -> 
 
 def test_prominent_structure_pivots_ignore_small_reversals_and_keep_extremes() -> None:
     pivots = [
-        StructurePivot(index=1, kind="high", price=110.0, body_price=109.0, atr=1.0, term="external"),
-        StructurePivot(index=2, kind="high", price=112.0, body_price=111.0, atr=1.0, term="external"),
-        StructurePivot(index=3, kind="low", price=111.0, body_price=111.5, atr=1.0, term="external"),
-        StructurePivot(index=4, kind="high", price=115.0, body_price=114.0, atr=1.0, term="external"),
-        StructurePivot(index=5, kind="low", price=100.0, body_price=101.0, atr=1.0, term="external"),
-        StructurePivot(index=6, kind="low", price=98.0, body_price=99.0, atr=1.0, term="external"),
-        StructurePivot(index=7, kind="high", price=103.0, body_price=102.0, atr=1.0, term="external"),
+        StructurePivot(index=1, kind="high", wick_price=110.0, body_price=109.0, atr=1.0, term="external"),
+        StructurePivot(index=2, kind="high", wick_price=112.0, body_price=111.0, atr=1.0, term="external"),
+        StructurePivot(index=3, kind="low", wick_price=111.0, body_price=111.5, atr=1.0, term="external"),
+        StructurePivot(index=4, kind="high", wick_price=115.0, body_price=114.0, atr=1.0, term="external"),
+        StructurePivot(index=5, kind="low", wick_price=100.0, body_price=101.0, atr=1.0, term="external"),
+        StructurePivot(index=6, kind="low", wick_price=98.0, body_price=99.0, atr=1.0, term="external"),
+        StructurePivot(index=7, kind="high", wick_price=103.0, body_price=102.0, atr=1.0, term="external"),
     ]
 
     result = _filter_prominent_structure_pivots(pivots, min_swing_atr_mult=4.0, min_swing_pct=0.0)
 
-    assert [(pivot.index, pivot.kind, pivot.price) for pivot in result] == [
+    assert [(pivot.index, pivot.kind, pivot.wick_price) for pivot in result] == [
         (4, "high", 115.0),
         (6, "low", 98.0),
         (7, "high", 103.0),
@@ -701,22 +701,22 @@ def test_prominent_structure_pivots_ignore_small_reversals_and_keep_extremes() -
 
 def test_prominent_structure_pivots_can_require_percent_move() -> None:
     pivots = [
-        StructurePivot(index=1, kind="high", price=100.0, body_price=99.0, atr=0.0, term="external"),
-        StructurePivot(index=2, kind="low", price=94.0, body_price=95.0, atr=0.0, term="external"),
-        StructurePivot(index=3, kind="low", price=89.0, body_price=90.0, atr=0.0, term="external"),
+        StructurePivot(index=1, kind="high", wick_price=100.0, body_price=99.0, atr=0.0, term="external"),
+        StructurePivot(index=2, kind="low", wick_price=94.0, body_price=95.0, atr=0.0, term="external"),
+        StructurePivot(index=3, kind="low", wick_price=89.0, body_price=90.0, atr=0.0, term="external"),
     ]
 
     result = _filter_prominent_structure_pivots(pivots, min_swing_atr_mult=0.0, min_swing_pct=10.0)
 
-    assert [(pivot.index, pivot.kind, pivot.price) for pivot in result] == [(1, "high", 100.0), (3, "low", 89.0)]
+    assert [(pivot.index, pivot.kind, pivot.wick_price) for pivot in result] == [(1, "high", 100.0), (3, "low", 89.0)]
 
 
 def test_structure_pivot_labels_are_preserved_for_chart_debugging() -> None:
     pivots = [
-        StructurePivot(index=1, kind="low", price=100.0, body_price=101.0, atr=1.0, term="external"),
-        StructurePivot(index=3, kind="high", price=110.0, body_price=109.0, atr=1.0, term="external"),
-        StructurePivot(index=5, kind="low", price=105.0, body_price=106.0, atr=1.0, term="external"),
-        StructurePivot(index=8, kind="high", price=116.0, body_price=115.0, atr=1.0, term="external"),
+        StructurePivot(index=1, kind="low", wick_price=100.0, body_price=101.0, atr=1.0, term="external"),
+        StructurePivot(index=3, kind="high", wick_price=110.0, body_price=109.0, atr=1.0, term="external"),
+        StructurePivot(index=5, kind="low", wick_price=105.0, body_price=106.0, atr=1.0, term="external"),
+        StructurePivot(index=8, kind="high", wick_price=116.0, body_price=115.0, atr=1.0, term="external"),
     ]
 
     _label_structure_pivots(pivots)
@@ -779,11 +779,11 @@ def _support_zone(low: float, high: float, source_closes: list[float], score: fl
     }
 
 
-def _high_pivot(index: int, price: float, body_price: float) -> StructurePivot:
+def _high_pivot(index: int, wick_price: float, body_price: float) -> StructurePivot:
     return StructurePivot(
         index=index,
         kind="high",
-        price=price,
+        wick_price=wick_price,
         body_price=body_price,
         atr=0.0,
         term="external",
@@ -791,11 +791,11 @@ def _high_pivot(index: int, price: float, body_price: float) -> StructurePivot:
     )
 
 
-def _pivot(index: int, kind: str, price: float, body_price: float) -> StructurePivot:
+def _pivot(index: int, kind: str, wick_price: float, body_price: float) -> StructurePivot:
     return StructurePivot(
         index=index,
         kind=kind,
-        price=price,
+        wick_price=wick_price,
         body_price=body_price,
         atr=0.0,
         term="internal",

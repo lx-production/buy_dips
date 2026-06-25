@@ -110,7 +110,7 @@ def _zone_from_local_reaction_cluster(
     if prior_reclaimed_highs:
         low = max(candidate.price for candidate in prior_reclaimed_highs) # body price
     else:
-        low = float(low_pivots_by_index[upper_anchor.index].price) # wick price
+        low = float(low_pivots_by_index[upper_anchor.index].wick_price)
     
     high = float(upper_anchor.price)
 

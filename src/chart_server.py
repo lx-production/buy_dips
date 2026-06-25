@@ -235,7 +235,7 @@ def _chart_pivots(
                 "kind": pivot.kind,
                 "term": pivot.term,
                 "role": pivot.structure_role,
-                "price": float(pivot.price),
+                "wick_price": float(pivot.wick_price),
                 "body_price": float(pivot.body_price),
             }
         )
@@ -522,7 +522,7 @@ _INDEX_HTML_TEMPLATE = """<!doctype html>
         const x = scale.left + step * visibleIndex + step / 2;
         const isHigh = pivot.kind === 'high';
         const isExternal = pivot.term === 'external';
-        const priceY = yFor(pivot.price, scale);
+        const priceY = yFor(pivot.wick_price, scale);
         const markerY = isHigh ? priceY - 7 : priceY + 7;
         const labelY = isHigh
           ? priceY - (isExternal ? 31 : 18)
