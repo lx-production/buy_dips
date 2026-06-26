@@ -6,6 +6,7 @@ import pandas as pd
 
 from .build import _build_support_zones, _suppress_nearby_support_zones
 from .candidates import _support_candidates
+from .daily import _build_daily_body_support_zones, _overlay_daily_support_zones
 from .ohlc import _average_true_range, _coerce_ohlc
 from .pivots import _filter_prominent_structure_pivots, _find_structure_pivots, _label_structure_pivots
 from .postprocess import _fill_support_staircase_gaps, _make_support_zones_distinct
@@ -112,6 +113,18 @@ def detect_support_resistance_zones_structure_v1(
         current_price=float(current_price),
         buffer_pct=buffer_pct,
     )
+    daily_zones = _build_daily_body_support_zones(
+        df,
+        zone_width=STRUCTURE_ZONE_WIDTH,
+        current_price=float(current_price),
+        buffer_pct=buffer_pct,
+        external_swing_order=external_swing_order,
+        atr_period=atr_period,
+        external_min_swing_atr_mult=external_min_swing_atr_mult,
+        external_min_swing_pct=external_min_swing_pct,
+    )
+    zones = _overlay_daily_support_zones(zones, daily_zones)
+    zones = _make_support_zones_distinct(zones, current_price=float(current_price), buffer_pct=buffer_pct)
 
     support = sorted(zones, key=lambda zone: float(zone["low"]))
     return {"support": support, "resistance": [], "active": [], "all": support}

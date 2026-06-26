@@ -27,7 +27,9 @@ The main pipeline lives in `src/zones/detector.py`:
 6. Convert external pivots into support candidates (prominent lows/reclaimed highs plus wick-floor evidence from raw lows).
 7. Build fixed-width zones through four ordered stages: cluster candidates, merge macro groups, bridge confirmed body/floor pairs, then suppress nearby duplicates.
 8. Build recent variable-width reaction zones from repeated internal lows and reclaimed internal highs, add retested-flip zones when greedy clusters split the evidence, then select a clean local ladder before overlaying it with macro zones.
-9. Remove overlaps, fill large staircase gaps, and sort zones by price from low to high.
+9. Remove overlaps and fill large staircase gaps.
+10. Derive complete 1D candles from the 4H data, build fixed-width daily body-support zones from prominent daily low pivots, and let them replace overlapping 4H `mixed_structure` bridge zones.
+11. Sort zones by price from low to high.
 
 Fixed constants live in `src/zones/types.py`. Runtime tuning comes from `ZoneConfig` in `config.yaml` (`external_swing_order`, `min_touches`, `role_buffer_pct`, and the ATR/swing thresholds).
 
@@ -86,7 +88,7 @@ Study questions:
 
 ## Block 3: Support Candidates
 
-Read: `src/zones/candidates.py`, then `src/zones/reactions.py`
+Read: `src/zones/candidates.py`, `src/zones/reactions.py`, then `src/zones/daily.py`
 
 Key functions:
 
@@ -99,6 +101,8 @@ Key functions:
 - `_zone_from_local_reaction_cluster`
 - `_build_retested_flip_zones`
 - `_select_local_reaction_zones`
+- `_build_daily_body_support_zones`
+- `_overlay_daily_support_zones`
 
 What to understand:
 
@@ -136,6 +140,13 @@ Study questions:
 - Why does a high pivot need a future close above it before it becomes support evidence?
 - What is the difference between a `structure_swing_low` and a `structure_swing_low_wick` candidate?
 - Why are recent reaction zones variable-width while macro structure zones remain fixed-width?
+
+The daily overlay is separate from the 4H candidate path. `aggregate_ohlc_to_daily` derives only complete 1D candles for zone detection, requiring six closed 4H candles per day. `_build_daily_body_support_zones` then finds prominent daily low pivots and anchors a fixed-width support band from the daily body low:
+
+- `high = daily_low_pivot_body_low`
+- `low = high - STRUCTURE_ZONE_WIDTH`
+
+For example, the May 1, 2024 daily red candle has a body low/close at `58,364.97`, so its daily body-support zone is `57,864.97-58,364.97`. During overlay, this higher-timeframe zone can replace an overlapping 4H `mixed_structure` bridge zone such as `57,500.00-58,000.00`.
 
 ## Block 4: Building Zones
 
@@ -213,6 +224,7 @@ Implementation boundaries:
 
 - `build.py`: clustering, macro grouping, body/floor bridging, and nearby-zone selection policy.
 - `reactions.py`: recent internal evidence, variable reaction bounds, retested-flip recovery, local ladder selection, and the 150-candle freshness window.
+- `daily.py`: complete 4H-to-1D aggregation, daily low-pivot body support zones, and higher-timeframe replacement of overlapping 4H mixed-structure bridge zones.
 - `factory.py`: bounds, anchors, origin/role aggregation, and construction of complete zone dictionaries.
 - `state.py`: shared `support`/`active`/`resistance` price-state classification, used by both building and post-processing without a circular import.
 
@@ -290,6 +302,7 @@ Important details:
 - `internal_swing_order` lives on `ZoneConfig` but only controls chart-debug pivots. Detection uses `external_swing_order` for macro structure and a fixed one-bar internal window for recent reactions.
 - Empty OHLC, insufficient bars for the swing window, or zero prominent external pivots all return empty zone lists.
 - `_support_candidates` receives both `raw_external_pivots` (all swings) and `external_pivots` (prominent swings).
+- Daily overlays use the same external swing settings, but on derived complete 1D candles. They run after 4H macro/local zones and staircase fills.
 - Resistance and active top-level lists are intentionally empty in this phase; use each zone's `price_state` instead.
 
 Study question:
@@ -315,6 +328,7 @@ Every support zone includes:
 - `last_touch_index`: latest source candle index.
 - `broken_index`: reclaim candle index for flipped resistance evidence, when available.
 - `zone_width`: fixed macro width, also used as the maximum allowed width for a local reaction zone.
+- `source_timeframe`: present on daily overlay zones as `"1d"`; absent on normal 4H zones.
 
 ## Suggested Study Path
 

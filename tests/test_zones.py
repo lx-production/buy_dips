@@ -8,13 +8,16 @@ from src.zones import (
     StructurePivot,
     SupportCandidate,
     _average_true_range,
+    _build_daily_body_support_zones,
     _build_local_reaction_zones,
     _filter_prominent_structure_pivots,
     _fill_support_staircase_gaps,
     _find_structure_pivots,
     _fixed_support_zone_bounds,
     _label_structure_pivots,
+    _overlay_daily_support_zones,
     _support_floor_candidates,
+    aggregate_ohlc_to_daily,
     detect_support_resistance_zones_structure_v1,
 )
 from src.zones.build import _build_support_zones
@@ -641,6 +644,78 @@ def test_body_low_and_nearby_floor_gap_bridges_to_manual_support_band() -> None:
     ]
 
 
+def test_daily_aggregation_can_require_complete_four_hour_days() -> None:
+    candles = _four_hour_day(
+        day_index=0,
+        open_price=100.0,
+        high_price=110.0,
+        low_price=90.0,
+        close_price=105.0,
+    )
+    candles.extend(
+        _four_hour_day(
+            day_index=1,
+            open_price=105.0,
+            high_price=115.0,
+            low_price=95.0,
+            close_price=111.0,
+        )[:5]
+    )
+
+    daily = aggregate_ohlc_to_daily(pd.DataFrame(candles), min_bars_per_day=6)
+
+    assert len(daily) == 1
+    assert float(daily.iloc[0]["open"]) == 100.0
+    assert float(daily.iloc[0]["high"]) == 110.0
+    assert float(daily.iloc[0]["low"]) == 90.0
+    assert float(daily.iloc[0]["close"]) == 105.0
+    assert daily.iloc[0]["timeframe"] == "1d"
+
+
+def test_daily_body_support_zone_anchors_from_daily_low_pivot_body_low() -> None:
+    candles: list[dict[str, float | int]] = []
+    candles.extend(_four_hour_day(0, open_price=65000.0, high_price=66000.0, low_price=63000.0, close_price=64000.0))
+    candles.extend(_four_hour_day(1, open_price=64000.0, high_price=65000.0, low_price=61000.0, close_price=62000.0))
+    candles.extend(_four_hour_day(2, open_price=60672.01, high_price=60841.63, low_price=56552.82, close_price=58364.97))
+    candles.extend(_four_hour_day(3, open_price=58364.97, high_price=62000.0, low_price=59000.0, close_price=61000.0))
+    candles.extend(_four_hour_day(4, open_price=61000.0, high_price=65000.0, low_price=62000.0, close_price=64000.0))
+
+    zones = _build_daily_body_support_zones(
+        pd.DataFrame(candles),
+        zone_width=500.0,
+        current_price=65000.0,
+        buffer_pct=0.0015,
+        external_swing_order=1,
+        atr_period=3,
+        external_min_swing_atr_mult=0.0,
+        external_min_swing_pct=0.0,
+    )
+
+    assert [(zone["low"], zone["high"], zone["origin"], zone["source_timeframe"]) for zone in zones] == [
+        (57864.97, 58364.97, "daily_body_support", "1d")
+    ]
+    assert zones[0]["source_closes"] == [58364.97]
+
+
+def test_daily_body_support_replaces_overlapping_mixed_structure_bridge_zone() -> None:
+    four_hour_zone = _support_zone(
+        low=57500.0,
+        high=58000.0,
+        source_closes=[57046.34, 57500.0, 58396.95, 58402.0],
+        score=20.0,
+    )
+    four_hour_zone["origin"] = "mixed_structure"
+    daily_zone = _support_zone(low=57864.97, high=58364.97, source_closes=[58364.97], score=102.0)
+    daily_zone["origin"] = "daily_body_support"
+    daily_zone["source_timeframe"] = "1d"
+
+    zones = _overlay_daily_support_zones([four_hour_zone], [daily_zone])
+
+    assert [(zone["low"], zone["high"], zone["origin"], zone.get("source_timeframe")) for zone in zones] == [
+        (57864.97, 58364.97, "daily_body_support", "1d")
+    ]
+
+
 def test_support_bands_anchor_to_support_upper_anchor() -> None:
     low, high = _fixed_support_zone_bounds(
         [
@@ -754,6 +829,32 @@ def _ohlc_from_closes(closes: list[float], wick: float) -> pd.DataFrame:
             "close": closes,
         }
     )
+
+
+def _four_hour_day(
+    day_index: int,
+    open_price: float,
+    high_price: float,
+    low_price: float,
+    close_price: float,
+) -> list[dict[str, float | int]]:
+    start_time = 1_700_006_400_000 + day_index * 86_400_000
+    closes = [open_price, open_price, open_price, open_price, open_price, close_price]
+    candles: list[dict[str, float | int]] = []
+    for index, close in enumerate(closes):
+        candles.append(
+            {
+                "open_time": start_time + index * 14_400_000,
+                "close_time": start_time + (index + 1) * 14_400_000 - 1,
+                "open": open_price if index == 0 else closes[index - 1],
+                "high": high_price if index == 2 else max(open_price, close),
+                "low": low_price if index == 3 else min(open_price, close),
+                "close": close,
+                "volume": 1.0,
+                "is_closed": 1,
+            }
+        )
+    return candles
 
 
 def _support_zone(low: float, high: float, source_closes: list[float], score: float) -> dict:

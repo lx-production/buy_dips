@@ -16,13 +16,13 @@ from .zones import (
     _filter_prominent_structure_pivots,
     _find_structure_pivots,
     _label_structure_pivots,
+    aggregate_ohlc_to_daily,
     detect_support_resistance_zones,
 )
 
 
 DEFAULT_LIMIT = 400
 ALL_CANDLES_LIMIT = "all"
-ONE_DAY_MS = 86_400_000
 VISIBLE_SUPPORT_ZONES_ABOVE_PRICE = 2
 
 
@@ -169,29 +169,7 @@ def _load_chart_candles_df(config: AppConfig, database_path: str | Path, selecte
 
 
 def _aggregate_candles_to_daily(df: Any) -> Any:
-    if df.empty:
-        return df
-
-    daily = df.copy()
-    daily["day_open_time"] = (daily["open_time"].astype("int64") // ONE_DAY_MS) * ONE_DAY_MS
-    grouped = daily.groupby("day_open_time", as_index=False, sort=True).agg(
-        {
-            "exchange": "first",
-            "symbol": "first",
-            "open_time": "first",
-            "close_time": "max",
-            "open": "first",
-            "high": "max",
-            "low": "min",
-            "close": "last",
-            "volume": "sum",
-            "is_closed": "min",
-            "fetched_at": "max",
-        }
-    )
-    grouped["timeframe"] = "1d"
-    grouped["open_time"] = grouped["day_open_time"].astype("int64")
-    return grouped.drop(columns=["day_open_time"])
+    return aggregate_ohlc_to_daily(df, min_bars_per_day=1)
 
 
 def _chart_pivots(

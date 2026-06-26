@@ -7,7 +7,7 @@ Phase 1 is a local, Python-based foundation for a paper-only Buy the Dips system
 - Fetches public Binance Spot `BTCUSDT` 4H klines.
 - Stores raw candle data permanently in local SQLite.
 - Uses only closed 4H candles for signal generation.
-- Detects support zones from closed 4H OHLC using swing lows, reclaimed resistance, wick-floor retests, and fixed-width bands.
+- Detects support zones from closed 4H OHLC using swing lows, reclaimed resistance, wick-floor retests, fixed-width bands, and derived 1D body-support overlays.
 - Stores detected zones with `origin` and `role`; support-only zones use `role="support"`.
 - Generates and stores paper signals.
 - Logs `HOLD`, `ALERT_ONLY`, `PREPARE_MANUAL_REVIEW`, and `STRONG_BUY_SIGNAL`.
@@ -92,15 +92,17 @@ Phase 1 uses **support-only structure detection** for zones (implemented in `det
 
 - high/low/body ranges detect raw internal and external swing points
 - external swing points are filtered into prominent 4H pivots using the configured ATR/percent reversal thresholds
-- support evidence can come from prominent swing lows, reclaimed swing highs (`flipped_resistance`), retested wick floors, and dense reclaimed high clusters inside large support gaps
+- support evidence can come from prominent swing lows, reclaimed swing highs (`flipped_resistance`), retested wick floors, dense reclaimed high clusters inside large support gaps, and higher-timeframe 1D low-pivot body anchors
 - support candidates are grouped when their source prices fit within the fixed 500 USD zone width
 - support bands are anchored to the relevant support base for that evidence type
+- complete 1D candles are derived from six closed 4H candles; a prominent 1D low pivot can add `daily_body_support`, anchored from the daily body low with the same fixed `$500` width
+- when a 1D body-support zone overlaps a 4H `mixed_structure` bridge zone, the 1D zone replaces the bridge zone
 - zones require at least `min_touches` unique source touches
 - support-biased zones stay in the support list even if they are currently above, below, or touching price
 
 The default prominent-pivot filter requires an external swing reversal of at least `max(4.0 * ATR, 2.5% of price)`. Set `external_min_swing_atr_mult: 0.0` and `external_min_swing_pct: 0.0` to inspect the raw local-extrema behavior. The chart hides internal pivot labels unless `show_internal_pivots: true` is set.
 
-The output remains compatible with the paper signal logic: the detector still returns `support`, `resistance`, `active`, and `all` keys, but `resistance` and `active` are always empty. Every support zone includes `low`, `high`, `mid`, `width`, `width_pct`, `touches`, `origin`, `role`, `source_closes`, and `source_indexes`. Additional metadata such as `score`, `structure_role`, `last_touch_index`, and `zone_width` is included for inspection.
+The output remains compatible with the paper signal logic: the detector still returns `support`, `resistance`, `active`, and `all` keys, but `resistance` and `active` are always empty. Every support zone includes `low`, `high`, `mid`, `width`, `width_pct`, `touches`, `origin`, `role`, `source_closes`, and `source_indexes`. Additional metadata such as `score`, `structure_role`, `last_touch_index`, and `zone_width` is included for inspection. Daily overlay zones also include `source_timeframe="1d"`.
 
 **`source_closes`** - one price per touch that formed the zone (same length and order as `source_indexes`). Despite the name, these are **not always** the candle `close` from OHLC; most values are body edges such as `min(open, close)` for swing lows or `max(open, close)` for reclaimed highs. `touches` is `len(source_closes)`.
 
