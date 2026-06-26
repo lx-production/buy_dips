@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import numpy as np
 
-from .build import _cluster_support_candidates, _has_minimum_unique_touches
-from .candidates import _first_reclaim_index
-from .factory import Zone, _latest_defined, _make_support_zone
 from .types import (
     STRUCTURE_LOCAL_REACTION_LOOKBACK_BARS,
     StructurePivot,
     SupportCandidate,
 )
+
+from .candidates import _first_reclaim_index
+from .factory import Zone, _latest_defined, _make_support_zone
+from .build import _cluster_support_candidates, _has_minimum_unique_touches
+
 
 
 # Build variable-width support zones from recent internal pivots (swing lows and reclaimed highs).
@@ -55,6 +57,7 @@ def _build_local_reaction_zones(
     for cluster in _cluster_support_candidates(candidates, zone_width):
         if not _has_minimum_unique_touches(cluster, local_min_touches):
             continue
+        
         zone = _zone_from_local_reaction_cluster(
             cluster=cluster,
             low_pivots_by_index=low_pivots_by_index,
@@ -117,11 +120,12 @@ def _zone_from_local_reaction_cluster(
     width = high - low
     if width <= 0.0 or width > float(zone_width):
         return None
-
+    
+    # candidate.price is always the body price
     cluster = sorted(cluster, key=lambda candidate: (candidate.price, candidate.index, candidate.origin))
     source_closes = [float(candidate.price) for candidate in cluster]
     source_indexes = [int(candidate.index) for candidate in cluster]
-    flipped_count = len(reclaimed_highs)
+    flipped_count = len(reclaimed_highs) # Counts how many candidates in the cluster are "local_flipped_resistance"
     structure_roles = {candidate.structure_role for candidate in cluster if candidate.structure_role}
 
     return _make_support_zone(
@@ -165,12 +169,17 @@ def _build_retested_flip_zones(
         first_low = _first_retest_low(high_candidate, lows, zone_width)
         if first_low is None:
             continue
+        
+        # Find all the lows that came after the high candidate and are below the first low BODY price.
+        # all .price below are the body price, built from pivot bodies (lines 43-51)
         retest_lows = [
             low
             for low in lows
             if int(low.index) > int(high_candidate.broken_index)
             and float(high_candidate.price) < float(low.price) <= float(first_low.price)
         ]
+        
+        # At least min_touches (default 2) distinct low pivots (by index) are required.
         if len({candidate.index for candidate in retest_lows}) < int(min_touches):
             continue
 
@@ -202,6 +211,7 @@ def _build_retested_flip_zones(
     return zones
 
 
+# First swing low after a reclaimed high breaks, with body price above the high but within zone_width.
 def _first_retest_low(
     high_candidate: SupportCandidate,
     lows: list[SupportCandidate],
@@ -218,22 +228,25 @@ def _first_retest_low(
     return None
 
 
+# Filter and dedupe local zones: drop thin zones and keep one winner per nearby ladder slot.
 def _select_local_reaction_zones(zones: list[Zone], zone_width: float) -> list[Zone]:
     selected: list[Zone] = []
-    min_width = float(zone_width) * 0.2
-    adjacent_gap = float(zone_width) * 1.3
-    midpoint_spacing = float(zone_width) * 2.0
-    for zone in sorted(zones, key=lambda item: float(item["low"])):
+    min_width = float(zone_width) * 0.2 # 500 * 0.2 = $100
+    adjacent_gap = float(zone_width) * 1.3 # 500 * 1.3 = $650
+    midpoint_spacing = float(zone_width) * 2 # 500 * 2 = $1000
+    for zone in sorted(zones, key=lambda item: float(item["low"])): #zone["low"] is the lower edge of the price band
         if float(zone["width"]) < min_width:
             continue
         if selected and _local_zones_share_ladder_slot(selected[-1], zone, adjacent_gap, midpoint_spacing):
             if _local_zone_rank(zone) < _local_zone_rank(selected[-1]):
-                selected[-1] = dict(zone)
+                selected[-1] = dict(zone) # Lower rank wins. Replace the selected zone with the new zone.
             continue
         selected.append(dict(zone))
+    # gives back a cleaned-up list of support zones, sorted low to high, with at most one zone per ladder step
     return selected
 
 
+# True when two zones are close enough in price to count as the same ladder step.
 def _local_zones_share_ladder_slot(
     first: Zone,
     second: Zone,
@@ -245,20 +258,30 @@ def _local_zones_share_ladder_slot(
     return gap < adjacent_gap or midpoint_gap < midpoint_spacing
 
 
+# Lower tuple wins: retested-flip zones first, then lower low, then higher score.
 def _local_zone_rank(zone: Zone) -> tuple[int, float, float]:
     origin = str(zone.get("origin", ""))
     priority = 0 if origin == "local_retested_flip_support" else 1
     return (priority, float(zone["low"]), -float(zone.get("score", 0.0)))
 
 
+# Shared structure role when all candidates agree; "mixed" or "unknown" otherwise.
 def _candidate_role(candidates: list[SupportCandidate]) -> str:
+    # Using a set removes duplicates.
     roles = {candidate.structure_role for candidate in candidates if candidate.structure_role}
     if not roles:
         return "unknown"
+    
+    # A set is unordered and doesn't support direct indexing, so to access its single element, convert it to an iterator and use next. 
+    # This ensures we get the element without converting to a list.
     if len(roles) == 1:
         return next(iter(roles))
+
     return "mixed"
 
 
+# True when zone's low/high range intersects any zone in the list.
 def _overlaps_any_zone(zone: Zone, zones: list[Zone]) -> bool:
+    # overlap start <= overlap end
+    # so this is true for at least one zone in the list?
     return any(max(float(zone["low"]), float(other["low"])) <= min(float(zone["high"]), float(other["high"])) for other in zones)
