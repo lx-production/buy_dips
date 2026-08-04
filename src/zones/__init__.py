@@ -8,6 +8,7 @@ from .ohlc import _average_true_range, _coerce_ohlc
 from .pivots import _filter_prominent_structure_pivots, _find_structure_pivots, _label_structure_pivots
 from .postprocess import _fill_support_staircase_gaps
 from .reactions import _build_local_reaction_zones
+from .rejections import _build_split_rejection_zone_pairs, _overlay_split_rejection_zones
 from .timeframes import aggregate_ohlc_to_daily
 from .types import StructurePivot, SupportCandidate
 
@@ -19,6 +20,7 @@ __all__ = [
     "_average_true_range",
     "_build_daily_body_support_zones",
     "_build_local_reaction_zones",
+    "_build_split_rejection_zone_pairs",
     "_coerce_ohlc",
     "_filter_prominent_structure_pivots",
     "_fill_support_staircase_gaps",
@@ -26,6 +28,7 @@ __all__ = [
     "_fixed_support_zone_bounds",
     "_label_structure_pivots",
     "_overlay_daily_support_zones",
+    "_overlay_split_rejection_zones",
     "_support_floor_candidates",
     "aggregate_ohlc_to_daily",
 ]

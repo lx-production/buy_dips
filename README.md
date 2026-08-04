@@ -95,8 +95,9 @@ Phase 1 uses **support-only structure detection** for zones (implemented in `det
 - support evidence can come from prominent swing lows, reclaimed swing highs (`flipped_resistance`), retested wick floors, dense reclaimed high clusters inside large support gaps, and higher-timeframe 1D low-pivot body anchors
 - support candidates are grouped when their source prices fit within the fixed 500 USD zone width
 - support bands are anchored to the relevant support base for that evidence type
+- a deep external swing-low rejection followed by a quick higher-low retest is split into a variable-width `wick_retest_support` floor and a fixed-width `body_rejection_support` shelf; these replace an ambiguous `mixed_structure` band trapped between them
 - complete 1D candles are derived from six closed 4H candles; a prominent 1D low pivot can add `daily_body_support`, anchored from the daily body low with the same fixed `$500` width
-- when a 1D body-support zone overlaps a 4H `mixed_structure` bridge zone, the 1D zone replaces the bridge zone
+- when a 1D body-support zone overlaps a 4H `mixed_structure` bridge or sits immediately below a nearby 4H `flipped_resistance` body band, the 1D zone replaces the 4H band
 - zones require at least `min_touches` unique source touches
 - support-biased zones stay in the support list even if they are currently above, below, or touching price
 

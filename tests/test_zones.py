@@ -10,12 +10,14 @@ from src.zones import (
     _average_true_range,
     _build_daily_body_support_zones,
     _build_local_reaction_zones,
+    _build_split_rejection_zone_pairs,
     _filter_prominent_structure_pivots,
     _fill_support_staircase_gaps,
     _find_structure_pivots,
     _fixed_support_zone_bounds,
     _label_structure_pivots,
     _overlay_daily_support_zones,
+    _overlay_split_rejection_zones,
     _support_floor_candidates,
     aggregate_ohlc_to_daily,
     detect_support_resistance_zones_structure_v1,
@@ -713,6 +715,91 @@ def test_daily_body_support_replaces_overlapping_mixed_structure_bridge_zone() -
 
     assert [(zone["low"], zone["high"], zone["origin"], zone.get("source_timeframe")) for zone in zones] == [
         (57864.97, 58364.97, "daily_body_support", "1d")
+    ]
+
+
+def test_daily_body_support_replaces_adjacent_flipped_resistance_above() -> None:
+    flipped_zone = _support_zone(
+        low=62956.70,
+        high=63456.70,
+        source_closes=[63206.70] * 9,
+        score=19.0,
+    )
+    flipped_zone["origin"] = "flipped_resistance"
+    daily_zone = _support_zone(low=62409.87, high=62909.87, source_closes=[62909.87], score=102.0)
+    daily_zone["origin"] = "daily_body_support"
+    daily_zone["source_timeframe"] = "1d"
+
+    zones = _overlay_daily_support_zones([flipped_zone], [daily_zone])
+
+    assert [(zone["low"], zone["high"], zone["origin"]) for zone in zones] == [
+        (62409.87, 62909.87, "daily_body_support")
+    ]
+
+
+def test_deep_rejection_with_quick_higher_low_builds_two_support_shelves() -> None:
+    ohlc = pd.DataFrame(
+        {
+            "open": [62000.0, 60438.0, 60300.24, 60687.05],
+            "high": [62500.0, 61547.24, 62000.0, 61276.95],
+            "low": [61000.0, 59130.91, 59940.01, 59500.0],
+            "close": [61500.0, 60300.24, 61056.47, 61004.95],
+        }
+    )
+    rejection_low = StructurePivot(
+        index=1,
+        kind="low",
+        wick_price=59130.91,
+        body_price=60300.24,
+        atr=1763.58,
+        term="external",
+        structure_role="LL",
+    )
+    retest_low = StructurePivot(
+        index=3,
+        kind="low",
+        wick_price=59500.0,
+        body_price=60687.05,
+        atr=1819.91,
+        term="internal",
+        structure_role="HL",
+    )
+
+    pairs = _build_split_rejection_zone_pairs(
+        ohlc=ohlc,
+        external_pivots=[rejection_low],
+        internal_pivots=[retest_low],
+        zone_width=500.0,
+        current_price=63800.0,
+        buffer_pct=0.0015,
+    )
+
+    assert [[(zone["low"], zone["high"], zone["origin"]) for zone in pair] for pair in pairs] == [
+        [
+            (59130.91, 59500.0, "wick_retest_support"),
+            (60438.0, 60938.0, "body_rejection_support"),
+        ]
+    ]
+
+
+def test_split_rejection_pair_replaces_mixed_structure_inside_it() -> None:
+    mixed_zone = _support_zone(
+        low=59500.0,
+        high=60000.0,
+        source_closes=[59306.72, 59727.28, 59557.99, 59577.01, 59600.01, 60000.0],
+        score=12.0,
+    )
+    mixed_zone["origin"] = "mixed_structure"
+    lower_zone = _support_zone(low=59130.91, high=59500.0, source_closes=[59130.91, 59500.0], score=4.0)
+    lower_zone["origin"] = "wick_retest_support"
+    upper_zone = _support_zone(low=60438.0, high=60938.0, source_closes=[60438.0, 60687.05], score=4.0)
+    upper_zone["origin"] = "body_rejection_support"
+
+    zones = _overlay_split_rejection_zones([mixed_zone], [(lower_zone, upper_zone)])
+
+    assert [(zone["low"], zone["high"], zone["origin"]) for zone in zones] == [
+        (59130.91, 59500.0, "wick_retest_support"),
+        (60438.0, 60938.0, "body_rejection_support"),
     ]
 
 

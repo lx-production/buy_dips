@@ -6,12 +6,14 @@ from .factory import Zone, _make_support_zone
 from .ohlc import _average_true_range, _coerce_ohlc
 from .pivots import _filter_prominent_structure_pivots, _find_structure_pivots, _label_structure_pivots
 from .timeframes import aggregate_ohlc_to_daily
+from .types import STRUCTURE_ADJACENT_ZONE_MIN_GAP
 
 
 DAILY_ZONE_MIN_BARS_PER_DAY = 6
 DAILY_ZONE_SCORE_BONUS = 100.0
 
 
+# Build body-style support zones from daily swing lows after aggregating intraday OHLC.
 def _build_daily_body_support_zones(
     df: Any,
     *,
@@ -73,6 +75,8 @@ def _build_daily_body_support_zones(
     return zones
 
 
+# Merge daily zones into the main list, replacing overlapping zones that daily can supersede
+# and a flipped-resistance body zone immediately above the daily support.
 def _overlay_daily_support_zones(zones: list[Zone], daily_zones: list[Zone]) -> list[Zone]:
     if not daily_zones:
         return [dict(zone) for zone in zones]
@@ -81,6 +85,9 @@ def _overlay_daily_support_zones(zones: list[Zone], daily_zones: list[Zone]) -> 
     for daily_zone in sorted(daily_zones, key=lambda zone: (float(zone["low"]), float(zone["high"]))):
         overlaps = [index for index, zone in enumerate(selected) if _zones_overlap(zone, daily_zone)]
         if not overlaps:
+            adjacent_upper = _nearest_replaceable_upper_zone(selected, daily_zone)
+            if adjacent_upper is not None:
+                selected.pop(adjacent_upper)
             selected.append(dict(daily_zone))
             continue
 
@@ -93,6 +100,23 @@ def _overlay_daily_support_zones(zones: list[Zone], daily_zones: list[Zone]) -> 
     return sorted(selected, key=lambda zone: float(zone["low"]))
 
 
+# Find the nearest 4H flipped-resistance body band when it crowds a daily support from above.
+def _nearest_replaceable_upper_zone(zones: list[Zone], daily_zone: Zone) -> int | None:
+    nearest: tuple[float, int] | None = None
+    daily_high = float(daily_zone["high"])
+    for index, zone in enumerate(zones):
+        gap = float(zone["low"]) - daily_high
+        if gap < 0.0 or gap >= STRUCTURE_ADJACENT_ZONE_MIN_GAP:
+            continue
+        if zone.get("bounds_style", "body") != "body" or str(zone.get("origin")) != "flipped_resistance":
+            continue
+        candidate = (gap, index)
+        if nearest is None or candidate < nearest:
+            nearest = candidate
+    return None if nearest is None else nearest[1]
+
+
+# True when a daily overlay may replace this zone (daily, mixed_structure; not local_reaction).
 def _daily_zone_can_replace(zone: Zone) -> bool:
     if zone.get("source_timeframe") == "1d":
         return True
@@ -101,5 +125,6 @@ def _daily_zone_can_replace(zone: Zone) -> bool:
     return str(zone.get("origin")) == "mixed_structure"
 
 
+# True when two zones share any price range between their low and high bounds.
 def _zones_overlap(first: Zone, second: Zone) -> bool:
     return max(float(first["low"]), float(second["low"])) <= min(float(first["high"]), float(second["high"]))

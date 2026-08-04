@@ -148,6 +148,8 @@ The daily overlay is separate from the 4H candidate path. `aggregate_ohlc_to_dai
 
 For example, the May 1, 2024 daily red candle has a body low/close at `58,364.97`, so its daily body-support zone is `57,864.97-58,364.97`. During overlay, this higher-timeframe zone can replace an overlapping 4H `mixed_structure` bridge zone such as `57,500.00-58,000.00`.
 
+A deep external swing-low rejection can also be split when its lower wick spans at least two zone widths and a higher-low retest arrives within four candles. The rejection wick and retest wick form `wick_retest_support`; the rejection candle's body top anchors the fixed-width `body_rejection_support` shelf. The pair replaces an ambiguous `mixed_structure` band contained between those levels.
+
 ## Block 4: Building Zones
 
 Read: `src/zones/build.py`, then `src/zones/factory.py`
