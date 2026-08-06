@@ -92,7 +92,7 @@ Phase 1 uses **support-only structure detection** for zones (implemented in `det
 
 - high/low/body ranges detect raw internal and external swing points
 - external swing points are filtered into prominent 4H pivots using the configured ATR/percent reversal thresholds
-- support evidence can come from prominent swing lows, reclaimed swing highs (`flipped_resistance`), retested wick floors, dense reclaimed high clusters inside large support gaps, and higher-timeframe 1D low-pivot body anchors
+- support evidence can come from prominent swing lows, reclaimed swing highs (`flipped_resistance`), retested wick floors, dense reclaimed internal-high clusters inside large support gaps, and higher-timeframe 1D low-pivot body anchors
 - support candidates are grouped when their source prices fit within the fixed 500 USD zone width
 - support bands are anchored to the relevant support base for that evidence type
 - a deep external swing-low rejection followed by a quick higher-low retest is split into a variable-width `wick_retest_support` floor and a fixed-width `body_rejection_support` shelf; these replace an ambiguous `mixed_structure` band trapped between them

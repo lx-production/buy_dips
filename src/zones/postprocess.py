@@ -23,29 +23,37 @@ def _fill_support_staircase_gaps(
     min_touches: int,
     current_price: float,
     buffer_pct: float,
+    internal_pivots: list[StructurePivot] | None = None,
 ) -> list[dict[str, Any]]:
     filled_zones = [dict(zone) for zone in zones]
-    for _ in range(STRUCTURE_STAIR_STEP_MAX_INSERTIONS):
-        gap_fill = _best_support_staircase_gap_fill(
-            zones=filled_zones,
-            raw_external_pivots=raw_external_pivots,
-            closes=closes,
-            break_atr_mult=break_atr_mult,
-            zone_width=zone_width,
-            min_touches=min_touches,
-            current_price=current_price,
-            buffer_pct=buffer_pct,
-        )
-        if gap_fill is None:
-            break
-        filled_zones.append(gap_fill)
-        filled_zones = _make_support_zones_distinct(filled_zones, current_price=current_price, buffer_pct=buffer_pct)
+    pivot_sets = [raw_external_pivots]
+    if internal_pivots is not None:
+        pivot_sets.append(internal_pivots)
+
+    insertion_count = 0
+    for staircase_pivots in pivot_sets:
+        while insertion_count < STRUCTURE_STAIR_STEP_MAX_INSERTIONS:
+            gap_fill = _best_support_staircase_gap_fill(
+                zones=filled_zones,
+                staircase_pivots=staircase_pivots,
+                closes=closes,
+                break_atr_mult=break_atr_mult,
+                zone_width=zone_width,
+                min_touches=min_touches,
+                current_price=current_price,
+                buffer_pct=buffer_pct,
+            )
+            if gap_fill is None:
+                break
+            filled_zones.append(gap_fill)
+            filled_zones = _make_support_zones_distinct(filled_zones, current_price=current_price, buffer_pct=buffer_pct)
+            insertion_count += 1
     return filled_zones
 
 
 def _best_support_staircase_gap_fill(
     zones: list[dict[str, Any]],
-    raw_external_pivots: list[StructurePivot],
+    staircase_pivots: list[StructurePivot],
     closes: np.ndarray,
     break_atr_mult: float,
     zone_width: float,
@@ -66,7 +74,7 @@ def _best_support_staircase_gap_fill(
         if gap <= STRUCTURE_STAIR_STEP_MAX_SUPPORT_GAP:
             continue
         candidates = _stair_step_support_candidates(
-            raw_external_pivots=raw_external_pivots,
+            pivots=staircase_pivots,
             closes=closes,
             break_atr_mult=break_atr_mult,
             zone_width=zone_width,
@@ -98,7 +106,7 @@ def _best_support_staircase_gap_fill(
 
 
 def _stair_step_support_candidates(
-    raw_external_pivots: list[StructurePivot],
+    pivots: list[StructurePivot],
     closes: np.ndarray,
     break_atr_mult: float,
     zone_width: float,
@@ -111,7 +119,7 @@ def _stair_step_support_candidates(
     upper_low = float(upper_zone["low"])
     support_ceiling = float(current_price) * (1.0 - float(buffer_pct))
     candidates: list[SupportCandidate] = []
-    for pivot in raw_external_pivots:
+    for pivot in pivots:
         if pivot.kind != "high":
             continue
         price = float(pivot.body_price)

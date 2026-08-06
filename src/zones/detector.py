@@ -113,6 +113,7 @@ def detect_support_resistance_zones_structure_v1(
         min_touches=min_touches,
         current_price=float(current_price),
         buffer_pct=buffer_pct,
+        internal_pivots=internal_pivots,
     )
     rejection_pairs = _build_split_rejection_zone_pairs(
         ohlc=ohlc,

@@ -374,6 +374,40 @@ def test_structure_v1_fills_staircase_gap_to_next_active_boundary() -> None:
     ]
 
 
+def test_structure_v1_uses_internal_reclaimed_high_cluster_to_fill_large_gap() -> None:
+    zones = [
+        _support_zone(low=46559.99, high=47059.99, source_closes=[46700.0, 46900.0, 47059.99], score=7.0),
+        _support_zone(low=51894.04, high=52394.04, source_closes=[52000.0, 52100.0, 52200.0, 52394.04], score=9.0),
+    ]
+    raw_external_pivots = [
+        _high_pivot(index=1, wick_price=50000.0, body_price=49917.28),
+        _high_pivot(index=4, wick_price=51600.0, body_price=51509.99),
+    ]
+    internal_pivots = [
+        _high_pivot(index=1, wick_price=50000.0, body_price=49917.80),
+        _high_pivot(index=2, wick_price=50020.0, body_price=49917.28),
+        _high_pivot(index=3, wick_price=50040.0, body_price=49988.12),
+        _high_pivot(index=4, wick_price=49900.0, body_price=49699.59),
+    ]
+
+    filled = _fill_support_staircase_gaps(
+        zones=zones,
+        raw_external_pivots=raw_external_pivots,
+        internal_pivots=internal_pivots,
+        closes=pd.Series([48000.0] * 5 + [60000.0]).to_numpy(dtype=float),
+        break_atr_mult=0.0,
+        zone_width=500.0,
+        min_touches=2,
+        current_price=64183.27,
+        buffer_pct=0.0015,
+    )
+
+    stair_steps = [zone for zone in filled if zone["origin"] == "stair_step_flipped_resistance"]
+    assert [(zone["low"], zone["high"], zone["touches"]) for zone in stair_steps] == [
+        (49488.12, 49988.12, 4),
+    ]
+
+
 def test_nearby_reclaimed_high_zone_survives_next_major_level() -> None:
     candidates = [
         SupportCandidate(price=73611.10, index=1, origin="flipped_resistance", structure_role="H"),
