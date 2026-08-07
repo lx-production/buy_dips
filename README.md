@@ -74,7 +74,7 @@ Then open:
 http://127.0.0.1:8000
 ```
 
-The page is a local fullscreen canvas chart. It reads closed `BTCUSDT` 4H candles from SQLite and overlays support zones from `support_structure_v1` (`src/zones.py`).
+The page is a local fullscreen canvas chart. It reads closed `BTCUSDT` 4H candles from SQLite and overlays support zones from `support_structure_v1` (`src/zones.py`). For readability the chart only draws the nearest 4 supports at/below price plus the nearest 2 above; the detector itself is unchanged.
 
 ## Run One Paper Signal Cycle
 

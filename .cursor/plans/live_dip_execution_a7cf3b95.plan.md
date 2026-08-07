@@ -51,7 +51,7 @@ isProject: false
 - `live` = same signal + risk + quote + sign/broadcast when all gates pass.
 
 ## Signal timing and algorithm
-1. systemd runs one idempotent cycle around `HH:02 UTC`; retry Binance only for a short bounded window.
+1. systemd runs one idempotent cycle around `HH:00:10 UTC`; retry Binance only for a short bounded window.
 2. Fetch recent Binance `BTCUSDT` `1h` klines only and upsert them into `candles` with `timeframe="1h"`. Require a fully closed `1h` candle for the decision (reject open, missing, stale, duplicated, or future closes). Use its `close` as the hourly reference price; do not evaluate an open candle.
 3. From closed 1h candles, detect whether a Binance-aligned 4H bucket just completed:
    - aggregate OHLCV for that bucket (`open`=first, `high`=max, `low`=min, `close`=last, `volume`=sum) and upsert the closed 4H bar into `candles` with `timeframe="4h"`;

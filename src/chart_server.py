@@ -21,8 +21,9 @@ from .zones import (
 )
 
 
-DEFAULT_LIMIT = 200
+DEFAULT_LIMIT = 400
 ALL_CANDLES_LIMIT = "all"
+VISIBLE_SUPPORT_ZONES_BELOW_PRICE = 5
 VISIBLE_SUPPORT_ZONES_ABOVE_PRICE = 2
 
 
@@ -223,10 +224,21 @@ def _chart_pivots(
 def _visible_support_zones(
     support_zones: list[dict[str, Any]],
     current_price: float,
+    below_count: int = VISIBLE_SUPPORT_ZONES_BELOW_PRICE,
     above_count: int = VISIBLE_SUPPORT_ZONES_ABOVE_PRICE,
 ) -> list[dict[str, Any]]:
+    """Filter detected zones for chart display only; detection algo stays unchanged."""
     price = float(current_price)
-    below_or_touching = [zone for zone in support_zones if float(zone["low"]) <= price]
+    # Keep the nearest N supports at/below price (closest zone high to current price).
+    nearest_below = sorted(
+        [zone for zone in support_zones if float(zone["low"]) <= price],
+        key=lambda zone: (
+            price - float(zone["high"]),
+            -float(zone.get("score", 0.0)),
+            -int(zone["touches"]),
+        ),
+    )[: max(0, int(below_count))]
+    below_or_touching = sorted(nearest_below, key=lambda zone: float(zone["low"]))
     above = sorted(
         [zone for zone in support_zones if float(zone["low"]) > price],
         key=lambda zone: (float(zone["low"]) - price, -float(zone.get("score", 0.0)), -int(zone["touches"])),
@@ -309,8 +321,13 @@ _INDEX_HTML_TEMPLATE = """<!doctype html>
     html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #090c10; color: #e6edf3; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     #app { position: fixed; inset: 0; }
     canvas { display: block; width: 100vw; height: 100vh; }
-    .hud { position: fixed; top: 18px; left: 22px; z-index: 2; padding: 12px 14px; border: 1px solid rgba(255,255,255,.08); border-radius: 12px; background: rgba(9,12,16,.72); backdrop-filter: blur(10px); box-shadow: 0 12px 40px rgba(0,0,0,.32); }
+    .hud { position: fixed; top: 18px; left: 22px; z-index: 2; padding: 12px 14px; border: 1px solid rgba(255,255,255,.08); border-radius: 12px; background: rgba(9,12,16,.72); backdrop-filter: blur(10px); box-shadow: 0 12px 40px rgba(0,0,0,.32); max-width: min(360px, calc(100vw - 44px)); }
+    .hud-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
     .title { font-size: 15px; font-weight: 700; letter-spacing: .04em; }
+    .hud-toggle { flex: 0 0 auto; width: 24px; height: 24px; margin: 0; padding: 0; border: 1px solid rgba(255,255,255,.14); border-radius: 7px; color: #c9d1d9; background: rgba(13,17,23,.88); font: 700 14px/1 ui-sans-serif, system-ui; cursor: pointer; }
+    .hud-toggle:hover { color: #e6edf3; border-color: rgba(255,255,255,.28); }
+    .hud.collapsed { padding: 8px 10px; }
+    .hud.collapsed .hud-body { display: none; }
     .meta { margin-top: 4px; color: #8b949e; font-size: 12px; }
     .legend { display: flex; gap: 12px; margin-top: 9px; color: #c9d1d9; font-size: 12px; }
     .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; }
@@ -327,41 +344,68 @@ _INDEX_HTML_TEMPLATE = """<!doctype html>
 </head>
 <body>
   <div id="app"><canvas id="chart"></canvas></div>
-  <div class="hud">
-    <div class="title" id="title">BTCUSDT 4H</div>
-    <div class="meta" id="meta">Loading SQLite candles and zones…</div>
-    <div class="legend">
-      <span><i class="dot support"></i>Support</span>
-      <span><i class="dot external"></i>Prominent external pivots</span>
+  <div class="hud" id="hud">
+    <div class="hud-header">
+      <div class="title" id="title">BTCUSDT 4H</div>
+      <button type="button" class="hud-toggle" id="hud-toggle" title="Minimize panel" aria-label="Minimize panel" aria-expanded="true">−</button>
     </div>
-    <div class="controls">
-      <label class="field">
-        View
-        <select id="view-select">
-          <option value="4h-recent">4H recent (__LIMIT__)</option>
-          <option value="1d-all">1D all candles</option>
-        </select>
-      </label>
-      <label class="toggle" title="Show or hide prominent external swing points">
-        <input type="checkbox" id="toggle-external-pivots" checked>
-        External pivots
-      </label>
+    <div class="hud-body" id="hud-body">
+      <div class="meta" id="meta">Loading SQLite candles and zones…</div>
+      <div class="legend">
+        <span><i class="dot support"></i>Support</span>
+        <span><i class="dot external"></i>Prominent external pivots</span>
+      </div>
+      <div class="controls">
+        <label class="field">
+          View
+          <select id="view-select">
+            <option value="4h-recent">4H recent (__LIMIT__)</option>
+            <option value="1d-all">1D all candles</option>
+          </select>
+        </label>
+        <label class="toggle" title="Show or hide prominent external swing points">
+          <input type="checkbox" id="toggle-external-pivots" checked>
+          External pivots
+        </label>
+      </div>
     </div>
   </div>
   <div class="error" id="error"></div>
   <script>
     const canvas = document.getElementById('chart');
     const ctx = canvas.getContext('2d');
+    const hud = document.getElementById('hud');
     const title = document.getElementById('title');
     const meta = document.getElementById('meta');
     const error = document.getElementById('error');
+    const hudToggle = document.getElementById('hud-toggle');
     const viewSelect = document.getElementById('view-select');
     const toggleExternalPivots = document.getElementById('toggle-external-pivots');
+    const HUD_COLLAPSED_KEY = 'chartHudCollapsed';
     const viewOptions = {
       '4h-recent': { timeframe: '4h', limit: '__LIMIT__' },
       '1d-all': { timeframe: '1d', limit: 'all' }
     };
     let chartData = null;
+
+    // Collapse the HUD so the panel stops covering the top-left of the chart.
+    function setHudCollapsed(collapsed) {
+      hud.classList.toggle('collapsed', collapsed);
+      hudToggle.textContent = collapsed ? '+' : '−';
+      hudToggle.title = collapsed ? 'Expand panel' : 'Minimize panel';
+      hudToggle.setAttribute('aria-label', hudToggle.title);
+      hudToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      try { localStorage.setItem(HUD_COLLAPSED_KEY, collapsed ? '1' : '0'); } catch (_) {}
+    }
+
+    function isHudCollapsedStored() {
+      try { return localStorage.getItem(HUD_COLLAPSED_KEY) === '1'; } catch (_) { return false; }
+    }
+
+    setHudCollapsed(isHudCollapsedStored());
+    hudToggle.addEventListener('click', () => {
+      setHudCollapsed(!hud.classList.contains('collapsed'));
+    });
 
     async function load() {
       error.style.display = 'none';

@@ -19,10 +19,31 @@ def test_visible_support_zones_keep_below_price_and_nearest_two_above() -> None:
     visible = _visible_support_zones(zones, current_price=100.0)
 
     assert [(zone["low"], zone["high"]) for zone in visible] == [
-        (80.0, 85.0),
         (70.0, 75.0),
+        (80.0, 85.0),
         (102.0, 107.0),
         (110.0, 115.0),
+    ]
+
+
+def test_visible_support_zones_keep_only_nearest_four_below_price() -> None:
+    zones = [
+        _zone(40.0, 45.0, touches=9),
+        _zone(50.0, 55.0, touches=8),
+        _zone(60.0, 65.0, touches=7),
+        _zone(70.0, 75.0, touches=6),
+        _zone(80.0, 85.0, touches=5),
+        _zone(90.0, 95.0, touches=4),
+        _zone(102.0, 107.0, touches=2),
+    ]
+
+    visible = _visible_support_zones(zones, current_price=100.0, above_count=0)
+
+    assert [(zone["low"], zone["high"]) for zone in visible] == [
+        (60.0, 65.0),
+        (70.0, 75.0),
+        (80.0, 85.0),
+        (90.0, 95.0),
     ]
 
 
