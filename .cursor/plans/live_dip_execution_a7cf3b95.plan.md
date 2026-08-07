@@ -1,6 +1,6 @@
 ---
 name: live dip execution
-overview: Add a fail-closed Polygon trading path that keeps the existing Binance 4H zone detector unchanged, fetches only Binance BTCUSDT 1h candles into the existing candles table, derives closed 4H bars from those 1h candles to rebuild zones, and buys exactly 1 USDT of WBTC through 1inch Aggregation Router V6 using the Classic Swap API / Pathfinder v6.1. Retire the Phase 1 paper scorer and signals table in favor of one support_close_v1 decision engine and one decisions schema shared by observe, dry_run, and live. Buy when a closed 1h candle closes inside a support zone and the completed 1h high before the entry is strictly above the midpoint of the internal range between that zone and the next higher zone. Use separate dev/prod keystores; Pi prod runs 24/7 via systemd with LoadCredential for secrets.
+overview: Add a fail-closed Polygon trading path that keeps the existing Binance 4H zone detector unchanged, fetches only Binance BTCUSDT 1h candles into the existing candles table, derives closed 4H bars from those 1h candles to rebuild zones, and buys exactly 1 USDT of WBTC through 1inch Aggregation Router V6 using the Classic Swap API / Pathfinder v6.1. Retire the Phase 1 paper scorer and signals table in favor of one support_close_v1 decision engine and one decisions schema shared by observe, dry_run, and live. Buy when a closed 1h candle closes inside a support zone below the zone midpoint, and the completed 1h high in a 24h pre-entry lookback is strictly above the midpoint of the internal range between that zone and the next higher zone. Use separate dev/prod keystores; Pi prod runs 24/7 via systemd with LoadCredential for secrets.
 todos:
   - id: data-signal
     content: Retire paper scorer/signals table; add support_close_v1 engine + decisions schema; fetch-only-1h; derive closed 4H; rebuild zones on watermark; fail-closed timestamps.
@@ -44,8 +44,8 @@ isProject: false
 - **Prod Pi:** inject the keystore password and 1inch API key via systemd **`LoadCredential=`** (not a plain `EnvironmentFile` in the repo). **Dev/local:** secrets may come from env or prompt for manual runs only; do not copy prod keystore or prod credentials onto the dev machine.
 
 ## Single decision engine (`support_close_v1`)
-- Output is gate-based, not scored: `decision` is `BUY` or `HOLD`, plus one clear `reason_code` such as `NO_ZONE_CLOSE`, `NO_HIGHER_ZONE`, `INVALID_INTERNAL_RANGE`, `HIGH_NOT_ABOVE_MIDPOINT`, `ALREADY_BOUGHT`, `STALE_PRICE`, or a risk code.
-- Shared payload for every cycle: current closed 1h candle/time, selected lower-zone fingerprint and bounds, adjacent higher-zone fingerprint and bounds, internal-range midpoint, pre-entry closed-candle high, gate results, whether zones rebuilt this cycle, and strategy/config version.
+- Output is gate-based, not scored: `decision` is `BUY` or `HOLD`, plus one clear `reason_code` such as `NO_ZONE_CLOSE`, `CLOSE_AT_OR_ABOVE_ZONE_MID`, `NO_HIGHER_ZONE`, `INVALID_INTERNAL_RANGE`, `HIGH_NOT_ABOVE_MIDPOINT`, `ALREADY_BOUGHT`, `STALE_PRICE`, or a risk code.
+- Shared payload for every cycle: current closed 1h candle/time, selected lower-zone fingerprint and bounds (including zone mid), adjacent higher-zone fingerprint and bounds, internal-range midpoint, 24h lookback window, pre-entry closed-candle high, gate results, whether zones rebuilt this cycle, and strategy/config version.
 - `observe` = same signal + persist decision (no DEX). This is the useful “paper” path for the live strategy.
 - `dry_run` = same signal + quote/simulate + persist, no signing.
 - `live` = same signal + risk + quote + sign/broadcast when all gates pass.
@@ -63,12 +63,13 @@ isProject: false
    - `internal_range_high = higher_zone.low`;
    - `internal_range_midpoint = (internal_range_low + internal_range_high) / 2`.
    Reject the pair when the zones overlap/touch (`internal_range_high <= internal_range_low`). The highest zone has no higher neighbor and is not eligible.
-5. Define the completed pre-entry leg without adding new state:
-   - scan backward through already stored, fully closed 1h candles before the trigger candle;
-   - find the most recent earlier candle whose range intersects the candidate lower zone (the previous support touch/bounce); evaluate only candles strictly after that candle, or closed candles from the zone source time when there is no earlier touch;
+5. Define the completed pre-entry leg without adding new state, capped to a **24h lookback** (at most the 24 closed 1h candles immediately before the trigger candle):
+   - only scan that 24h window; ignore older candles even if `zone source time` is older;
+   - find the most recent earlier candle in the window whose range intersects the candidate lower zone (the previous support touch/bounce); evaluate only candles strictly after that candle inside the window;
+   - if no earlier touch exists in the window, evaluate closed candles from `max(zone source time, lookback window start)` through the candle before the trigger;
    - `pre_entry_closed_high` is the maximum `high` from those completed candles, excluding both the earlier touch candle and the current trigger candle. An empty leg is ineligible.
 6. Select a zone only when:
-   - the current closed 1h candle `close` is inside the full support zone, inclusive (`lower_zone.low <= close <= lower_zone.high`); there is no separate lower entry band and no previous-close crossing requirement;
+   - the current closed 1h candle `close` is inside the support zone and **strictly below** the zone midpoint (`lower_zone.low <= close < lower_zone.mid`); closes at/above `zone.mid` up through `zone.high` are `HOLD`;
    - `pre_entry_closed_high` is **strictly greater than** `internal_range_midpoint` (exactly 50% is `HOLD`);
    - this zone or a materially overlapping version has not already produced a submitted or confirmed buy;
    - no transaction is unresolved and all daily/canary limits remain available.
@@ -119,7 +120,7 @@ isProject: false
 ## Default canary controls
 - Modes: `observe` records 1h candles and decisions only; `dry_run` also quotes and simulates; `live` may sign and broadcast. Default to `observe`, and require both live config and a separate wallet-specific confirmation value to enter `live`.
 - Initial hard limits: exactly 1 USDT0 per trade, one submitted trade per zone, at most 3 trades per UTC day, and 10 USDT0 cumulative live spend. Increasing the cumulative cap requires an explicit config change after review.
-- Default execution checks: full-zone 1h close, strict internal-range `> 50%` pre-entry-high gate, 0.50% maximum slippage, 0.50% maximum Binance-to-DEX quote deviation, configurable maximum gas, minimum POL reserve, a short maximum quote/swap-response age, and a `data/PAUSE_TRADING` kill switch.
+- Default execution checks: 1h close inside support and strictly below zone mid, 24h pre-entry lookback, strict internal-range `> 50%` pre-entry-high gate, 0.50% maximum slippage, 0.50% maximum Binance-to-DEX quote deviation, configurable maximum gas, minimum POL reserve, a short maximum quote/swap-response age, and a `data/PAUSE_TRADING` kill switch.
 - The dedicated wallet should hold only the small approved USDT0 canary amount plus enough POL for gas.
 
 ## Offline backtest (required before live)
@@ -131,7 +132,7 @@ isProject: false
 - Gate: operator reviews at least one multi-month backtest window and confirms BUY density/reason codes look acceptable before enabling `observe` on the Pi. Unit tests cover a tiny synthetic replay; the historical run is an operator CLI step, not CI.
 
 ## Verification and rollout
-- Replace [tests/test_signals.py](tests/test_signals.py) and any paper-score assertions with support-close/internal-range coverage: close at both zone boundaries; no lower-band requirement; no higher zone; overlapping pair; first approach; prior bounce; high below/equal/above midpoint; trigger-candle high excluded; already bought; and stale price. Also cover: closed 1h upsert/read; 1h→4h aggregation and incomplete-bucket rejection; rebuild-zones-only-on-new-4h watermark; zone identity; token units; minimum-output rounding; config/risk gates; SQLite decision idempotency; encrypted-keystore handling in a temporary directory; redaction; runner retries; pending/confirmed/reverted reconciliation; a small synthetic backtest replay.
+- Replace [tests/test_signals.py](tests/test_signals.py) and any paper-score assertions with support-close/internal-range coverage: close at zone low; close just below zone mid (`BUY` eligible); close at/above zone mid (`HOLD`); close at zone high (`HOLD`); 24h lookback cap ignores older highs/touches; no higher zone; overlapping pair; first approach; prior bounce inside window; high below/equal/above internal-range midpoint; trigger-candle high excluded; already bought; and stale price. Also cover: closed 1h upsert/read; 1h→4h aggregation and incomplete-bucket rejection; rebuild-zones-only-on-new-4h watermark; zone identity; token units; minimum-output rounding; config/risk gates; SQLite decision idempotency; encrypted-keystore handling in a temporary directory; redaction; runner retries; pending/confirmed/reverted reconciliation; a small synthetic backtest replay.
 - Mock all network/signing boundaries in normal tests. Add 1inch contract tests for wrong spender/router, nonzero value, empty calldata, stale response, API failure, and quote deviation. Add an opt-in Polygon read-only integration check that verifies canonical Router V6 bytecode, token decimals, `/approve/spender`, and a live 1inch v6.1 quote without signing.
 - Update [README.md](README.md) and [study.md](study.md): remove Phase 1 paper-score / `signals` table docs; describe the support-close/internal-range algorithm, offline backtest gate, `decisions`/`trade_executions` schema, dual-timeframe flow (fetch 1h only; derive closed 4H; rebuild on watermark), 1inch Classic Swap API v6.1 and Router V6, modes, dev/prod keystore separation, Pi systemd `LoadCredential` setup for both keystore password and 1inch API key, direct capped router approval/revocation, audit queries, pause/recovery, and buy-only scope. Note that recreating the local DB drops old paper signal rows.
 - Roll out in gates: run the full test suite; run offline `backtest` on a multi-month window and review BUY/HOLD summary; run `trade-check`; collect at least 24 closed 1h decisions in `observe`; run `dry_run` until trigger/skip logs and idempotency are verified; fund only the capped wallet; explicitly approve the capped allowance; enable `live`; stop automatically at 10 USDT0 cumulative spend and review every receipt before raising any limit.
