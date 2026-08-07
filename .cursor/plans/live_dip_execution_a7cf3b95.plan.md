@@ -17,8 +17,11 @@ todos:
   - id: tests
     content: Replace paper-signal tests with support-close/internal-range gates; cover 1h fetch, 1h-to-4h, zone watermark, risk, storage, 1inch response validation, runner, and tx lifecycle.
     status: pending
+  - id: backtest
+    content: Add a minimal offline support_close_v1 replay over historical closed 1h/4h candles; print BUY/HOLD summary before observe/dry_run/live.
+    status: pending
   - id: docs-rollout
-    content: Update README/study to drop paper-score docs; document decisions schema, dev/prod keystores, Pi systemd LoadCredential units, and observe/dry-run/capped-live rollout.
+    content: Update README/study to drop paper-score docs; document decisions schema, backtest gate, dev/prod keystores, Pi systemd LoadCredential units, and observe/dry-run/capped-live rollout.
     status: pending
 isProject: false
 ---
@@ -88,8 +91,9 @@ isProject: false
   - `risk.py`: amount, daily/total caps, balance, allowance, gas, deviation, response-age, pause-file, and in-flight checks.
   - `store.py`: SQLite reads/writes for `decisions` / `trade_executions` and idempotent state transitions.
   - `runner.py`: orchestration only—fetch 1h, maybe derive/rebuild 4H zones, evaluate decision, then mode-gated risk/quote/simulate/sign/send/reconcile.
+  - `backtest.py`: offline replay that walks historical closed 1h candles, rebuilds zones only on newly completed closed 4H bars, and calls the same `support_close_v1` engine. No 1inch, wallet, or gas simulation in this phase.
 - Add only the required `web3`/`eth-account` support in [requirements.txt](requirements.txt); reuse the project's HTTP facilities for 1inch and the standard library rotating logger rather than adding SDK/logging dependencies.
-- Keep [src/cli.py](src/cli.py) thin. Add commands that delegate to the trading package: `wallet-create`, `wallet-status`, `approve-trading`, `revoke-trading`, `trade-check`, and `trade-once`. **Remove** paper `run-once` (or repoint it to `trade-once --mode observe` if a thin alias is useful). Remove `assert_paper_mode_only` / paper-only guardrails that block live work once keystore flows exist; keep fail-closed live confirmation instead.
+- Keep [src/cli.py](src/cli.py) thin. Add commands that delegate to the trading package: `wallet-create`, `wallet-status`, `approve-trading`, `revoke-trading`, `trade-check`, `trade-once`, and `backtest`. **Remove** paper `run-once` (or repoint it to `trade-once --mode observe` if a thin alias is useful). Remove `assert_paper_mode_only` / paper-only guardrails that block live work once keystore flows exist; keep fail-closed live confirmation instead.
 
 ## Wallet, approval, and transaction safety
 - **Dev vs prod keystores (required):**
@@ -118,9 +122,17 @@ isProject: false
 - Default execution checks: full-zone 1h close, strict internal-range `> 50%` pre-entry-high gate, 0.50% maximum slippage, 0.50% maximum Binance-to-DEX quote deviation, configurable maximum gas, minimum POL reserve, a short maximum quote/swap-response age, and a `data/PAUSE_TRADING` kill switch.
 - The dedicated wallet should hold only the small approved USDT0 canary amount plus enough POL for gas.
 
+## Offline backtest (required before live)
+- Goal: prove `support_close_v1` fires sensibly on history before spending canary capital. This is signal-only replay, not a full PnL/portfolio simulator.
+- Input: already stored closed Binance `BTCUSDT` `1h` candles (and derived/closed `4h` bars). Reuse existing backfill + 1h→4h aggregation; do not invent a second candle store.
+- Method: walk each closed 1h candle in time order; rebuild zones only when a newer closed 4H bar appears; call the same decision engine used by `observe`/`dry_run`/`live`; apply the one-buy-per-zone guard; assume fill at the trigger candle `close` for summary only.
+- Output: compact CLI summary — candle count, zone rebuild count, `BUY` count, `HOLD` reason-code tallies, and a short list of BUY timestamps/prices/zone bounds. Optional CSV export is fine later; do not build charts or a research framework in this phase.
+- Scope limits: no 1inch quotes, no slippage model, no gas, no sell/exit logic. Backtest validates entry timing and gate behavior only.
+- Gate: operator reviews at least one multi-month backtest window and confirms BUY density/reason codes look acceptable before enabling `observe` on the Pi. Unit tests cover a tiny synthetic replay; the historical run is an operator CLI step, not CI.
+
 ## Verification and rollout
-- Replace [tests/test_signals.py](tests/test_signals.py) and any paper-score assertions with support-close/internal-range coverage: close at both zone boundaries; no lower-band requirement; no higher zone; overlapping pair; first approach; prior bounce; high below/equal/above midpoint; trigger-candle high excluded; already bought; and stale price. Also cover: closed 1h upsert/read; 1h→4h aggregation and incomplete-bucket rejection; rebuild-zones-only-on-new-4h watermark; zone identity; token units; minimum-output rounding; config/risk gates; SQLite decision idempotency; encrypted-keystore handling in a temporary directory; redaction; runner retries; pending/confirmed/reverted reconciliation.
+- Replace [tests/test_signals.py](tests/test_signals.py) and any paper-score assertions with support-close/internal-range coverage: close at both zone boundaries; no lower-band requirement; no higher zone; overlapping pair; first approach; prior bounce; high below/equal/above midpoint; trigger-candle high excluded; already bought; and stale price. Also cover: closed 1h upsert/read; 1h→4h aggregation and incomplete-bucket rejection; rebuild-zones-only-on-new-4h watermark; zone identity; token units; minimum-output rounding; config/risk gates; SQLite decision idempotency; encrypted-keystore handling in a temporary directory; redaction; runner retries; pending/confirmed/reverted reconciliation; a small synthetic backtest replay.
 - Mock all network/signing boundaries in normal tests. Add 1inch contract tests for wrong spender/router, nonzero value, empty calldata, stale response, API failure, and quote deviation. Add an opt-in Polygon read-only integration check that verifies canonical Router V6 bytecode, token decimals, `/approve/spender`, and a live 1inch v6.1 quote without signing.
-- Update [README.md](README.md) and [study.md](study.md): remove Phase 1 paper-score / `signals` table docs; describe the support-close/internal-range algorithm, `decisions`/`trade_executions` schema, dual-timeframe flow (fetch 1h only; derive closed 4H; rebuild on watermark), 1inch Classic Swap API v6.1 and Router V6, modes, dev/prod keystore separation, Pi systemd `LoadCredential` setup for both keystore password and 1inch API key, direct capped router approval/revocation, audit queries, pause/recovery, and buy-only scope. Note that recreating the local DB drops old paper signal rows.
-- Roll out in gates: run the full test suite; run `trade-check`; collect at least 24 closed 1h decisions in `observe`; run `dry_run` until trigger/skip logs and idempotency are verified; fund only the capped wallet; explicitly approve the capped allowance; enable `live`; stop automatically at 10 USDT0 cumulative spend and review every receipt before raising any limit.
+- Update [README.md](README.md) and [study.md](study.md): remove Phase 1 paper-score / `signals` table docs; describe the support-close/internal-range algorithm, offline backtest gate, `decisions`/`trade_executions` schema, dual-timeframe flow (fetch 1h only; derive closed 4H; rebuild on watermark), 1inch Classic Swap API v6.1 and Router V6, modes, dev/prod keystore separation, Pi systemd `LoadCredential` setup for both keystore password and 1inch API key, direct capped router approval/revocation, audit queries, pause/recovery, and buy-only scope. Note that recreating the local DB drops old paper signal rows.
+- Roll out in gates: run the full test suite; run offline `backtest` on a multi-month window and review BUY/HOLD summary; run `trade-check`; collect at least 24 closed 1h decisions in `observe`; run `dry_run` until trigger/skip logs and idempotency are verified; fund only the capped wallet; explicitly approve the capped allowance; enable `live`; stop automatically at 10 USDT0 cumulative spend and review every receipt before raising any limit.
 - Keep `trade-once` as the only scheduler target. Document example Pi Ubuntu systemd `service` + `timer` units with `LoadCredential=` for the keystore password and 1inch API key that run at minute 2 of each UTC hour, 24/7. Do not install or enable units automatically. Prod rollout (wallet-create, fund, approve, enable live) is operator-only on the Pi, not via Cursor agents.
