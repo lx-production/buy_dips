@@ -1,27 +1,27 @@
 ---
 name: live dip execution
-overview: Add a fail-closed Polygon trading path that keeps the existing Binance 4H zone detector unchanged, fetches only Binance BTCUSDT 1h candles into the existing candles table, derives closed 4H bars from those 1h candles to rebuild zones, and buys exactly 1 USDT of WBTC through 1inch Aggregation Router V6 using the Classic Swap API / Pathfinder v6.1. Retire the Phase 1 paper scorer and signals table in favor of one support_close_v1 decision engine and one decisions schema shared by observe, dry_run, and live. Buy when a closed 1h candle closes inside a support zone below the zone midpoint, and the completed 1h high in a 48h pre-entry lookback is strictly above the midpoint of the internal range between that zone and the next higher zone. Use separate dev/prod keystores; Pi prod runs 24/7 via systemd with LoadCredential for secrets.
+overview: Add a fail-closed Polygon trading path that keeps the existing Binance 4H zone detector unchanged, fetches only Binance BTCUSDT 1h candles into the existing candles table, derives closed 4H bars from those 1h candles to rebuild zones, and buys exactly 1 USDT of PRANA through the in-house swap quote API (POST /api/swap/quote on the local route server). Retire the Phase 1 paper scorer and signals table in favor of one support_close_v1 decision engine and one decisions schema shared by observe, dry_run, and live. Buy when a closed 1h candle closes inside a support zone below the zone midpoint, and the completed 1h high in a 48h pre-entry lookback is strictly above the midpoint of the internal range between that zone and the next higher zone. Use separate dev/prod keystores; Pi prod runs 24/7 via systemd with LoadCredential for secrets.
 todos:
   - id: data-signal
     content: Retire paper scorer/signals table; add support_close_v1 engine + decisions schema; fetch-only-1h; derive closed 4H; rebuild zones on watermark.
     status: pending
   - id: wallet-safety
-    content: Add dev/prod keystore separation, LoadCredential secret loading on Pi, encrypted-keystore CLI flows, contract checks, direct capped 1inch router approval, revocation, and live-mode guards.
+    content: Add dev/prod keystore separation, LoadCredential secret loading on Pi, encrypted-keystore CLI flows, contract checks, direct capped in-house router approval, revocation, and live-mode guards.
     status: pending
   - id: quote-execute
-    content: Add a thin 1inch Classic Swap API v6.1 adapter; validate Aggregation Router V6 quote/swap responses; simulate, execute, and reconcile swaps.
+    content: Add a thin in-house swap quote adapter (POST /api/swap/quote); validate quote/transaction/deadline/verification; approve router if needed; simulate, execute, and reconcile swaps.
     status: pending
   - id: audit-risk
     content: Wire decisions/executions persistence, structured redacted logs, duplicate prevention, pause switch, and canary risk limits.
     status: pending
   - id: tests
-    content: Replace paper-signal tests with support-close/internal-range gates; cover 1h fetch, 1h-to-4h, zone watermark, risk, storage, 1inch response validation, runner, and tx lifecycle.
+    content: Replace paper-signal tests with support-close/internal-range gates; cover 1h fetch, 1h-to-4h, zone watermark, risk, storage, in-house quote response validation, runner, and tx lifecycle.
     status: pending
   - id: backtest
     content: Add a minimal offline support_close_v1 replay over historical closed 1h/4h candles; print BUY/HOLD summary before observe/dry_run/live.
     status: pending
   - id: docs-rollout
-    content: Update README/study to drop paper-score docs; document decisions schema, backtest gate, dev/prod keystores, Pi systemd LoadCredential units, and observe/dry-run/capped-live rollout.
+    content: Update README/study to drop paper-score docs; document decisions schema, backtest gate, dev/prod keystores, Pi systemd LoadCredential units, in-house USDT→PRANA swap flow, and observe/dry-run/capped-live rollout.
     status: pending
 isProject: false
 ---
@@ -36,12 +36,78 @@ isProject: false
 - Rebuild zones automatically only when a newly completed closed 4H bar appears (compared against a watermark). Between 4H closes, keep using the last persisted zone set for the hourly signal.
 - **Retire Phase 1 paper scoring.** Remove the score-based path in [src/signals.py](src/signals.py) (`signal_score`, `ALERT_ONLY` / `STRONG_BUY_SIGNAL`, distance-to-`zone.high` heuristics) and the `signals` table / `insert_signal` helpers. Paper history is disposable; DB may be recreated. Do not keep two signal engines.
 - Replace them with **one** deterministic `support_close_v1` decision engine and **one** `decisions` schema. `observe`, `dry_run`, and `live` all call the same engine; modes only change what happens after a `BUY` decision (record only / quote+simulate / sign+broadcast).
-- Execute a market swap shortly after the UTC hour through the official 1inch Classic Swap API v6.1 on Polygon (chain ID 137). Use its Pathfinder aggregation across supported liquidity sources instead of maintaining protocol-specific Uniswap routes.
-- Pin the on-chain destination to the canonical 1inch Aggregation Router V6 (`0x111111125421ca6dc452d289314280a0f8842a65`). Treat Pathfinder v6.1 as the API/routing version, not a different router contract. Fail closed if the API host/version, chain, spender, router bytecode, or returned transaction target does not match configuration.
-- Operate 24/7 on **Pi Ubuntu prod** with a **systemd** timer/service that invokes one idempotent `trade-once` cycle each hour. Do not auto-install units; document example unit files only.
+- Execute a market swap shortly after the UTC hour through the **in-house swap quote API** on Polygon (chain ID 137): `POST http://127.0.0.1:4173/api/swap/quote` with `tokenInSymbol=USDT`, `tokenOutSymbol=PRANA`, `amountIn="1"`. Do **not** use 1inch Aggregation Router V6 / Classic Swap API / Pathfinder. Routing, calldata, and router selection come from this local server only.
+- Pin execution to the quote response: use `quote.transaction.to` / `data` / `value`, require `chainId == 137`, non-empty calldata, and a usable `deadline`. Prefer validating `routerAddress` against an allowlisted Uniswap SwapRouter02 (example from quote: `0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45`) when configured; fail closed if host, chain, token symbols, recipient, amount, or transaction target do not match configuration.
+- Operate 24/7 on **Pi Ubuntu prod** with a **systemd** timer/service that invokes one idempotent `trade-once` cycle each hour. Do not auto-install units; document example unit files only. The in-house quote server (`127.0.0.1:4173`) must already be running on the same host (or reachable as configured); the bot does not start that server.
 - Use **separate keystores for dev and prod**. Never share one private key across machines. Dev uses a throwaway wallet for `observe` / `dry_run` and local tests; prod Pi holds the only live canary wallet. Config selects the keystore path per environment.
 - Keep keystores gitignored and outside agent-exposed paths where practical. Never commit a private key, password, API key, raw signed transaction, or RPC URL containing the API key.
-- **Prod Pi:** inject the keystore password and 1inch API key via systemd **`LoadCredential=`** (not a plain `EnvironmentFile` in the repo). **Dev/local:** secrets may come from env or prompt for manual runs only; do not copy prod keystore or prod credentials onto the dev machine.
+- **Prod Pi:** inject the keystore password (and optionally Polygon RPC URL) via systemd **`LoadCredential=`** (not a plain `EnvironmentFile` in the repo). **No 1inch API key.** **Dev/local:** secrets may come from env or prompt for manual runs only; do not copy prod keystore or prod credentials onto the dev machine.
+
+## In-house swap quote API (USDT → PRANA)
+- Endpoint: `POST http://127.0.0.1:4173/api/swap/quote` (base URL configurable; default loopback).
+- Required header: `Content-Type: application/json`. **Do not send `Origin`.**
+- Body max **2 KB**. JSON shape (same as UI):
+
+```json
+{
+  "tokenInSymbol": "USDT",
+  "tokenOutSymbol": "PRANA",
+  "amountIn": "1",
+  "recipient": "0xBotAddressHere",
+  "slippageBps": 50
+}
+```
+
+- Field meanings:
+  - `tokenInSymbol` / `tokenOutSymbol`: allowlist `PRANA`, `WBTC`, `POL`, `USDC`, `USDT`, `WETH`, `DAI`; must differ. Canary path always uses `USDT` → `PRANA`.
+  - `amountIn`: human-readable **string** (not wei); server `parseUnits` by token decimals. Canary always `"1"`.
+  - `recipient`: wallet that receives token out (bot signer address).
+  - `slippageBps`: basis points; `50` = 0.5%. Clamp 1–500; missing/invalid → default `50`.
+- Example curl (no Origin header):
+
+```bash
+curl -sS -X POST 'http://127.0.0.1:4173/api/swap/quote' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "tokenInSymbol": "USDT",
+    "tokenOutSymbol": "PRANA",
+    "amountIn": "1",
+    "recipient": "0x1234567890123456789012345678901234567890",
+    "slippageBps": 50
+  }'
+```
+
+- Success response fields the bot uses:
+
+```json
+{
+  "request": {
+    "tokenInSymbol": "USDT",
+    "tokenOutSymbol": "PRANA",
+    "amountIn": "1",
+    "amountInRaw": "1000000",
+    "recipient": "0x...",
+    "slippageBps": 50,
+    "chainId": 137
+  },
+  "amountOut": "...",
+  "amountOutRaw": "...",
+  "minimumAmountOut": "...",
+  "routerAddress": "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
+  "transaction": {
+    "to": "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
+    "data": "0x...",
+    "value": "0"
+  },
+  "deadline": 1730000000,
+  "verification": { "version": 2, "token": "...", "expiresAt": "..." }
+}
+```
+
+- After a valid quote:
+  1. If token in is ERC-20: `approve(router, amountInRaw)` when allowance is too low (router = `quote.routerAddress` / `quote.transaction.to`).
+  2. Broadcast: `to` = `quote.transaction.to`, `data` = `quote.transaction.data`, `value` = `BigInt(quote.transaction.value)` (POL native may be > 0; USDT/PRANA usually `"0"`).
+  3. Must complete before `deadline` (~3 minutes from quote time). Reject stale quotes; never sign after deadline.
 
 ## Single decision engine (`support_close_v1`)
 - Output is gate-based, not scored. Every persisted decision has exactly one `decision` (`BUY` or `HOLD`) and exactly one `reason_code` from the closed set below. Evaluate in this order; the first matching failure wins:
@@ -51,7 +117,7 @@ isProject: false
   4. `HIGH_NOT_ABOVE_INTERNAL_MID` → `HOLD`: no pre-entry high strictly above `internal_range_midpoint` (empty 48h/pre-entry set, or `pre_entry_closed_high <= internal_range_midpoint`).
   5. `BUY_GATES_PASSED` → `BUY`: every gate above passed.
 - Decision trusts zones already produced by the zones finder and candles already stored in DB. It does not re-validate zone construction or candle integrity. An empty zone list simply yields `CLOSE_OUTSIDE_SUPPORT`. Fetch/API failures and zone-build failures are runner/zones-finder errors, not decision `reason_code`s.
-- These are the complete decision reason codes. Pause state, daily/cumulative limits, wallet balance/allowance, gas, quote deviation/freshness, 1inch validation, and simulation do **not** rewrite a valid `BUY` as `HOLD`; they are downstream execution skip/failure reasons stored in `trade_executions`. This keeps the signal deterministic and identical across `observe`, `dry_run`, `live`, and backtest.
+- These are the complete decision reason codes. Pause state, daily/cumulative limits, wallet balance/allowance, gas, quote freshness/`deadline`, router validation, and simulation do **not** rewrite a valid `BUY` as `HOLD`; they are downstream execution skip/failure reasons stored in `trade_executions`. This keeps the signal deterministic and identical across `observe`, `dry_run`, `live`, and backtest.
 - Shared payload for every cycle: current closed 1h candle/time, selected lower-zone fingerprint and bounds (including zone mid), adjacent higher-zone fingerprint and bounds, internal-range midpoint, 48h lookback window, pre-entry closed-candle high, gate results, whether zones rebuilt this cycle, and strategy/config version.
 - `observe` = same signal + persist decision (no DEX). This is the useful “paper” path for the live strategy.
 - `dry_run` = same signal + quote/simulate + persist, no signing.
@@ -81,65 +147,65 @@ isProject: false
    If more than one zone contains the close, choose the one with the highest `low`.
 7. Persist every cycle outcome into `decisions` (including `HOLD` with reason codes).
 8. Once `BUY_GATES_PASSED` is selected, `observe` stops after persistence. `dry_run` / `live` first apply pause, unresolved-transaction, daily/cumulative cap, balance, allowance, and gas-reserve checks. If blocked, preserve the `BUY` decision and persist the downstream skip reason in `trade_executions`.
-9. If execution checks pass, call the 1inch Classic Swap API v6.1 for a fresh `USDT0 -> WBTC` quote and `/swap` transaction for exactly 1 USDT0, with the bot wallet explicitly set as sender and receiver and partial fill disabled. Continue only when its effective WBTC/USDT price differs from the closed Binance reference by no more than the configured quote-deviation limit. Require the response to be fresh, the spender/`tx.to` to equal the pinned Router V6 address, `tx.value` to be zero for this ERC-20 swap, and calldata to be non-empty; then run `eth_call` and `estimate_gas` before signing. Persist quote/validation/simulation failures as execution outcomes, not decision reason codes.
+9. If execution checks pass, call the in-house quote API for a fresh `USDT → PRANA` quote for exactly 1 USDT (`amountIn="1"`), with the bot wallet as `recipient` and configured `slippageBps` (default 50). Continue only when the response echoes the expected symbols/amount/recipient/`chainId=137`, `transaction.to` equals `routerAddress` (and matches the configured router allowlist if set), `transaction.value` is `"0"` for this ERC-20 swap, calldata is non-empty, `deadline` is still in the future with enough margin to sign/broadcast, and `amountOut` / `minimumAmountOut` are present and parseable. Then run `eth_call` and `estimate_gas` before signing. Persist quote/validation/simulation failures as execution outcomes, not decision reason codes. **Do not** apply a Binance-BTC-to-DEX price-deviation check to PRANA quotes (no comparable BTCUSDT→PRANA spot on Binance); trust route + slippage + deadline gates instead.
 
 ## Trading package and configuration
-- Extend [src/config.py](src/config.py) and [config.example.yaml](config.example.yaml) with typed sections for `price_feed`, `wallet`, `strategy`, `execution`, `risk`, and `logging`. Remove obsolete `SignalConfig` score thresholds (`near_support_pct_*`, `dip_*`) once the paper scorer is gone. Put paths and non-secret limits in YAML (`wallet.keystore_path`, optional credential paths, pinned 1inch API base/version, and Router V6 address); accept the Polygon RPC URL, 1inch API key, and keystore password only from env, systemd credentials, or manual prompt—never from committed YAML.
+- Extend [src/config.py](src/config.py) and [config.example.yaml](config.example.yaml) with typed sections for `price_feed`, `wallet`, `strategy`, `execution`, `risk`, and `logging`. Remove obsolete `SignalConfig` score thresholds (`near_support_pct_*`, `dip_*`) once the paper scorer is gone. Put paths and non-secret limits in YAML (`wallet.keystore_path`, optional credential paths, in-house quote base URL defaulting to `http://127.0.0.1:4173`, pinned router allowlist, token symbols). Accept the Polygon RPC URL and keystore password only from env, systemd credentials, or manual prompt—never from committed YAML. No 1inch API key.
 - Add `src/trading/` with focused modules:
   - `models.py`: decision, quote, swap transaction, intent, and receipt models using `Decimal`/integer token units rather than binary floats.
-  - `constants.py`: chain ID 137 and an immutable allowlist for WBTC, USDT0, and 1inch Aggregation Router V6; runtime checks must verify chain ID, bytecode, token decimals, and wallet address.
+  - `constants.py`: chain ID 137 and an immutable allowlist for USDT, PRANA, and the expected SwapRouter02 address; runtime checks must verify chain ID, bytecode, token decimals, and wallet address.
   - `binance_hourly.py`: thin helper to fetch/validate/upsert closed Binance `BTCUSDT` `1h` candles into the existing `candles` table (reuse [src/binance_client.py](src/binance_client.py) and [src/db.py](src/db.py) helpers). No live `4h` Binance fetch in this path.
   - `aggregate_4h.py`: derive closed Binance-aligned 4H bars from closed 1h candles; reject incomplete buckets.
   - `zone_refresh.py`: compare derived/latest closed 4h `open_time` against the rebuild watermark, rebuild zones only when newer, persist them, and expose the active zone set for the signal.
   - `signal.py` and `zone_identity.py`: the sole support-close/internal-range decision engine and stable source-time fingerprint. Keep the 48h backward scan and midpoint calculation here as small pure helpers; replace [src/signals.py](src/signals.py) and do not leave a parallel scorer.
   - `wallet.py`: encrypted-keystore creation/loading, password resolution (env → systemd credential file → optional prompt), address verification, permissions checks, and signing only after all other gates pass.
-  - `oneinch.py`: a thin HTTP adapter for official Classic Swap API v6.1 quote, spender, and swap calls plus strict response/transaction validation. Do not add protocol-specific route selection or a 1inch SDK unless the thin adapter proves insufficient.
+  - `prana_swap.py`: a thin HTTP adapter for `POST /api/swap/quote` plus strict response/transaction/`deadline` validation. Never send an `Origin` header. Do not add 1inch or protocol-specific route selection; the local server owns routing.
   - `transaction.py`: shared simulation, gas estimation, signing, broadcast, receipt decoding, and pending-transaction reconciliation.
-  - `risk.py`: amount, daily/total caps, balance, allowance, gas, deviation, response-age, pause-file, and in-flight checks.
+  - `risk.py`: amount, daily/total caps, balance, allowance, gas, response-age/`deadline`, pause-file, and in-flight checks.
   - `store.py`: SQLite reads/writes for `decisions` / `trade_executions` and idempotent state transitions.
   - `runner.py`: orchestration only—fetch 1h, maybe derive/rebuild 4H zones, evaluate decision, then mode-gated risk/quote/simulate/sign/send/reconcile.
-  - `backtest.py`: offline replay that walks historical closed 1h candles, rebuilds zones only on newly completed closed 4H bars, and calls the same `support_close_v1` engine. No 1inch, wallet, or gas simulation in this phase.
-- Add only the required `web3`/`eth-account` support in [requirements.txt](requirements.txt); reuse the project's HTTP facilities for 1inch and the standard library rotating logger rather than adding SDK/logging dependencies.
+  - `backtest.py`: offline replay that walks historical closed 1h candles, rebuilds zones only on newly completed closed 4H bars, and calls the same `support_close_v1` engine. No swap quote, wallet, or gas simulation in this phase.
+- Add only the required `web3`/`eth-account` support in [requirements.txt](requirements.txt); reuse the project's HTTP facilities for the local quote API and the standard library rotating logger rather than adding SDK/logging dependencies.
 - Keep [src/cli.py](src/cli.py) thin. Add commands that delegate to the trading package: `wallet-create`, `wallet-status`, `approve-trading`, `revoke-trading`, `trade-check`, `trade-once`, and `backtest`. **Remove** paper `run-once` (or repoint it to `trade-once --mode observe` if a thin alias is useful). Remove `assert_paper_mode_only` / paper-only guardrails that block live work once keystore flows exist; keep fail-closed live confirmation instead.
 
 ## Wallet, approval, and transaction safety
 - **Dev vs prod keystores (required):**
   - **Dev/local:** `data/wallet/trader-dev.json` (or temp keystore in tests). Fund minimally or not at all. Default modes `observe` / `dry_run`. No prod keystore on dev machines.
-  - **Prod Pi:** `data/wallet/trader-prod.json` (or `/var/lib/buy-the-dips-bot/wallet/trader-prod.json`). Only this wallet receives canary USDT0/POL and live approvals. Operator creates it manually on the Pi; agents must not run prod `wallet-create` with real secrets.
+  - **Prod Pi:** `data/wallet/trader-prod.json` (or `/var/lib/buy-the-dips-bot/wallet/trader-prod.json`). Only this wallet receives canary USDT/POL and live approvals. Operator creates it manually on the Pi; agents must not run prod `wallet-create` with real secrets.
   - Config example documents both paths; each machine uses the path matching its role. `wallet-status` prints address only.
 - `wallet-create` generates the account locally, encrypts it with `eth-account`, writes to the configured keystore path with mode `0600`, and prints only the public address. Update [.gitignore](.gitignore) to exclude keystores and runtime logs.
-- **Prod secret delivery (Pi Ubuntu):** document a systemd `service` + `timer` using `LoadCredential=keystore_password:/etc/buy-the-dips-bot/keystore.password` and `LoadCredential=oneinch_api_key:/etc/buy-the-dips-bot/oneinch.api-key` (and optionally `LoadCredential=polygon_rpc_url:...`). Bot reads the matching files under `/run/credentials/<unit>/` at runtime. Source files under `/etc/buy-the-dips-bot/` are `chmod 600`, owned by root; service runs as dedicated `botuser`. Do not store prod secrets in the git repo or Cursor workspace.
-- **Dev secret delivery:** local manual runs may use `KEYSTORE_PASSWORD` and `ONEINCH_API_KEY` in shell env for throwaway-wallet testing only. Never copy prod credential files to dev.
-- Approval is never automatic. `approve-trading` first verifies Polygon chain ID 137, canonical Router V6 code, token symbol/decimals, balances, configured wallet, and that 1inch `/approve/spender` returns the same pinned router. It then grants the router a direct USDT0 allowance capped to the 10 USDT0 canary total; never grant an unlimited allowance. Handle USDT's zero-reset requirement when changing a non-zero allowance. `revoke-trading` resets that allowance to zero. Run prod approvals only on the Pi against `trader-prod`.
-- Ask 1inch `/swap` to build the transaction for exactly `1_000_000` USDT0 units, the configured slippage, `allowPartialFill=false`, and the bot wallet as sender/receiver. Reject stale or mismatched responses, then run `eth_call` plus `estimate_gas` before signing. Do not locally encode Uniswap paths or 1inch router calldata.
+- **Prod secret delivery (Pi Ubuntu):** document a systemd `service` + `timer` using `LoadCredential=keystore_password:/etc/buy-the-dips-bot/keystore.password` (and optionally `LoadCredential=polygon_rpc_url:...`). Bot reads the matching files under `/run/credentials/<unit>/` at runtime. Source files under `/etc/buy-the-dips-bot/` are `chmod 600`, owned by root; service runs as dedicated `botuser`. Do not store prod secrets in the git repo or Cursor workspace. No 1inch credential.
+- **Dev secret delivery:** local manual runs may use `KEYSTORE_PASSWORD` in shell env for throwaway-wallet testing only. Never copy prod credential files to dev.
+- Approval is never automatic on every trade beyond the per-quote allowance top-up when needed. `approve-trading` first verifies Polygon chain ID 137, allowlisted router code, token symbol/decimals, balances, and configured wallet. It then grants the router a direct USDT allowance capped to the 10 USDT canary total; never grant an unlimited allowance. Handle USDT's zero-reset requirement when changing a non-zero allowance. `revoke-trading` resets that allowance to zero. Run prod approvals only on the Pi against `trader-prod`. Live path may still call `approve(router, amountInRaw)` when allowance is below the quote's `amountInRaw`.
+- Ask the in-house quote API for exactly 1 USDT → PRANA with the bot as `recipient` and configured `slippageBps`. Reject stale or mismatched responses (wrong symbols, amount, recipient, chain, router, nonzero value for ERC-20, empty calldata, expired/`deadline` too soon), then run `eth_call` plus `estimate_gas` before signing. Do not locally encode Uniswap paths or router calldata; use `quote.transaction` as-is.
 - Persist the reserved nonce and locally derived transaction hash before broadcast. On timeout, reconcile that exact hash instead of creating another trade. Never auto-replace a pending transaction and never open a second trade while one is unresolved.
-- Decode the WBTC `Transfer` event and receipt to store actual output, block, gas used, and final status. WBTC remains in the bot wallet; selling or stop-loss behavior is intentionally outside this phase.
+- Decode the PRANA `Transfer` event and receipt to store actual output, block, gas used, and final status. PRANA remains in the bot wallet; selling or stop-loss behavior is intentionally outside this phase.
 
 ## Persistence and logging
 - Do **not** add an `hourly_price_observations` table. Persist 1h decision prices in the existing `candles` table with `timeframe="1h"`. Persist derived closed 4H bars in the same `candles` table with `timeframe="4h"`.
 - **Drop the `signals` table** and `insert_signal` from [src/db.py](src/db.py). Paper rows are not migrated. Prefer recreating the local SQLite DB (or documenting a one-shot drop) rather than keeping a dual schema.
 - Add a single `decisions` table for every hourly evaluation (`BUY`/`HOLD`) and a `trade_executions` table for on-chain work. Uniqueness around closed 1h decision time, strategy/zone fingerprint, and transaction hash so reruns cannot duplicate a buy.
-- Decision columns (conceptual): candle open/close times and reference close, lower/higher zone fingerprints and bounds, internal-range midpoint, pre-entry closed high, `decision`, the closed-set `reason_code`, gate JSON, zones-rebuilt flag, mode, strategy/config version, sanitized error. Execution columns: decision id, execution status/skip/failure reason, 1inch API/router version, sanitized route summary, quote/minimum output, nonce, transaction hash, receipt fields, actual WBTC output, status. Never persist API keys, raw calldata, or signed transactions.
+- Decision columns (conceptual): candle open/close times and reference close, lower/higher zone fingerprints and bounds, internal-range midpoint, pre-entry closed high, `decision`, the closed-set `reason_code`, gate JSON, zones-rebuilt flag, mode, strategy/config version, sanitized error. Execution columns: decision id, execution status/skip/failure reason, quote server/router version summary, sanitized route summary, quote/`minimumAmountOut`, nonce, transaction hash, receipt fields, actual PRANA output, status. Never persist API keys, raw calldata, signed transactions, or `verification.token`.
 - Watermark = the last closed 4H `open_time` for which zones were already rebuilt. Store it in `bot_state` so each hourly cycle can cheaply answer “did a newer closed 4H appear since last rebuild?” without re-running the detector every hour.
-- Add structured JSON logging to stdout and a rotating ignored file. Include a per-cycle correlation ID and every no-trade/trade transition. Add redaction tests to ensure API keys, passwords, decrypted keys, RPC URLs, and signed transaction bytes never appear.
+- Add structured JSON logging to stdout and a rotating ignored file. Include a per-cycle correlation ID and every no-trade/trade transition. Add redaction tests to ensure passwords, decrypted keys, RPC URLs, signed transaction bytes, and quote verification tokens never appear.
 
 ## Default canary controls
 - Modes: `observe` records 1h candles and decisions only; `dry_run` also quotes and simulates; `live` may sign and broadcast. Default to `observe`, and require both live config and a separate wallet-specific confirmation value to enter `live`.
-- Initial hard limits: exactly 1 USDT0 per trade, at most 3 trades per UTC day, and 10 USDT0 cumulative live spend. Increasing the cumulative cap requires an explicit config change after review.
-- Default execution checks: 1h close inside support and strictly below zone mid, 48h pre-entry lookback, strict internal-range `> 50%` pre-entry-high gate, 0.50% maximum slippage, 0.50% maximum Binance-to-DEX quote deviation, configurable maximum gas, minimum POL reserve, a short maximum quote/swap-response age, and a `data/PAUSE_TRADING` kill switch.
-- The dedicated wallet should hold only the small approved USDT0 canary amount plus enough POL for gas.
+- Initial hard limits: exactly 1 USDT per trade, at most 3 trades per UTC day, and 10 USDT cumulative live spend. Increasing the cumulative cap requires an explicit config change after review.
+- Default execution checks: 1h close inside support and strictly below zone mid, 48h pre-entry lookback, strict internal-range `> 50%` pre-entry-high gate, 0.50% slippage (`slippageBps=50`), quote must finish before `deadline` (~3 min), configurable maximum gas, minimum POL reserve, a short maximum quote-response age, and a `data/PAUSE_TRADING` kill switch. No Binance-to-DEX PRANA price-deviation gate.
+- The dedicated wallet should hold only the small approved USDT canary amount plus enough POL for gas.
 
 ## Offline backtest (required before live)
 - Goal: prove `support_close_v1` fires sensibly on history before spending canary capital. This is signal-only replay, not a full PnL/portfolio simulator.
 - Input: already stored closed Binance `BTCUSDT` `1h` candles (and derived/closed `4h` bars). Reuse existing backfill + 1h→4h aggregation; do not invent a second candle store.
 - Method: walk each closed 1h candle in time order; rebuild zones only when a newer closed 4H bar appears; call the same decision engine used by `observe`/`dry_run`/`live`; assume fill at the trigger candle `close` for summary only.
 - Output: compact CLI summary — candle count, zone rebuild count, `BUY` count, `HOLD` reason-code tallies, and a short list of BUY timestamps/prices/zone bounds. Optional CSV export is fine later; do not build charts or a research framework in this phase.
-- Scope limits: no 1inch quotes, no slippage model, no gas, no sell/exit logic. Backtest validates entry timing and gate behavior only.
+- Scope limits: no swap quotes, no slippage model, no gas, no sell/exit logic. Backtest validates entry timing and gate behavior only.
 - Gate: operator reviews at least one multi-month backtest window and confirms BUY density/reason codes look acceptable before enabling `observe` on the Pi. Unit tests cover a tiny synthetic replay; the historical run is an operator CLI step, not CI.
 
 ## Verification and rollout
 - Replace [tests/test_signals.py](tests/test_signals.py) and any paper-score assertions with one direct test for every reason code plus precedence tests proving only the first failed gate is stored. Cover: empty zones / close outside support; close at zone low; close just below/at/above zone mid; no higher zone including overlapping/touching neighbor; empty pre-entry leg and high below/equal/above internal-range midpoint all under the high gate; 48h cap ignoring older highs/touches; first approach; prior bounce inside window; weak retest after a shallow bounce; trigger-candle high excluded; open candle ignored in favor of latest closed DB row; and `BUY_GATES_PASSED`. Also cover: closed 1h upsert/read; 1h→4h aggregation and incomplete-bucket rejection; rebuild-zones-only-on-new-4h watermark; zone identity; token units; minimum-output rounding; config/risk gates; SQLite decision idempotency; execution skip reasons preserving the original `BUY`; encrypted-keystore handling in a temporary directory; redaction; runner retries; pending/confirmed/reverted reconciliation; and a small synthetic backtest replay.
-- Mock all network/signing boundaries in normal tests. Add 1inch contract tests for wrong spender/router, nonzero value, empty calldata, stale response, API failure, and quote deviation. Add an opt-in Polygon read-only integration check that verifies canonical Router V6 bytecode, token decimals, `/approve/spender`, and a live 1inch v6.1 quote without signing.
-- Update [README.md](README.md) and [study.md](study.md): remove Phase 1 paper-score / `signals` table docs; describe the support-close/internal-range algorithm, offline backtest gate, `decisions`/`trade_executions` schema, dual-timeframe flow (fetch 1h only; derive closed 4H; rebuild on watermark), 1inch Classic Swap API v6.1 and Router V6, modes, dev/prod keystore separation, Pi systemd `LoadCredential` setup for both keystore password and 1inch API key, direct capped router approval/revocation, audit queries, pause/recovery, and buy-only scope. Note that recreating the local DB drops old paper signal rows.
-- Roll out in gates: run the full test suite; run offline `backtest` on a multi-month window and review BUY/HOLD summary; run `trade-check`; collect at least 24 closed 1h decisions in `observe`; run `dry_run` until trigger/skip logs and idempotency are verified; fund only the capped wallet; explicitly approve the capped allowance; enable `live`; stop automatically at 10 USDT0 cumulative spend and review every receipt before raising any limit.
-- Keep `trade-once` as the only scheduler target. Document example Pi Ubuntu systemd `service` + `timer` units with `LoadCredential=` for the keystore password and 1inch API key that run at minute 2 of each UTC hour, 24/7. Do not install or enable units automatically. Prod rollout (wallet-create, fund, approve, enable live) is operator-only on the Pi, not via Cursor agents.
+- Mock all network/signing boundaries in normal tests. Add quote-adapter contract tests for wrong router/`transaction.to`, nonzero value, empty calldata, stale/`deadline` expired response, API failure, wrong symbols/amount/recipient/chainId, and missing Origin-free header behavior. Add an opt-in Polygon read-only integration check that verifies allowlisted router bytecode, token decimals, and a live local `USDT→PRANA` quote without signing (requires quote server up).
+- Update [README.md](README.md) and [study.md](study.md): remove Phase 1 paper-score / `signals` table docs; describe the support-close/internal-range algorithm, offline backtest gate, `decisions`/`trade_executions` schema, dual-timeframe flow (fetch 1h only; derive closed 4H; rebuild on watermark), in-house `POST /api/swap/quote` USDT→PRANA flow (approve → broadcast before deadline), modes, dev/prod keystore separation, Pi systemd `LoadCredential` setup for keystore password, direct capped router approval/revocation, audit queries, pause/recovery, and buy-only scope. Note that recreating the local DB drops old paper signal rows. Explicitly document that 1inch is **not** used.
+- Roll out in gates: run the full test suite; run offline `backtest` on a multi-month window and review BUY/HOLD summary; run `trade-check`; collect at least 24 closed 1h decisions in `observe`; run `dry_run` until trigger/skip logs and idempotency are verified; fund only the capped wallet; explicitly approve the capped allowance; enable `live`; stop automatically at 10 USDT cumulative spend and review every receipt before raising any limit.
+- Keep `trade-once` as the only scheduler target. Document example Pi Ubuntu systemd `service` + `timer` units with `LoadCredential=` for the keystore password that run at minute 2 of each UTC hour, 24/7. Do not install or enable units automatically. Prod rollout (wallet-create, fund, approve, enable live, ensure quote server on `:4173`) is operator-only on the Pi, not via Cursor agents.
