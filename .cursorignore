@@ -1,0 +1,8 @@
+**/.env
+**/.env.*
+**/*seed*
+**/*mnemonic*
+**/*private-key*
+**/secrets/**
+**/*.key
+**/*.pem
