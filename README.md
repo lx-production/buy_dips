@@ -48,6 +48,12 @@ data/prana_buy_the_dips.sqlite
 
 ## Backfill 12 Months Of BTCUSDT 4H Candles
 
+# Backfill khoảng 12 tháng candle 1h
+python -m src.cli backfill --timeframe 1h
+
+# Backfill khoảng 12 tháng candle 4h
+python -m src.cli backfill --timeframe 4h
+
 ```bash
 python3 -m src.cli backfill
 ```
