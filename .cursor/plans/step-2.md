@@ -82,11 +82,10 @@ SWAP_ROUTER_02_ADDRESSES = frozenset({
 })
 
 USDT_DECIMALS = 6
+PRANA_DECIMALS = 9
 CANARY_ALLOWANCE_USDT_RAW = 10_000_000
 TRADE_AMOUNT_USDT_RAW = 1_000_000
 ```
-
-Địa chỉ USDT trên Polygon được Polygon công bố tại [mapped-token list](https://docs.polygon.technology/pos/reference/mapped-tokens). PRANA contract hiện được explorer nhận diện là `Prana_v2` tại [PolygonScan](https://polygonscan.com/address/0x928277e774F34272717EADFafC3fd802dAfBD0F5).
 
 Có một chi tiết cần xử lý rõ: cùng địa chỉ `0xc213...` hiện có thể trả metadata `USDT0`, trong khi quote API của plan vẫn nhận `tokenInSymbol="USDT"`. Vì vậy nên tách:
 
