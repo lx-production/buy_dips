@@ -13,7 +13,6 @@ os.chdir(PROJECT_ROOT)
 
 from src.candles import backfill_range  # noqa: E402
 from src.config import load_config  # noqa: E402
-from src.paper_trading import PAPER_MODE_WARNING  # noqa: E402
 from src.utils import resolve_path  # noqa: E402
 
 # Extend history back to this date (UTC, start of day).
@@ -32,7 +31,6 @@ def main() -> int:
     start_time = _iso_to_ms(START_ISO)
     end_time = _iso_to_ms(END_EXCLUSIVE_ISO)
 
-    print(PAPER_MODE_WARNING)
     print(f"Backfilling {config.symbol} {config.timeframe} from {START_ISO} to before {END_EXCLUSIVE_ISO}")
 
     try:

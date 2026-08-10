@@ -13,4 +13,4 @@ from src.cli import main  # noqa: E402
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(["run-once"]))
+    raise SystemExit(main(["trade-once", "--mode", "observe"]))

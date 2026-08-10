@@ -14,11 +14,13 @@ zones: # values ending in _pct are fractions of price, not percent labels
   external_min_swing_pct: 2.5
   show_internal_pivots: false
 
-signals:
-  near_support_pct_tight: 0.25
-  near_support_pct_medium: 0.50
-  near_support_pct_loose: 1.00
-  dip_lookback_candles: 20
-  dip_threshold_1_pct: 3.0
-  dip_threshold_2_pct: 5.0
-  dip_threshold_3_pct: 8.0
+price_feed:
+  timeframe: 1h # the live cycle fetches only 1h klines
+  fetch_limit: 168
+
+strategy:
+  version: support_close_v1
+  config_version: "1"
+  dip_lookback_hours: 48
+  cooldown_hours: 24
+  below_zone_min_pct: 0.70

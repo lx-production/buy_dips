@@ -20,14 +20,17 @@ class ZoneConfig(BaseModel):
     show_internal_pivots: bool = False
 
 
-class SignalConfig(BaseModel):
-    near_support_pct_tight: float = 0.25
-    near_support_pct_medium: float = 0.50
-    near_support_pct_loose: float = 1.00
-    dip_lookback_candles: int = 20
-    dip_threshold_1_pct: float = 3.0
-    dip_threshold_2_pct: float = 5.0
-    dip_threshold_3_pct: float = 8.0
+class PriceFeedConfig(BaseModel):
+    timeframe: str = "1h"
+    fetch_limit: int = 168
+
+
+class StrategyConfig(BaseModel):
+    version: str = "support_close_v1"
+    config_version: str = "1"
+    dip_lookback_hours: int = 48
+    cooldown_hours: int = 24
+    below_zone_min_pct: float = 0.70
 
 
 class AppConfig(BaseModel):
@@ -36,7 +39,8 @@ class AppConfig(BaseModel):
     timeframe: str = "4h"
     database_path: str = "data/prana_buy_the_dips.sqlite"
     zones: ZoneConfig = Field(default_factory=ZoneConfig)
-    signals: SignalConfig = Field(default_factory=SignalConfig)
+    price_feed: PriceFeedConfig = Field(default_factory=PriceFeedConfig)
+    strategy: StrategyConfig = Field(default_factory=StrategyConfig)
 
 
 def load_config(path: str | Path | None = None) -> AppConfig:

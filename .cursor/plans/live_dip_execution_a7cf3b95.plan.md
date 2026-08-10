@@ -4,7 +4,7 @@ overview: "Add a fail-closed Polygon trading flow that keeps the existing Binanc
 todos:
   - id: data-signal
     content: Retire paper scorer/signals table; add one support_close_v1 dip-to-support flow (nearest 48h close above internal midpoint + current close inside-below-mid or below-zone 70–100% band + per-zone 24h no-buy) and decisions schema; fetch-only-1h; derive closed 4H; abort on overdue incomplete 4H; build/validate atomic bot_state zone watermark; resolve source_indexes→open_times/zone_source_time and create/persist deterministic zf1 fingerprints in zone_refresh before signal evaluation.
-    status: pending
+    status: completed
   - id: wallet-safety
     content: Add dev/prod keystore separation, LoadCredential secret loading on Pi, encrypted-keystore CLI flows, contract checks, direct capped in-house router approval, revocation, and live-mode guards.
     status: pending

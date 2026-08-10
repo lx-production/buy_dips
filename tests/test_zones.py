@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import pandas as pd
 
-from src.config import AppConfig
-from src.signals import generate_buy_the_dips_signal
 from src.zones import (
     StructurePivot,
     SupportCandidate,
@@ -920,7 +918,7 @@ def test_structure_pivot_labels_are_preserved_for_chart_debugging() -> None:
     assert [pivot.structure_role for pivot in pivots] == ["L", "H", "HL", "HH"]
 
 
-def test_structure_v1_output_is_signal_compatible() -> None:
+def test_structure_v1_output_has_complete_zone_fields() -> None:
     df = _ohlc_from_closes([110, 105, 100, 106, 112, 108, 101, 107, 113, 109], wick=0.5)
     result = detect_support_resistance_zones_structure_v1(
         df,
@@ -935,10 +933,6 @@ def test_structure_v1_output_is_signal_compatible() -> None:
         for key in ("low", "high", "mid", "width", "width_pct", "touches", "origin", "role", "source_closes", "source_indexes"):
             assert key in zone
 
-    signal = generate_buy_the_dips_signal(df, result, AppConfig())
-    assert signal["decision"] in {"HOLD", "ALERT_ONLY", "PREPARE_MANUAL_REVIEW", "STRONG_BUY_SIGNAL"}
-    assert signal["nearest_resistance_low"] is None
-    assert signal["distance_to_resistance_pct"] is None
 
 
 def _ohlc_from_closes(closes: list[float], wick: float) -> pd.DataFrame:

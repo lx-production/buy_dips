@@ -1,0 +1,242 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable
+
+import pandas as pd
+
+from ..config import ZoneConfig
+from ..db import connect, init_db
+from ..utils import json_default, utc_seconds
+from ..zones import aggregate_ohlc_to_daily, detect_support_resistance_zones
+from .constants import DETECTOR_VERSION, EXCHANGE, FOUR_HOURS_MS, SYMBOL, ZONE_TIMEFRAME
+from .state_store import (
+    StateStoreError,
+    get_zone_rebuild_watermark,
+    set_zone_rebuild_watermark,
+    validate_zone_rebuild_watermark,
+    validate_zone_snapshot,
+    zone_rebuild_watermark_key,
+)
+from .zone_identity import fingerprint_zone
+
+
+Detector = Callable[..., dict[str, list[dict[str, Any]]]]
+
+
+@dataclass(frozen=True)
+class ZoneRefreshResult:
+    zones: list[dict[str, Any]]
+    zone_set_as_of: int
+    rebuilt: bool
+
+
+class ZoneRefreshError(RuntimeError):
+    pass
+
+
+def refresh_zones(
+    database_path: str | Path,
+    four_hour_df: pd.DataFrame,
+    *,
+    zone_config: ZoneConfig,
+    exchange: str = EXCHANGE,
+    symbol: str = SYMBOL,
+    detector_version: str = DETECTOR_VERSION,
+    detector: Detector = detect_support_resistance_zones,
+    now_s: int | None = None,
+) -> ZoneRefreshResult:
+    """Validate/load or atomically rebuild the latest fingerprinted zone snapshot."""
+    if four_hour_df is None or four_hour_df.empty or "open_time" not in four_hour_df.columns:
+        raise ZoneRefreshError("No completed closed 4h candles are available")
+    closed = four_hour_df.copy()
+    if "is_closed" in closed.columns:
+        closed = closed[closed["is_closed"].astype(int) == 1].copy()
+    closed = closed.sort_values("open_time").reset_index(drop=True)
+    if closed.empty:
+        raise ZoneRefreshError("No completed closed 4h candles are available")
+    target = int(closed.iloc[-1]["open_time"])
+    if target < 0 or target % FOUR_HOURS_MS != 0:
+        raise ZoneRefreshError("Latest closed 4h candle is not Binance UTC aligned")
+    eligible = closed[closed["open_time"].astype("int64") <= target].reset_index(drop=True)
+    if len(eligible) < max(1, int(zone_config.external_swing_order) * 2 + 1):
+        raise ZoneRefreshError("Insufficient closed 4h history for support_structure_v1")
+
+    init_db(database_path)
+    key = zone_rebuild_watermark_key(exchange, symbol, ZONE_TIMEFRAME, detector_version)
+    with connect(database_path) as conn:
+        try:
+            watermark = validate_zone_rebuild_watermark(
+                conn,
+                key=key,
+                latest_completed_open_time=target,
+                exchange=exchange,
+                symbol=symbol,
+                timeframe=ZONE_TIMEFRAME,
+                detector_version=detector_version,
+            )
+        except StateStoreError as exc:
+            raise ZoneRefreshError(str(exc)) from exc
+        if watermark == target:
+            return ZoneRefreshResult(_load_snapshot(conn, exchange, symbol, detector_version, target), target, False)
+        if watermark is not None and watermark > target:
+            raise ZoneRefreshError("Zone watermark is ahead of completed 4h data")
+
+    result = detector(
+        eligible,
+        min_touches=zone_config.min_touches,
+        current_price=float(eligible.iloc[-1]["close"]),
+        buffer_pct=zone_config.role_buffer_pct,
+        external_swing_order=zone_config.external_swing_order,
+        atr_period=zone_config.atr_period,
+        break_atr_mult=zone_config.break_atr_mult,
+        external_min_swing_atr_mult=zone_config.external_min_swing_atr_mult,
+        external_min_swing_pct=zone_config.external_min_swing_pct,
+    )
+    support = result.get("support")
+    if not isinstance(support, list):
+        raise ZoneRefreshError("Detector did not return a support zone list")
+    daily_df = aggregate_ohlc_to_daily(eligible, min_bars_per_day=6)
+    fingerprinted = [
+        {
+            **fingerprint_zone(
+                zone,
+                four_hour_df=eligible,
+                daily_df=daily_df,
+                exchange=exchange,
+                symbol=symbol,
+                detector_version=detector_version,
+            ),
+            "zone_set_as_of": target,
+        }
+        for zone in support
+    ]
+
+    written_at = utc_seconds() if now_s is None else int(now_s)
+    with connect(database_path) as conn:
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            current = get_zone_rebuild_watermark(conn, key)
+            if current == target:
+                validate_zone_snapshot(
+                    conn,
+                    exchange=exchange,
+                    symbol=symbol,
+                    timeframe=ZONE_TIMEFRAME,
+                    detector_version=detector_version,
+                    zone_set_as_of=target,
+                )
+                zones = _load_snapshot(conn, exchange, symbol, detector_version, target)
+                conn.commit()
+                return ZoneRefreshResult(zones, target, False)
+            if current is not None and current > target:
+                raise ZoneRefreshError("Concurrent runner advanced the zone watermark beyond target")
+
+            conn.execute(
+                "DELETE FROM zones WHERE exchange=? AND symbol=? AND timeframe=? AND detector_version=? AND zone_set_as_of=?",
+                (exchange, symbol, ZONE_TIMEFRAME, detector_version, target),
+            )
+            conn.execute(
+                "DELETE FROM zone_sets WHERE exchange=? AND symbol=? AND timeframe=? AND detector_version=? AND zone_set_as_of=?",
+                (exchange, symbol, ZONE_TIMEFRAME, detector_version, target),
+            )
+            _insert_zones(conn, fingerprinted, exchange, symbol, detector_version, target, written_at)
+            conn.execute(
+                """
+                INSERT INTO zone_sets(exchange, symbol, timeframe, detector_version, zone_set_as_of, zone_count, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (exchange, symbol, ZONE_TIMEFRAME, detector_version, target, len(fingerprinted), written_at),
+            )
+            set_zone_rebuild_watermark(conn, key, target, written_at)
+            validate_zone_snapshot(
+                conn,
+                exchange=exchange,
+                symbol=symbol,
+                timeframe=ZONE_TIMEFRAME,
+                detector_version=detector_version,
+                zone_set_as_of=target,
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    return ZoneRefreshResult(fingerprinted, target, True)
+
+
+def _insert_zones(
+    conn: sqlite3.Connection,
+    zones: list[dict[str, Any]],
+    exchange: str,
+    symbol: str,
+    detector_version: str,
+    zone_set_as_of: int,
+    created_at: int,
+) -> None:
+    sql = """
+    INSERT INTO zones(
+      created_at, exchange, symbol, timeframe, detector_version, zone_set_as_of,
+      fingerprint_version, fingerprint, source_timeframe, source_open_times_json,
+      zone_source_time, origin, role, bounds_style, low, high, mid, width, width_pct,
+      touches, source_closes_json, source_indexes_json, metadata_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+    for zone in zones:
+        known = {
+            "origin", "role", "bounds_style", "low", "high", "mid", "width", "width_pct",
+            "touches", "source_closes", "source_indexes", "source_timeframe", "source_open_times",
+            "zone_source_time", "fingerprint_version", "fingerprint", "zone_set_as_of",
+        }
+        metadata = {key: value for key, value in zone.items() if key not in known}
+        conn.execute(
+            sql,
+            (
+                created_at, exchange, symbol, ZONE_TIMEFRAME, detector_version, zone_set_as_of,
+                zone["fingerprint_version"], zone["fingerprint"], zone["source_timeframe"],
+                json.dumps(zone["source_open_times"], separators=(",", ":")), zone["zone_source_time"],
+                zone["origin"], zone.get("role", "support"), zone.get("bounds_style", "body"),
+                float(zone["low"]), float(zone["high"]), float(zone["mid"]), float(zone["width"]),
+                float(zone["width_pct"]), int(zone["touches"]),
+                json.dumps(zone.get("source_closes", []), default=json_default, separators=(",", ":")),
+                json.dumps(zone["source_indexes"], default=json_default, separators=(",", ":")),
+                json.dumps(metadata, default=json_default, separators=(",", ":")),
+            ),
+        )
+
+
+def _load_snapshot(
+    conn: sqlite3.Connection,
+    exchange: str,
+    symbol: str,
+    detector_version: str,
+    zone_set_as_of: int,
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT * FROM zones
+        WHERE exchange=? AND symbol=? AND timeframe=? AND detector_version=? AND zone_set_as_of=?
+        ORDER BY low ASC, fingerprint ASC
+        """,
+        (exchange, symbol, ZONE_TIMEFRAME, detector_version, int(zone_set_as_of)),
+    ).fetchall()
+    zones: list[dict[str, Any]] = []
+    for row in rows:
+        zone = dict(row)
+        zone["source_open_times"] = json.loads(zone.pop("source_open_times_json"))
+        zone["source_closes"] = json.loads(zone.pop("source_closes_json"))
+        zone["source_indexes"] = json.loads(zone.pop("source_indexes_json"))
+        metadata_raw = zone.pop("metadata_json", None)
+        if metadata_raw:
+            zone.update(json.loads(metadata_raw))
+        if zone.get("fingerprint_version") != "zf1" or not str(zone.get("fingerprint", "")).startswith("zf1:"):
+            raise ZoneRefreshError("Persisted zone snapshot contains an invalid fingerprint")
+        source_times = zone.get("source_open_times")
+        if not isinstance(source_times, list) or not source_times or int(zone["zone_source_time"]) != max(
+            int(value) for value in source_times
+        ):
+            raise ZoneRefreshError("Persisted zone snapshot contains invalid source times")
+        zones.append(zone)
+    return zones
