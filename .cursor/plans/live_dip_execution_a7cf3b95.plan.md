@@ -142,23 +142,26 @@ curl -sS -X POST 'https://prana.triethocduongpho.net/api/swap/quote' \
    - compare that 4H `open_time` with the last zone-rebuild watermark in `bot_state` (the last 4H `open_time` already used to rebuild zones);
    - if newer, run `support_structure_v1` on closed 4h candles only, persist the new zone set, convert each detector `source_index` to source candle `open_time` for a stable zone fingerprint, and advance the watermark;
    - otherwise skip detector work and load the last persisted zones for evaluation.
-4. Sort active support zones from low to high, select the nearest support reached by the current close, and validate the current entry region before evaluating dip history:
-   - if the close is inside a zone, select that zone;
-     - require `zone.low <= close < zone.mid`;
-     - if `zone.mid <= close <= zone.high`, return `CLOSE_NOT_BELOW_ZONE_MID`;
+4. Use `zones = detector_result["support"]` (already sorted low→high in the detector; `active` is always empty). Do **not** filter by `price_state == "support"`: a zone currently above price is classified `resistance`/`active` by the detector, but Path B (immediately-below-zone entry) still needs that broken/overhead support in the candidate list. Select the nearest support reached by the current close, and validate the current entry region before evaluating dip history:
+   - if the close is inside one or more zones (`zone.low <= close <= zone.high`):
+     - `containing_zones = [z for z in zones if z.low <= close <= z.high]`;
+     - `selected = max(containing_zones, key=lambda z: z.low)` (detector usually removes overlaps; this tie-break keeps live/observe/backtest replay independent of list order);
+     - require `selected.low <= close < selected.mid`;
+     - if `selected.mid <= close <= selected.high`, return `CLOSE_NOT_BELOW_ZONE_MID`;
    - otherwise:
      - select the nearest zone above the close: `selected = min((z for z in zones if z.low > close), key=lambda z: z.low)`;
      - do not skip the nearest zone to evaluate a farther one;
-     - find the nearest distinct `next_lower_zone` where `next_lower.high < zone.low`; if none exists, return `NO_LOWER_ZONE`;
-     - define `below_gap_low = next_lower_zone.high` and `below_gap_high = zone.low`;
+     - `next_lower_zone = max((z for z in zones if z.high < selected.low), key=lambda z: z.high)`; if none exists, return `NO_LOWER_ZONE`;
+     - define `below_gap_low = next_lower_zone.high` and `below_gap_high = selected.low`;
      - calculate `below_zone_pct = (close - below_gap_low) / (below_gap_high - below_gap_low)`;
-     - require **70% ≤ `below_zone_pct` ≤ 100%** and `close < zone.low` (effectively `0.70 <= below_zone_pct < 1.0`); otherwise return `BELOW_ZONE_OUT_OF_BAND`;
+     - require **70% ≤ `below_zone_pct` ≤ 100%** and `close < selected.low` (effectively `0.70 <= below_zone_pct < 1.0`); otherwise return `BELOW_ZONE_OUT_OF_BAND`;
    - if no zone contains the close and no zone exists above it, return `CLOSE_OUTSIDE_ENTRY_REGION`.
-5. For the selected `zone`, find the nearest distinct `higher_zone` where `higher_zone.low > zone.high`, and define:
-     - `internal_range_low = zone.high`;
+5. For the selected zone, lock adjacent higher support with the same deterministic formula used by live and offline replay:
+     - `higher_zone = min((z for z in zones if z.low > selected.high), key=lambda z: z.low)`;
+     - if none exists (no zone fully above, or every neighbor above touches/overlaps), return `NO_HIGHER_ZONE`;
+     - `internal_range_low = selected.high`;
      - `internal_range_high = higher_zone.low`;
      - `internal_range_midpoint = (internal_range_low + internal_range_high) / 2`.
-     If there is no such higher zone (none above, or every neighbor above touches/overlaps), return `NO_HIGHER_ZONE`.
 6. Find the dip origin in the **48h lookback** using closed 1h candles with `open_time` in `[trigger.open_time - 48h, trigger.open_time)`:
    - also ignore candles older than `zone_source_time` when that is newer than the 48h floor;
    - scan backward from the candle immediately before the trigger and stop at the **first (nearest)** candle whose `close` is **strictly greater than** `internal_range_midpoint`;
@@ -181,7 +184,7 @@ curl -sS -X POST 'https://prana.triethocduongpho.net/api/swap/quote' \
   - `constants.py`: chain ID 137 and an immutable allowlist for USDT, PRANA, and the expected SwapRouter02 address; runtime checks must verify chain ID, bytecode, token decimals, and wallet address.
   - `binance_hourly.py`: thin helper to fetch/validate/upsert closed Binance `BTCUSDT` `1h` candles into the existing `candles` table (reuse [src/binance_client.py](src/binance_client.py) and [src/db.py](src/db.py) helpers). No live `4h` Binance fetch in this path.
   - `aggregate_4h.py`: derive closed Binance-aligned 4H bars from closed 1h candles; reject incomplete buckets.
-  - `zone_refresh.py`: compare derived/latest closed 4h `open_time` against the rebuild watermark, rebuild zones only when newer, persist them, and expose the active zone set for the signal.
+  - `zone_refresh.py`: compare derived/latest closed 4h `open_time` against the rebuild watermark, rebuild zones only when newer, persist them, and expose `detector_result["support"]` (full support list, not `active` / not `price_state`-filtered) for the signal.
   - `signal.py` and `zone_identity.py`: the sole unified dip-to-support decision engine (inside-below-mid or below-zone 70–100% entry region) and stable source-time fingerprint. Keep nearest-support selection, the 48h backward scan for the nearest qualifying close, midpoint calculation, below-zone pct helper, and 24h prior-BUY lookup here as small pure helpers; replace [src/signals.py](src/signals.py) and do not leave a parallel scorer.
   - `wallet.py`: encrypted-keystore creation/loading, password resolution (env → systemd credential file → optional prompt), address verification, permissions checks, and signing only after all other gates pass.
   - `prana_swap.py`: a thin HTTP adapter for `POST {quote_base_url}/api/swap/quote` plus strict response/transaction/`deadline` validation. Never send an `Origin` header. Do not add protocol-specific route selection; the configured quote host owns routing (prod local route server; dev public PRANA host).
