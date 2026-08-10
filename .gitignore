@@ -7,3 +7,9 @@ __pycache__/
 config.yaml
 data/*.sqlite
 data/*.sqlite-*
+
+# Wallet, logs, and signed tx artifacts (see AGENTS.md)
+data/wallet/
+data/logs/
+*.keystore.json
+*.signed-tx

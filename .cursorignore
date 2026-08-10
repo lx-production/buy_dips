@@ -1,8 +1,18 @@
+# Environment and secrets
 **/.env
 **/.env.*
-**/*seed*
-**/*mnemonic*
-**/*private-key*
 **/secrets/**
 **/*.key
 **/*.pem
+**/*seed*
+**/*mnemonic*
+**/*private-key*
+
+# Wallet, logs, signed tx (see AGENTS.md and .gitignore)
+data/wallet/
+data/logs/
+**/*.keystore.json
+**/*.signed-tx
+
+# Local config — use config.example.yaml for structure
+config.yaml
