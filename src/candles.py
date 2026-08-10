@@ -10,35 +10,43 @@ from .utils import ms_to_iso, utc_ms
 
 
 INTERVAL_MS = {
+    "1h": 60 * 60 * 1000,
     "4h": 4 * 60 * 60 * 1000,
 }
 
 
-def backfill_12_months(
+def backfill_range(
     database_path: str | Path,
-    exchange: str = "binance",
-    symbol: str = "BTCUSDT",
-    timeframe: str = "4h",
+    exchange: str,
+    symbol: str,
+    timeframe: str,
+    start_time: int,
+    end_time: int,
     client: BinanceSpotClient | None = None,
 ) -> dict[str, Any]:
+    """Fetch and upsert closed Binance klines for [start_time, end_time).
+
+    Times are Unix milliseconds. end_time is exclusive (open_time must be < end_time).
+    """
     client = client or BinanceSpotClient()
     interval_ms = INTERVAL_MS.get(timeframe)
     if interval_ms is None:
-        raise ValueError(f"Unsupported timeframe for Phase 1: {timeframe}")
-
-    end_time = utc_ms()
-    start_time = int((datetime.now(tz=timezone.utc) - timedelta(days=365)).timestamp() * 1000)
+        supported = ", ".join(sorted(INTERVAL_MS))
+        raise ValueError(f"Unsupported timeframe: {timeframe}. Supported: {supported}")
+    if end_time <= start_time:
+        raise ValueError("end_time must be greater than start_time")
 
     total_upserted = 0
     all_rows: list[dict[str, Any]] = []
     cursor = start_time
-    while cursor <= end_time:
+    # Walk forward in 1000-kline pages until we reach the exclusive end.
+    while cursor < end_time:
         batch = client.fetch_klines(
             symbol=symbol,
             interval=timeframe,
             limit=1000,
             start_time=cursor,
-            end_time=end_time,
+            end_time=end_time - 1,
         )
         if not batch:
             break
@@ -52,9 +60,9 @@ def backfill_12_months(
         if len(batch) < 1000:
             break
 
-    closed_df = load_candles_df(database_path, exchange, symbol, timeframe, only_closed=False)
-    first_open_time = int(closed_df["open_time"].min()) if not closed_df.empty else None
-    last_open_time = int(closed_df["open_time"].max()) if not closed_df.empty else None
+    stored_df = load_candles_df(database_path, exchange, symbol, timeframe, only_closed=False)
+    first_open_time = int(stored_df["open_time"].min()) if not stored_df.empty else None
+    last_open_time = int(stored_df["open_time"].max()) if not stored_df.empty else None
     return {
         "upserted": total_upserted,
         "fetched": len(all_rows),
@@ -64,6 +72,27 @@ def backfill_12_months(
         "last_candle_iso": ms_to_iso(last_open_time),
         "database_path": str(database_path),
     }
+
+
+def backfill_12_months(
+    database_path: str | Path,
+    exchange: str = "binance",
+    symbol: str = "BTCUSDT",
+    timeframe: str = "4h",
+    client: BinanceSpotClient | None = None,
+) -> dict[str, Any]:
+    end_time = utc_ms()
+    start_time = int((datetime.now(tz=timezone.utc) - timedelta(days=365)).timestamp() * 1000)
+    # Inclusive "now": treat current ms as exclusive upper bound by adding 1.
+    return backfill_range(
+        database_path=database_path,
+        exchange=exchange,
+        symbol=symbol,
+        timeframe=timeframe,
+        start_time=start_time,
+        end_time=end_time + 1,
+        client=client,
+    )
 
 
 def fetch_latest_candles(

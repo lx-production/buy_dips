@@ -54,6 +54,14 @@ python3 -m src.cli backfill
 
 Fetches roughly the **last 12 months** of public `BTCUSDT` 4H klines into SQLite. Binance allows at most **1000 klines per request**, so the client **pages** through the range (moving `startTime` forward after each batch)—that is a page size, not “only 1000 candles total.” Rows are **upserted**; re-runs are safe. On success the CLI prints insert/update counts, first and last candle (with ISO times), and the database path.
 
+## Backfill BTCUSDT 1H Candles (Backtest Prep)
+
+For the offline `support_close_v1` backtest window starting **2026-06-01 UTC**, fetch hourly candles into the same `candles` table (`timeframe="1h"`). The script starts **2026-05-30** so the first Jun 1 hours already have a full 48h dip-origin lookback:
+
+```bash
+python3 scripts/backfill_1h_from_2026_06_01.py
+```
+
 ## Print Zones
 
 ```bash
