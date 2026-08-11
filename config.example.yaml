@@ -2,6 +2,26 @@ exchange: binance
 symbol: BTCUSDT
 timeframe: 4h
 database_path: data/prana_buy_the_dips.sqlite
+environment: dev
+
+wallet:
+  keystore_path: data/wallet/trader-dev.json
+  expected_address: null # set this to the checksum address printed by wallet-create
+  password_env: KEYSTORE_PASSWORD # value comes from the environment, never YAML
+
+execution:
+  chain_id: 137
+  rpc_url_env: POLYGON_RPC_URL # URL comes from the environment, never YAML
+  quote_base_url: https://prana.triethocduongpho.net
+  router_allowlist:
+    - "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"
+  live_enabled: false
+  max_approval_gas: 100000
+  receipt_timeout_seconds: 120
+
+risk:
+  trade_amount_usdt: "1"
+  max_cumulative_usdt: "10"
 
 zones: # values ending in _pct are fractions of price, not percent labels
   min_touches: 2

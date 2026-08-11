@@ -10,6 +10,7 @@ Never open, read, display, or inspect the contents of these paths. This applies 
 - `data/logs/` — runtime logs that may contain sensitive execution details
 - `*.keystore.json` — encrypted keystore files (anywhere in the repo)
 - `*.signed-tx` — signed transaction payloads (anywhere in the repo)
+- `.env` — environment variables (anywhere in the repo)
 
 ### Allowed without reading contents
 

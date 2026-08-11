@@ -1,17 +1,27 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from .candles import backfill_12_months
 from .config import AppConfig, load_config
 from .db import init_db, load_candles_df
+from .trading.approval import approve_trading, revoke_trading
+from .trading.constants import USDT_DECIMALS
+from .trading.contract_checks import format_token_amount, run_contract_checks
 from .trading.runner import run_trade_once
+from .trading.wallet import (
+    create_encrypted_keystore,
+    load_local_account,
+    resolve_keystore_password,
+)
 from .utils import resolve_path
 from .zones import detect_support_resistance_zones
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Parse one thin CLI command and delegate safety-sensitive work to the trading package.
     parser = build_parser()
     args = parser.parse_args(argv)
     config = load_config(args.config)
@@ -27,11 +37,22 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_zones(config, database_path)
     if args.command == "trade-once":
         return _cmd_trade_once(config, database_path, args.mode)
+    if args.command == "wallet-create":
+        return _cmd_wallet_create(config)
+    if args.command == "wallet-status":
+        return _cmd_wallet_status(config)
+    if args.command == "trade-check":
+        return _cmd_trade_check(config)
+    if args.command == "approve-trading":
+        return _cmd_approve_trading(config)
+    if args.command == "revoke-trading":
+        return _cmd_revoke_trading(config)
     parser.print_help()
     return 1
 
 
 def build_parser() -> argparse.ArgumentParser:
+    # Expose wallet maintenance separately while the execution runner remains observe-only.
     parser = argparse.ArgumentParser(description="PRANA Buy the Dips bot")
     parser.add_argument("--config", default=None, help="Path to config YAML. Defaults to CONFIG_PATH or config.yaml.")
     subparsers = parser.add_subparsers(dest="command")
@@ -41,10 +62,16 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("zones", help="Print support zones detected from closed 4h candles.")
     trade_once = subparsers.add_parser("trade-once", help="Run one fetch/zone/decision cycle.")
     trade_once.add_argument("--mode", choices=("observe",), default="observe")
+    subparsers.add_parser("wallet-create", help="Create the configured encrypted development keystore.")
+    subparsers.add_parser("wallet-status", help="Decrypt and print only the configured wallet address.")
+    subparsers.add_parser("trade-check", help="Validate Polygon, contracts, wallet, and allowance.")
+    subparsers.add_parser("approve-trading", help="Approve the router for exactly the 10 USDT canary cap.")
+    subparsers.add_parser("revoke-trading", help="Reset the configured router's USDT allowance to zero.")
     return parser
 
 
 def _cmd_backfill(config: AppConfig, database_path: Path, timeframe: str) -> int:
+    # Backfill the requested supported candle timeframe and summarize the stored range.
     try:
         result = backfill_12_months(
             database_path=database_path,
@@ -63,6 +90,7 @@ def _cmd_backfill(config: AppConfig, database_path: Path, timeframe: str) -> int
 
 
 def _cmd_zones(config: AppConfig, database_path: Path) -> int:
+    # Detect and print support zones from persisted closed 4h candles.
     df = load_candles_df(database_path, config.exchange, config.symbol, "4h", only_closed=True)
     if df.empty:
         print("No closed 4h candles found.")
@@ -88,6 +116,7 @@ def _cmd_zones(config: AppConfig, database_path: Path) -> int:
 
 
 def _cmd_trade_once(config: AppConfig, database_path: Path, mode: str) -> int:
+    # Run the existing observe-only hourly decision cycle without loading wallet credentials.
     try:
         result = run_trade_once(config, database_path, mode=mode)
     except Exception as exc:
@@ -97,6 +126,80 @@ def _cmd_trade_once(config: AppConfig, database_path: Path, mode: str) -> int:
     print(f"Decision: {result.decision['decision']}")
     print(f"Reason: {result.decision['reason_code']}")
     print(f"Zones rebuilt: {result.decision['zones_rebuilt']}")
+    return 0
+
+
+def _cmd_wallet_create(config: AppConfig) -> int:
+    # Prompt twice when needed, create atomically, and print only the new public address.
+    try:
+        password = resolve_keystore_password(config.wallet.password_env, confirm=True)
+        address = create_encrypted_keystore(resolve_path(config.wallet.keystore_path), password)
+    except Exception as exc:
+        print(f"Wallet creation failed: {exc}", file=sys.stderr)
+        return 2
+    print(f"Wallet address: {address}")
+    return 0
+
+
+def _cmd_wallet_status(config: AppConfig) -> int:
+    # Decrypt and verify the configured keystore but reveal only its public checksum address.
+    try:
+        password = resolve_keystore_password(config.wallet.password_env)
+        account = load_local_account(
+            resolve_path(config.wallet.keystore_path),
+            password,
+            expected_address=config.wallet.expected_address,
+        )
+    except Exception as exc:
+        print(f"Wallet status failed: {exc}", file=sys.stderr)
+        return 2
+    print(f"Wallet address: {account.address}")
+    return 0
+
+
+def _cmd_trade_check(config: AppConfig) -> int:
+    # Print an allowlisted public summary after all signer and contract validations pass.
+    try:
+        checked = run_contract_checks(config)
+    except Exception as exc:
+        print(f"Trade check failed: {exc}", file=sys.stderr)
+        return 2
+    print(f"Environment: {checked.environment}")
+    print(f"Chain ID: {checked.chain_id}")
+    print(f"Wallet: {checked.wallet_address}")
+    print(f"USDT balance: {format_token_amount(checked.usdt_balance_raw, USDT_DECIMALS)}")
+    print(f"POL balance: {format_token_amount(checked.pol_balance_raw, 18)}")
+    print("Router: verified")
+    print(f"Allowance: {format_token_amount(checked.allowance_raw, USDT_DECIMALS)} USDT")
+    print(f"Live: {'enabled' if config.execution.live_enabled else 'disabled'}")
+    return 0
+
+
+def _cmd_approve_trading(config: AppConfig) -> int:
+    # Execute the explicit capped approval flow and reveal only public state and transaction hashes.
+    try:
+        result = approve_trading(config)
+    except Exception as exc:
+        print(f"Approval failed: {exc}", file=sys.stderr)
+        return 2
+    print(f"Approval: {result.action}")
+    print(f"Allowance: {format_token_amount(result.current_allowance_raw, USDT_DECIMALS)} USDT")
+    for transaction_hash in result.transaction_hashes:
+        print(f"Transaction hash: {transaction_hash}")
+    return 0
+
+
+def _cmd_revoke_trading(config: AppConfig) -> int:
+    # Execute an explicit zero approval and reveal only public state and transaction hashes.
+    try:
+        result = revoke_trading(config)
+    except Exception as exc:
+        print(f"Revocation failed: {exc}", file=sys.stderr)
+        return 2
+    print(f"Revocation: {result.action}")
+    print(f"Allowance: {format_token_amount(result.current_allowance_raw, USDT_DECIMALS)} USDT")
+    for transaction_hash in result.transaction_hashes:
+        print(f"Transaction hash: {transaction_hash}")
     return 0
 
 
