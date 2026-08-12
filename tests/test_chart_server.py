@@ -55,7 +55,7 @@ def test_visible_support_zones_keep_price_touching_zone() -> None:
     assert [(zone["low"], zone["high"]) for zone in visible] == [(98.0, 103.0), (104.0, 109.0)]
 
 
-def test_chart_pivots_hide_internal_pivots_by_default() -> None:
+def test_chart_pivots_hide_by_default() -> None:
     df = pd.DataFrame(
         {
             "open_time": list(range(9)),
@@ -70,15 +70,11 @@ def test_chart_pivots_hide_internal_pivots_by_default() -> None:
         df,
         visible_start_index=0,
         internal_swing_order=1,
-        external_swing_order=1,
         atr_period=3,
-        external_min_swing_atr_mult=0.0,
-        external_min_swing_pct=0.0,
         show_internal_pivots=False,
     )
 
-    assert pivots
-    assert {pivot["term"] for pivot in pivots} == {"external"}
+    assert pivots == []
 
 
 def test_chart_pivots_can_include_internal_debug_labels() -> None:
@@ -96,14 +92,12 @@ def test_chart_pivots_can_include_internal_debug_labels() -> None:
         df,
         visible_start_index=0,
         internal_swing_order=1,
-        external_swing_order=1,
         atr_period=3,
-        external_min_swing_atr_mult=0.0,
-        external_min_swing_pct=0.0,
         show_internal_pivots=True,
     )
 
-    assert {pivot["term"] for pivot in pivots} == {"external", "internal"}
+    assert pivots
+    assert {pivot["term"] for pivot in pivots} == {"internal"}
 
 
 def test_load_chart_payload_can_load_all_daily_candles(tmp_path) -> None:

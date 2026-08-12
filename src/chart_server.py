@@ -13,7 +13,6 @@ from .utils import resolve_path
 from .zones import (
     _average_true_range,
     _coerce_ohlc,
-    _filter_prominent_structure_pivots,
     _find_structure_pivots,
     _label_structure_pivots,
     aggregate_ohlc_to_daily,
@@ -88,10 +87,7 @@ def load_chart_payload(
         df=df,
         visible_start_index=visible_start_index,
         internal_swing_order=zone_config.internal_swing_order,
-        external_swing_order=zone_config.external_swing_order,
         atr_period=zone_config.atr_period,
-        external_min_swing_atr_mult=zone_config.external_min_swing_atr_mult,
-        external_min_swing_pct=zone_config.external_min_swing_pct,
         show_internal_pivots=zone_config.show_internal_pivots,
     )
     candles = [
@@ -177,12 +173,13 @@ def _chart_pivots(
     df: Any,
     visible_start_index: int,
     internal_swing_order: int,
-    external_swing_order: int,
     atr_period: int,
-    external_min_swing_atr_mult: float,
-    external_min_swing_pct: float,
     show_internal_pivots: bool,
 ) -> list[dict[str, Any]]:
+    """Build optional debug pivot markers for the chart (internal only; external pivots are not shown)."""
+    if not show_internal_pivots:
+        return []
+
     ohlc = _coerce_ohlc(df)
     if ohlc is None:
         return []
@@ -191,19 +188,12 @@ def _chart_pivots(
     lows = ohlc["low"].to_numpy(dtype=float)
     closes = ohlc["close"].to_numpy(dtype=float)
     atr = _average_true_range(highs=highs, lows=lows, closes=closes, period=atr_period)
-    internal_pivots = _find_structure_pivots(ohlc, internal_swing_order, atr, "internal") if show_internal_pivots else []
-    raw_external_pivots = _find_structure_pivots(ohlc, external_swing_order, atr, "external")
-    external_pivots = _filter_prominent_structure_pivots(
-        raw_external_pivots,
-        min_swing_atr_mult=external_min_swing_atr_mult,
-        min_swing_pct=external_min_swing_pct,
-    )
+    internal_pivots = _find_structure_pivots(ohlc, internal_swing_order, atr, "internal")
     _label_structure_pivots(internal_pivots)
-    _label_structure_pivots(external_pivots)
 
     time_values = df["open_time"].tolist() if "open_time" in df.columns else list(range(len(ohlc)))
     pivots = []
-    for pivot in [*internal_pivots, *external_pivots]:
+    for pivot in internal_pivots:
         if pivot.index < visible_start_index:
             continue
         pivots.append(
@@ -332,13 +322,9 @@ _INDEX_HTML_TEMPLATE = """<!doctype html>
     .legend { display: flex; gap: 12px; margin-top: 9px; color: #c9d1d9; font-size: 12px; }
     .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; }
     .support { background: #2ea043; }
-    .internal { background: #79c0ff; }
-    .external { background: #d2a8ff; }
     .controls { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; color: #c9d1d9; font-size: 12px; }
     .field { display: inline-flex; align-items: center; gap: 6px; }
     .field select { color: #e6edf3; background: rgba(13,17,23,.88); border: 1px solid rgba(255,255,255,.14); border-radius: 7px; padding: 3px 7px; font: inherit; }
-    .toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
-    .toggle input { width: 14px; height: 14px; margin: 0; accent-color: #d2a8ff; }
     .error { position: fixed; inset: auto 22px 22px 22px; padding: 12px 14px; border-radius: 10px; color: #ffdcd7; background: rgba(248,81,73,.14); border: 1px solid rgba(248,81,73,.35); font-size: 13px; display: none; }
   </style>
 </head>
@@ -353,7 +339,6 @@ _INDEX_HTML_TEMPLATE = """<!doctype html>
       <div class="meta" id="meta">Loading SQLite candles and zones…</div>
       <div class="legend">
         <span><i class="dot support"></i>Support</span>
-        <span><i class="dot external"></i>Prominent external pivots</span>
       </div>
       <div class="controls">
         <label class="field">
@@ -362,10 +347,6 @@ _INDEX_HTML_TEMPLATE = """<!doctype html>
             <option value="4h-recent">4H recent (__LIMIT__)</option>
             <option value="1d-all">1D all candles</option>
           </select>
-        </label>
-        <label class="toggle" title="Show or hide prominent external swing points">
-          <input type="checkbox" id="toggle-external-pivots" checked>
-          External pivots
         </label>
       </div>
     </div>
@@ -380,7 +361,6 @@ _INDEX_HTML_TEMPLATE = """<!doctype html>
     const error = document.getElementById('error');
     const hudToggle = document.getElementById('hud-toggle');
     const viewSelect = document.getElementById('view-select');
-    const toggleExternalPivots = document.getElementById('toggle-external-pivots');
     const HUD_COLLAPSED_KEY = 'chartHudCollapsed';
     const viewOptions = {
       '4h-recent': { timeframe: '4h', limit: '__LIMIT__' },
@@ -455,14 +435,9 @@ _INDEX_HTML_TEMPLATE = """<!doctype html>
       drawGrid(width, height, scale);
       drawZones(zones, width, scale);
       drawCandles(candles, scale);
-      drawPivots(visiblePivots(chartData.pivots || []), candles, scale);
+      drawPivots(chartData.pivots || [], candles, scale);
       drawPriceAxis(scale, width);
       drawTimeAxis(candles, scale, height);
-    }
-
-    function visiblePivots(pivots) {
-      if (toggleExternalPivots.checked) return pivots;
-      return pivots.filter(pivot => pivot.term !== 'external');
     }
 
     function yFor(price, scale) {
@@ -543,19 +518,16 @@ _INDEX_HTML_TEMPLATE = """<!doctype html>
 
         const x = scale.left + step * visibleIndex + step / 2;
         const isHigh = pivot.kind === 'high';
-        const isExternal = pivot.term === 'external';
         const priceY = yFor(pivot.wick_price, scale);
         const markerY = isHigh ? priceY - 7 : priceY + 7;
-        const labelY = isHigh
-          ? priceY - (isExternal ? 31 : 18)
-          : priceY + (isExternal ? 39 : 26);
-        const label = `${isExternal ? 'external' : 'internal'} ${pivot.role || (isHigh ? 'H' : 'L')}`;
-        const color = isExternal ? '#d2a8ff' : '#79c0ff';
-        const fill = isExternal ? 'rgba(210,168,255,.16)' : 'rgba(121,192,255,.16)';
+        const labelY = isHigh ? priceY - 18 : priceY + 26;
+        const label = `internal ${pivot.role || (isHigh ? 'H' : 'L')}`;
+        const color = '#79c0ff';
+        const fill = 'rgba(121,192,255,.16)';
 
         ctx.strokeStyle = color;
         ctx.fillStyle = color;
-        ctx.lineWidth = isExternal ? 1.6 : 1;
+        ctx.lineWidth = 1;
         ctx.beginPath();
         if (isHigh) {
           ctx.moveTo(x, priceY - 2);
@@ -569,11 +541,11 @@ _INDEX_HTML_TEMPLATE = """<!doctype html>
         ctx.closePath();
         ctx.stroke();
 
-        ctx.font = isExternal ? '700 11px ui-sans-serif, system-ui' : '10px ui-sans-serif, system-ui';
+        ctx.font = '10px ui-sans-serif, system-ui';
         const metrics = ctx.measureText(label);
         const padX = 4;
         const boxWidth = metrics.width + padX * 2;
-        const boxHeight = isExternal ? 16 : 14;
+        const boxHeight = 14;
         const boxX = Math.max(scale.left, Math.min(x - boxWidth / 2, scale.left + scale.plotWidth - boxWidth));
         const boxY = Math.max(scale.top, Math.min(labelY - boxHeight / 2, scale.top + scale.plotHeight - boxHeight));
         ctx.fillStyle = 'rgba(9,12,16,.78)';
@@ -636,7 +608,6 @@ _INDEX_HTML_TEMPLATE = """<!doctype html>
     viewSelect.addEventListener('change', () => {
       load().catch(showLoadError);
     });
-    toggleExternalPivots.addEventListener('change', draw);
     resize();
     load().catch(showLoadError);
 

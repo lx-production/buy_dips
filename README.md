@@ -202,7 +202,7 @@ High level:
 - Candidates group into fixed-width (~$500) bands; zones need at least `min_touches` touches.
 - Detector returns `support` / `resistance` / `active` / `all`; `resistance` and `active` stay empty. Hourly trading uses the full `support` list (including zones currently above price) so below-zone entries still work.
 
-Default prominent-pivot filter: reversal of at least `max(4.0 * ATR, 2.5% of price)`. Set `external_min_swing_atr_mult: 0.0` and `external_min_swing_pct: 0.0` to inspect raw local extrema. Chart internal pivots stay hidden unless `show_internal_pivots: true`.
+Default prominent-pivot filter: reversal of at least `max(4.0 * ATR, 2.5% of price)`. Set `external_min_swing_atr_mult: 0.0` and `external_min_swing_pct: 0.0` to use raw local extrema. The chart does not overlay external pivots; optional internal debug markers stay hidden unless `show_internal_pivots: true`.
 
 After each rebuild, `zone_refresh` resolves `source_indexes` → `source_open_times` / `zone_source_time`, computes deterministic `zf1` fingerprints, and persists them with a `zone_sets` manifest. The hourly signal path never recomputes fingerprints from raw indexes.
 
