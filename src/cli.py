@@ -1,23 +1,19 @@
 from __future__ import annotations
 
-import argparse
 import sys
-from pathlib import Path
+import argparse
 
-from .candles import backfill_12_months
-from .config import AppConfig, load_config
-from .db import init_db, load_candles_df
-from .trading.approval import approve_trading, revoke_trading
-from .trading.constants import USDT_DECIMALS
-from .trading.contract_checks import format_token_amount, run_contract_checks
-from .trading.runner import run_trade_once
-from .trading.wallet import (
-    create_encrypted_keystore,
-    load_local_account,
-    resolve_keystore_password,
-)
+from pathlib import Path
 from .utils import resolve_path
+from .candles import backfill_12_months
+from .db import init_db, load_candles_df
+from .trading.runner import run_trade_once
+from .config import AppConfig, load_config
+from .trading.constants import USDT_DECIMALS
 from .zones import detect_support_resistance_zones
+from .trading.approval import approve_trading, revoke_trading
+from .trading.contract_checks import format_token_amount, run_contract_checks
+from .trading.wallet import create_encrypted_keystore, load_local_account, resolve_keystore_password
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -27,8 +27,10 @@ Even `STRONG_BUY_SIGNAL` is only a logged paper signal in Phase 1.
 
 ## Install
 
+Requires Python 3.10+ (3.11 recommended).
+
 ```bash
-python3 -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp config.example.yaml config.yaml
