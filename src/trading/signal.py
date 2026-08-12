@@ -43,7 +43,8 @@ def evaluate_support_close_v1(
     config_version: str = "1",
 ) -> dict[str, Any]:
     """Evaluate the one gate-based dip-to-support flow on a closed 1h candle."""
-    if mode not in {"observe", "dry_run", "live"}:
+    # backtest is allowed in the pure engine only; decisions.mode schema stays observe/dry_run/live.
+    if mode not in {"observe", "dry_run", "live", "backtest"}:
         raise DecisionInputError(f"Unsupported decision mode: {mode}")
     trigger_open_time = _required_int(trigger_candle, "open_time")
     trigger_close_time = _required_int(trigger_candle, "close_time")

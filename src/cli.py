@@ -4,14 +4,16 @@ import sys
 import argparse
 
 from pathlib import Path
-from .utils import resolve_path
-from .candles import backfill_12_months
+
 from .db import init_db, load_candles_df
-from .trading.runner import run_trade_once
 from .config import AppConfig, load_config
+from .candles import backfill_12_months
+from .utils import ms_to_iso, resolve_path
+from .trading.runner import run_trade_once
 from .trading.constants import USDT_DECIMALS
 from .zones import detect_support_resistance_zones
 from .trading.approval import approve_trading, revoke_trading
+from .trading.backtest import parse_backtest_bound, run_backtest, write_buy_csv
 from .trading.contract_checks import format_token_amount, run_contract_checks
 from .trading.wallet import create_encrypted_keystore, load_local_account, resolve_keystore_password
 
@@ -33,6 +35,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_zones(config, database_path)
     if args.command == "trade-once":
         return _cmd_trade_once(config, database_path, args.mode)
+    if args.command == "backtest":
+        return _cmd_backtest(config, database_path, args.start, args.end, args.csv)
     if args.command == "wallet-create":
         return _cmd_wallet_create(config)
     if args.command == "wallet-status":
@@ -58,6 +62,13 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("zones", help="Print support zones detected from closed 4h candles.")
     trade_once = subparsers.add_parser("trade-once", help="Run one fetch/zone/decision cycle.")
     trade_once.add_argument("--mode", choices=("observe",), default="observe")
+    backtest = subparsers.add_parser(
+        "backtest",
+        help="Offline support_close_v1 replay; writes BUY CSV only (no live table writes).",
+    )
+    backtest.add_argument("--start", required=True, help="Inclusive ISO-8601 start on a UTC hour boundary.")
+    backtest.add_argument("--end", default=None, help="Exclusive ISO-8601 end on a UTC hour boundary.")
+    backtest.add_argument("--csv", required=True, help="Output path for the BUY CSV export.")
     subparsers.add_parser("wallet-create", help="Create the configured encrypted development keystore.")
     subparsers.add_parser("wallet-status", help="Decrypt and print only the configured wallet address.")
     subparsers.add_parser("trade-check", help="Validate Polygon, contracts, wallet, and allowance.")
@@ -122,6 +133,30 @@ def _cmd_trade_once(config: AppConfig, database_path: Path, mode: str) -> int:
     print(f"Decision: {result.decision['decision']}")
     print(f"Reason: {result.decision['reason_code']}")
     print(f"Zones rebuilt: {result.decision['zones_rebuilt']}")
+    return 0
+
+
+def _cmd_backtest(
+    config: AppConfig,
+    database_path: Path,
+    start_raw: str,
+    end_raw: str | None,
+    csv_path: str,
+) -> int:
+    # Replay offline, print a compact BUY-only summary, and write the locked CSV columns.
+    try:
+        start_ms = parse_backtest_bound(start_raw, label="start")
+        end_ms = parse_backtest_bound(end_raw, label="end") if end_raw else None
+        result = run_backtest(config, database_path, start_ms=start_ms, end_ms=end_ms)
+        output = write_buy_csv(resolve_path(csv_path), result.buys)
+    except Exception as exc:
+        print(f"Backtest failed: {exc}", file=sys.stderr)
+        return 2
+    print(f"Range: {ms_to_iso(result.start_ms)} -> {ms_to_iso(result.end_ms)} (end exclusive)")
+    print(f"Evaluated candles: {result.evaluated_candles}")
+    print(f"Zone rebuilds: {result.zone_rebuild_count}")
+    print(f"BUY count: {result.buy_count}")
+    print(f"CSV: {output}")
     return 0
 
 

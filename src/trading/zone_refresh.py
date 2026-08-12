@@ -38,6 +38,69 @@ class ZoneRefreshError(RuntimeError):
     pass
 
 
+def build_fingerprinted_support_zones(
+    four_hour_df: pd.DataFrame,
+    *,
+    zone_config: ZoneConfig,
+    zone_set_as_of: int,
+    exchange: str = EXCHANGE,
+    symbol: str = SYMBOL,
+    detector_version: str = DETECTOR_VERSION,
+    detector: Detector = detect_support_resistance_zones,
+) -> list[dict[str, Any]]:
+    """Run the detector and attach source times + zf1 fingerprints for one closed 4h snapshot.
+
+    Shared by live `refresh_zones` persistence and the offline backtest in-memory rebuild so
+    source-time resolution and fingerprinting stay one implementation.
+    """
+    if four_hour_df is None or four_hour_df.empty or "open_time" not in four_hour_df.columns:
+        raise ZoneRefreshError("No completed closed 4h candles are available")
+    closed = four_hour_df.copy()
+    if "is_closed" in closed.columns:
+        closed = closed[closed["is_closed"].astype(int) == 1].copy()
+    closed = closed.sort_values("open_time").reset_index(drop=True)
+    if closed.empty:
+        raise ZoneRefreshError("No completed closed 4h candles are available")
+    target = int(zone_set_as_of)
+    if target < 0 or target % FOUR_HOURS_MS != 0:
+        raise ZoneRefreshError("zone_set_as_of is not Binance UTC 4h aligned")
+    eligible = closed[closed["open_time"].astype("int64") <= target].reset_index(drop=True)
+    if eligible.empty or int(eligible.iloc[-1]["open_time"]) != target:
+        raise ZoneRefreshError("4h history does not include the target zone_set_as_of candle")
+    if len(eligible) < max(1, int(zone_config.external_swing_order) * 2 + 1):
+        raise ZoneRefreshError("Insufficient closed 4h history for support_structure_v1")
+
+    result = detector(
+        eligible,
+        min_touches=zone_config.min_touches,
+        current_price=float(eligible.iloc[-1]["close"]),
+        buffer_pct=zone_config.role_buffer_pct,
+        external_swing_order=zone_config.external_swing_order,
+        atr_period=zone_config.atr_period,
+        break_atr_mult=zone_config.break_atr_mult,
+        external_min_swing_atr_mult=zone_config.external_min_swing_atr_mult,
+        external_min_swing_pct=zone_config.external_min_swing_pct,
+    )
+    support = result.get("support")
+    if not isinstance(support, list):
+        raise ZoneRefreshError("Detector did not return a support zone list")
+    daily_df = aggregate_ohlc_to_daily(eligible, min_bars_per_day=6)
+    return [
+        {
+            **fingerprint_zone(
+                zone,
+                four_hour_df=eligible,
+                daily_df=daily_df,
+                exchange=exchange,
+                symbol=symbol,
+                detector_version=detector_version,
+            ),
+            "zone_set_as_of": target,
+        }
+        for zone in support
+    ]
+
+
 def refresh_zones(
     database_path: str | Path,
     four_hour_df: pd.DataFrame,
@@ -61,9 +124,6 @@ def refresh_zones(
     target = int(closed.iloc[-1]["open_time"])
     if target < 0 or target % FOUR_HOURS_MS != 0:
         raise ZoneRefreshError("Latest closed 4h candle is not Binance UTC aligned")
-    eligible = closed[closed["open_time"].astype("int64") <= target].reset_index(drop=True)
-    if len(eligible) < max(1, int(zone_config.external_swing_order) * 2 + 1):
-        raise ZoneRefreshError("Insufficient closed 4h history for support_structure_v1")
 
     init_db(database_path)
     key = zone_rebuild_watermark_key(exchange, symbol, ZONE_TIMEFRAME, detector_version)
@@ -85,35 +145,16 @@ def refresh_zones(
         if watermark is not None and watermark > target:
             raise ZoneRefreshError("Zone watermark is ahead of completed 4h data")
 
-    result = detector(
-        eligible,
-        min_touches=zone_config.min_touches,
-        current_price=float(eligible.iloc[-1]["close"]),
-        buffer_pct=zone_config.role_buffer_pct,
-        external_swing_order=zone_config.external_swing_order,
-        atr_period=zone_config.atr_period,
-        break_atr_mult=zone_config.break_atr_mult,
-        external_min_swing_atr_mult=zone_config.external_min_swing_atr_mult,
-        external_min_swing_pct=zone_config.external_min_swing_pct,
+    # Shared pure rebuild path keeps live persistence identical to offline backtest fingerprints.
+    fingerprinted = build_fingerprinted_support_zones(
+        closed,
+        zone_config=zone_config,
+        zone_set_as_of=target,
+        exchange=exchange,
+        symbol=symbol,
+        detector_version=detector_version,
+        detector=detector,
     )
-    support = result.get("support")
-    if not isinstance(support, list):
-        raise ZoneRefreshError("Detector did not return a support zone list")
-    daily_df = aggregate_ohlc_to_daily(eligible, min_bars_per_day=6)
-    fingerprinted = [
-        {
-            **fingerprint_zone(
-                zone,
-                four_hour_df=eligible,
-                daily_df=daily_df,
-                exchange=exchange,
-                symbol=symbol,
-                detector_version=detector_version,
-            ),
-            "zone_set_as_of": target,
-        }
-        for zone in support
-    ]
 
     written_at = utc_seconds() if now_s is None else int(now_s)
     with connect(database_path) as conn:

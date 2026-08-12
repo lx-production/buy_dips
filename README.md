@@ -1,8 +1,8 @@
 # PRANA Buy the Dips Bot
 
-Local Python bot for a fail-closed Polygon canary flow. It fetches Binance Spot `BTCUSDT` **1h** candles, derives closed **4h** bars, detects support zones with `support_structure_v1` (`src/zones/`), and evaluates one gate-based decision engine: `support_close_v1`. Every cycle writes a `BUY` or `HOLD` row to the `decisions` table.
+Local Python bot for a fail-closed Polygon canary flow. It fetches Binance Spot `BTCUSDT` **1h** candles, derives closed **4h** bars, detects support zones with `support_structure_v1` (`src/zones/`), and evaluates one gate-based decision engine: `support_close_v1`. Every live cycle writes a `BUY` or `HOLD` row to the `decisions` table.
 
-The hourly CLI path today is **`trade-once --mode observe`**: fetch → zones → decision → persist. Wallet helpers (`wallet-create`, `trade-check`, `approve-trading`, `revoke-trading`) exist for prep. Quote/simulate/`live` broadcast and the offline `backtest` CLI from the Phase 2 plan are not wired into the runner yet.
+The hourly CLI path today is **`trade-once --mode observe`**: fetch → zones → decision → persist. Offline **`backtest`** replays the same engine on stored candles and exports BUY CSV / a visual chart. Wallet helpers (`wallet-create`, `trade-check`, `approve-trading`, `revoke-trading`) exist for prep. Quote/simulate/`live` broadcast from the Phase 2 plan are not wired into the runner yet.
 
 ## What It Does
 
@@ -11,15 +11,16 @@ The hourly CLI path today is **`trade-once --mode observe`**: fetch → zones �
 - Rebuilds support zones only when a newer completed 4h bar appears (scoped `bot_state` watermark).
 - Persists zone fingerprints (`zf1:…`) and evaluates `support_close_v1` on the latest closed 1h close.
 - Stores every decision (`BUY` / `HOLD` + `reason_code`) in `decisions`.
+- Offline backtest replays history in memory (no live table writes), prints a BUY summary, writes a BUY CSV, and can serve a 1h chart with time-bounded zones.
 - Creates an encrypted local keystore, checks Polygon contracts/balances, and can grant/revoke a capped USDT router allowance.
 
 ## What It Does Not Do (yet)
 
 - No automatic DEX swap in `trade-once` (no quote → sign → broadcast path in the runner).
 - No `dry_run` / `live` CLI modes exposed yet (only `observe`).
-- No offline `backtest` CLI / BUY CSV export yet.
 - No systemd units installed by this repo (Pi rollout stays operator-owned).
 - No sell / stop-loss logic.
+- Backtest is signal-only: no PnL, sell, quote, slippage, gas, or wallet simulation.
 
 ## Install
 
@@ -85,10 +86,10 @@ FROM bot_state_readable;
 Backfill roughly the last 12 months. Binance caps each request at 1000 klines; the client pages through the range. Rows are upserted, so re-runs are safe.
 
 ```bash
-# ~12 months of 1h candles (needed for observe + future backtest)
+# ~12 months of 1h candles (needed for observe + backtest)
 python3 -m src.cli backfill --timeframe 1h
 
-# ~12 months of 4h candles (optional; live cycles also derive 4h from 1h)
+# ~12 months of 4h candles (optional warm-up; live cycles also derive 4h from 1h)
 python3 -m src.cli backfill --timeframe 4h
 ```
 
@@ -98,6 +99,36 @@ For a shorter backtest-prep window starting **2026-06-01 UTC** (script begins **
 python3 scripts/backfill_1h_from_2026_06_01.py
 ```
 
+Backtest also needs enough older **4h** history in SQLite for detector warm-up before the 1h window. If zones fail to build, run a 4h backfill as well.
+
+## Offline Backtest
+
+Replay `support_close_v1` on stored closed 1h candles. The engine is the same as observe; cooldown uses an in-memory prior-BUY list for that run only (never reads/writes `decisions`, `zones`, `zone_sets`, or `bot_state`).
+
+- `--start` is inclusive, `--end` is exclusive. Both must be ISO-8601 with timezone on a UTC hour boundary.
+- `--end` defaults to after the latest closed 1h candle.
+- Requires continuous 1h data from `start - 48h`. Incomplete overdue 4h buckets abort the run.
+- Output is BUY-only: CLI summary + CSV. HOLD is computed for correct replay but not printed or exported.
+
+```bash
+python3 -m src.cli backtest \
+  --start 2026-06-01T00:00:00+00:00 \
+  --end 2026-07-01T00:00:00+00:00 \
+  --csv data/backtest_buys.csv
+```
+
+CLI prints the range, evaluated candle count, zone rebuild count, BUY count, and CSV path.
+
+BUY CSV columns:
+
+- `trigger_time`, `trigger_close`, `entry_region`, `fingerprint_version`
+- `selected_zone_fingerprint`, `zone_low`, `zone_mid`, `zone_high`
+- `higher_zone_fingerprint`, `higher_zone_low`, `internal_range_midpoint`
+- `next_lower_zone_fingerprint`, `next_lower_zone_high`, `below_zone_pct`
+- `dip_origin_time`, `dip_origin_close`, `zone_set_as_of`
+
+Zero BUYs still writes a CSV with only the header row. Same inputs/config must produce identical BUY timestamps and CSV rows.
+
 ## Print Zones
 
 ```bash
@@ -106,19 +137,25 @@ python3 -m src.cli zones
 
 Loads closed **4h** candles from SQLite, runs support-only zone detection, and prints support bands.
 
-## Open Local 4H Chart
+## Open Local Charts
+
+Latest zones on closed 4h candles (unchanged helper chart):
 
 ```bash
 python3 scripts/serve_chart.py
 ```
 
-Then open:
+Then open `http://127.0.0.1:8000`. For readability it only draws the nearest 4 supports at/below price plus the nearest 2 above; the detector itself is unchanged.
 
-```text
-http://127.0.0.1:8000
+Backtest chart (1h candles, BUY markers, zones only while each snapshot was valid):
+
+```bash
+python3 scripts/serve_backtest_chart.py \
+  --start 2026-06-01T00:00:00+00:00 \
+  --end 2026-07-01T00:00:00+00:00
 ```
 
-The page overlays `support_structure_v1` zones on closed `BTCUSDT` 4h candles. For readability it only draws the nearest 4 supports at/below price plus the nearest 2 above; the detector itself is unchanged.
+Then open `http://127.0.0.1:8001`. The server runs the offline replay once before binding; bad/missing data prevents startup. Wheel zooms at the cursor, drag pans, and Reset viewport restores the full window. Hover BUY/zone for details. There is no HOLD marker or HOLD table.
 
 ## Run One Observe Cycle
 
