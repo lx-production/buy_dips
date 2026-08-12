@@ -129,6 +129,76 @@ CREATE TABLE IF NOT EXISTS bot_state (
   value TEXT NOT NULL,
   updated_at INTEGER NOT NULL
 );
+
+-- Keep Unix timestamps canonical and expose fixed UTC+7 strings for operator queries.
+CREATE VIEW IF NOT EXISTS candles_readable AS
+SELECT
+  candles.*,
+  datetime(open_time / 1000.0, 'unixepoch', '+7 hours') || ' +07:00' AS open_time_utc7,
+  datetime(close_time / 1000.0, 'unixepoch', '+7 hours') || ' +07:00' AS close_time_utc7,
+  datetime(fetched_at, 'unixepoch', '+7 hours') || ' +07:00' AS fetched_at_utc7
+FROM candles;
+
+CREATE VIEW IF NOT EXISTS zones_readable AS
+SELECT
+  zones.*,
+  datetime(created_at, 'unixepoch', '+7 hours') || ' +07:00' AS created_at_utc7,
+  datetime(zone_set_as_of / 1000.0, 'unixepoch', '+7 hours') || ' +07:00' AS zone_set_as_of_utc7,
+  (
+    SELECT json_group_array(value_utc7)
+    FROM (
+      SELECT datetime(json_each.value / 1000.0, 'unixepoch', '+7 hours') || ' +07:00' AS value_utc7
+      FROM json_each(zones.source_open_times_json)
+      ORDER BY CAST(json_each.key AS INTEGER)
+    )
+  ) AS source_open_times_json_utc7,
+  datetime(zone_source_time / 1000.0, 'unixepoch', '+7 hours') || ' +07:00' AS zone_source_time_utc7
+FROM zones;
+
+CREATE VIEW IF NOT EXISTS zone_sets_readable AS
+SELECT
+  zone_sets.*,
+  datetime(zone_set_as_of / 1000.0, 'unixepoch', '+7 hours') || ' +07:00' AS zone_set_as_of_utc7,
+  datetime(created_at, 'unixepoch', '+7 hours') || ' +07:00' AS created_at_utc7
+FROM zone_sets;
+
+CREATE VIEW IF NOT EXISTS decisions_readable AS
+SELECT
+  decisions.*,
+  datetime(created_at, 'unixepoch', '+7 hours') || ' +07:00' AS created_at_utc7,
+  datetime(candle_open_time / 1000.0, 'unixepoch', '+7 hours') || ' +07:00' AS candle_open_time_utc7,
+  datetime(candle_close_time / 1000.0, 'unixepoch', '+7 hours') || ' +07:00' AS candle_close_time_utc7,
+  datetime(zone_set_as_of / 1000.0, 'unixepoch', '+7 hours') || ' +07:00' AS zone_set_as_of_utc7,
+  datetime(selected_zone_source_time / 1000.0, 'unixepoch', '+7 hours') || ' +07:00'
+    AS selected_zone_source_time_utc7,
+  CASE
+    WHEN selected_source_open_times_json IS NOT NULL
+    THEN (
+      SELECT json_group_array(value_utc7)
+      FROM (
+        SELECT datetime(json_each.value / 1000.0, 'unixepoch', '+7 hours') || ' +07:00' AS value_utc7
+        FROM json_each(decisions.selected_source_open_times_json)
+        ORDER BY CAST(json_each.key AS INTEGER)
+      )
+    )
+  END AS selected_source_open_times_json_utc7,
+  datetime(lookback_start_time / 1000.0, 'unixepoch', '+7 hours') || ' +07:00'
+    AS lookback_start_time_utc7,
+  datetime(lookback_end_time / 1000.0, 'unixepoch', '+7 hours') || ' +07:00'
+    AS lookback_end_time_utc7,
+  datetime(dip_origin_open_time / 1000.0, 'unixepoch', '+7 hours') || ' +07:00'
+    AS dip_origin_open_time_utc7
+FROM decisions;
+
+CREATE VIEW IF NOT EXISTS bot_state_readable AS
+SELECT
+  bot_state.*,
+  CASE
+    WHEN key LIKE 'zone_rebuild_watermark:%'
+    THEN datetime(CAST(value AS INTEGER) / 1000.0, 'unixepoch', '+7 hours') || ' +07:00'
+  END AS value_utc7,
+  datetime(updated_at, 'unixepoch', '+7 hours') || ' +07:00' AS updated_at_utc7
+FROM bot_state;
 """
 
 

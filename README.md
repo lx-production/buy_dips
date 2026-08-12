@@ -1,29 +1,25 @@
 # PRANA Buy the Dips Bot
 
-Phase 1 is a local, Python-based foundation for a paper-only Buy the Dips system. It collects Binance Spot `BTCUSDT` 4H candles, stores raw candle data in SQLite, detects support zones with the `support_structure_v1` detector (`src/zones.py`), generates paper signals, and logs every decision including `HOLD`.
+Local Python bot for a fail-closed Polygon canary flow. It fetches Binance Spot `BTCUSDT` **1h** candles, derives closed **4h** bars, detects support zones with `support_structure_v1` (`src/zones/`), and evaluates one gate-based decision engine: `support_close_v1`. Every cycle writes a `BUY` or `HOLD` row to the `decisions` table.
 
-## What Phase 1 Does
+The hourly CLI path today is **`trade-once --mode observe`**: fetch → zones → decision → persist. Wallet helpers (`wallet-create`, `trade-check`, `approve-trading`, `revoke-trading`) exist for prep. Quote/simulate/`live` broadcast and the offline `backtest` CLI from the Phase 2 plan are not wired into the runner yet.
 
-- Fetches public Binance Spot `BTCUSDT` 4H klines.
-- Stores raw candle data permanently in local SQLite.
-- Uses only closed 4H candles for signal generation.
-- Detects support zones from closed 4H OHLC using swing lows, reclaimed resistance, wick-floor retests, fixed-width bands, and derived 1D body-support overlays.
-- Stores detected zones with `origin` and `role`; support-only zones use `role="support"`.
-- Generates and stores paper signals.
-- Logs `HOLD`, `ALERT_ONLY`, `PREPARE_MANUAL_REVIEW`, and `STRONG_BUY_SIGNAL`.
+## What It Does
 
-## What Phase 1 Does Not Do
+- Fetches public Binance Spot `BTCUSDT` **1h** klines into SQLite (`candles`, `timeframe="1h"`).
+- Derives closed Binance-aligned **4h** bars from those 1h candles and stores them as `timeframe="4h"`.
+- Rebuilds support zones only when a newer completed 4h bar appears (scoped `bot_state` watermark).
+- Persists zone fingerprints (`zf1:…`) and evaluates `support_close_v1` on the latest closed 1h close.
+- Stores every decision (`BUY` / `HOLD` + `reason_code`) in `decisions`.
+- Creates an encrypted local keystore, checks Polygon contracts/balances, and can grant/revoke a capped USDT router allowance.
 
-- No real trades.
-- No wallet execution.
-- No smart contract execution.
-- No private key handling.
-- No blockchain transactions.
-- No hardcoded secrets.
-- No Web3 or Hardhat dependency.
-- No hidden background jobs.
+## What It Does Not Do (yet)
 
-Even `STRONG_BUY_SIGNAL` is only a logged paper signal in Phase 1.
+- No automatic DEX swap in `trade-once` (no quote → sign → broadcast path in the runner).
+- No `dry_run` / `live` CLI modes exposed yet (only `observe`).
+- No offline `backtest` CLI / BUY CSV export yet.
+- No systemd units installed by this repo (Pi rollout stays operator-owned).
+- No sell / stop-loss logic.
 
 ## Install
 
@@ -35,6 +31,13 @@ source .venv/bin/activate
 pip install -r requirements.txt
 cp config.example.yaml config.yaml
 ```
+
+Copy secrets into the environment only (never into YAML):
+
+- `KEYSTORE_PASSWORD` — decrypts the local keystore
+- `POLYGON_RPC_URL` — Polygon JSON-RPC endpoint for wallet/contract commands
+
+Default config is **dev**: `wallet.keystore_path: data/wallet/trader-dev.json` and `execution.quote_base_url: https://prana.triethocduongpho.net`. Prod expects a separate keystore and loopback quote host `http://127.0.0.1:4173`.
 
 ## Initialize The Database
 
@@ -48,23 +51,48 @@ Default database path:
 data/prana_buy_the_dips.sqlite
 ```
 
-## Backfill 12 Months Of BTCUSDT 4H Candles
+`init_db` creates `candles`, `zones`, `zone_sets`, `decisions`, and `bot_state`, and drops any leftover Phase 1 `signals` table. It also creates read-only UTC+7 views for convenient inspection. Existing databases only need one `init-db` or `trade-once` run to receive the views; do not delete the database or backfill existing rows.
 
-# Backfill khoảng 12 tháng candle 1h
-python -m src.cli backfill --timeframe 1h
+### Read Database Times In UTC+7
 
-# Backfill khoảng 12 tháng candle 4h
-python -m src.cli backfill --timeframe 4h
+Trading logic continues to use the original Unix timestamps in UTC. This keeps comparisons, candle arithmetic, fingerprints (`zf1`), zone watermarks, and persisted data unchanged. The following read-only views retain every canonical column and append display columns ending in `_utc7`, formatted as `YYYY-MM-DD HH:MM:SS +07:00`:
 
-```bash
-python3 -m src.cli backfill
+- `candles_readable`
+- `zones_readable`
+- `zone_sets_readable`
+- `decisions_readable`
+- `bot_state_readable`
+
+The zone and decision views also provide `source_open_times_json_utc7` and `selected_source_open_times_json_utc7`; their original JSON millisecond arrays remain available unchanged. For example:
+
+```sql
+SELECT symbol, timeframe, open_time, open_time_utc7, close
+FROM candles_readable
+ORDER BY open_time DESC
+LIMIT 10;
+
+SELECT decision, reason_code, candle_open_time_utc7, selected_source_open_times_json_utc7
+FROM decisions_readable
+ORDER BY candle_open_time DESC
+LIMIT 10;
+
+SELECT key, value, value_utc7, updated_at_utc7
+FROM bot_state_readable;
 ```
 
-Fetches roughly the **last 12 months** of public `BTCUSDT` 4H klines into SQLite. Binance allows at most **1000 klines per request**, so the client **pages** through the range (moving `startTime` forward after each batch)—that is a page size, not “only 1000 candles total.” Rows are **upserted**; re-runs are safe. On success the CLI prints insert/update counts, first and last candle (with ISO times), and the database path.
+## Backfill Candles
 
-## Backfill BTCUSDT 1H Candles (Backtest Prep)
+Backfill roughly the last 12 months. Binance caps each request at 1000 klines; the client pages through the range. Rows are upserted, so re-runs are safe.
 
-For the offline `support_close_v1` backtest window starting **2026-06-01 UTC**, fetch hourly candles into the same `candles` table (`timeframe="1h"`). The script starts **2026-05-30** so the first Jun 1 hours already have a full 48h dip-origin lookback:
+```bash
+# ~12 months of 1h candles (needed for observe + future backtest)
+python3 -m src.cli backfill --timeframe 1h
+
+# ~12 months of 4h candles (optional; live cycles also derive 4h from 1h)
+python3 -m src.cli backfill --timeframe 4h
+```
+
+For a shorter backtest-prep window starting **2026-06-01 UTC** (script begins **2026-05-30** so the first hours already have a 48h lookback):
 
 ```bash
 python3 scripts/backfill_1h_from_2026_06_01.py
@@ -76,7 +104,7 @@ python3 scripts/backfill_1h_from_2026_06_01.py
 python3 -m src.cli zones
 ```
 
-This loads closed candles from SQLite, runs support-only zone detection, stores the zone snapshot, and prints support zones.
+Loads closed **4h** candles from SQLite, runs support-only zone detection, and prints support bands.
 
 ## Open Local 4H Chart
 
@@ -90,43 +118,100 @@ Then open:
 http://127.0.0.1:8000
 ```
 
-The page is a local fullscreen canvas chart. It reads closed `BTCUSDT` 4H candles from SQLite and overlays support zones from `support_structure_v1` (`src/zones.py`). For readability the chart only draws the nearest 4 supports at/below price plus the nearest 2 above; the detector itself is unchanged.
+The page overlays `support_structure_v1` zones on closed `BTCUSDT` 4h candles. For readability it only draws the nearest 4 supports at/below price plus the nearest 2 above; the detector itself is unchanged.
 
-## Run One Paper Signal Cycle
+## Run One Observe Cycle
 
 ```bash
-python3 -m src.cli run-once
+python3 -m src.cli trade-once --mode observe
 ```
 
-This fetches the latest candles, stores them, excludes any currently open 4H candle from signal calculations, detects zones, generates one paper signal, and stores it in the `signals` table. A `HOLD` decision is stored just like any other decision.
+Or:
+
+```bash
+python3 scripts/run_once.py
+```
+
+One cycle:
+
+1. Fetches recent closed `BTCUSDT` 1h klines into `candles`.
+2. Derives any overdue completed 4h buckets from those 1h rows (aborts if a due 4h bucket is missing 1h constituents).
+3. Rebuilds zones when the 4h watermark advances; otherwise loads the last fingerprinted zone set.
+4. Evaluates `support_close_v1` on the latest closed 1h candle.
+5. Persists the decision (`BUY` or `HOLD`) and prints id / decision / reason / zones-rebuilt.
+
+No wallet credentials are required for `observe`.
+
+## Wallet And Contract Helpers
+
+Use a throwaway **dev** keystore locally. Keep prod keystores only on the Pi.
+
+```bash
+# Create encrypted keystore at wallet.keystore_path (prints address only)
+python3 -m src.cli wallet-create
+
+# Decrypt and print the configured address only
+python3 -m src.cli wallet-status
+
+# Verify chain, router bytecode, token decimals, balances, allowance
+python3 -m src.cli trade-check
+
+# Cap router USDT allowance to the 10 USDT canary total
+python3 -m src.cli approve-trading
+
+# Reset that router allowance to zero
+python3 -m src.cli revoke-trading
+```
+
+## Decision Engine (`support_close_v1`)
+
+One dip-to-support flow. Output is gate-based (not scored): exactly one `decision` (`BUY` / `HOLD`) and one `reason_code` per cycle.
+
+Entry regions for the current closed 1h `close`:
+
+- **Inside support:** `zone.low <= close < zone.mid`
+- **Immediately below support:** `close < zone.low` and close sits in the **70%–100%** band of the gap from the next-lower zone high up to this zone’s low
+
+Shared setup gates:
+
+- In the prior **48h** (floored by the selected zone’s `zone_source_time`), there is a nearest earlier closed 1h candle whose `close` is **strictly above** the internal-range midpoint (midpoint between the selected zone high and the next higher zone low).
+- No prior `BUY` for the **same selected zone fingerprint** in the prior **24h**. Cooldown is per-zone: a deeper zone may still `BUY` within 24h of a shallower-zone `BUY`.
+
+Reason codes:
+
+- `CLOSE_OUTSIDE_ENTRY_REGION`
+- `CLOSE_NOT_BELOW_ZONE_MID`
+- `NO_HIGHER_ZONE`
+- `NO_RECENT_CLOSE_ABOVE_INTERNAL_MID`
+- `NO_LOWER_ZONE`
+- `BELOW_ZONE_OUT_OF_BAND`
+- `RECENT_BUY_IN_24H`
+- `BUY_GATES_PASSED` → `BUY`
+
+Fetch failures, zone-build failures, and an overdue incomplete 4h bucket abort the runner **before** a decision row is written.
 
 ## Zone Detection (`support_structure_v1`)
 
-Phase 1 uses **support-only structure detection** for zones (implemented in `detect_support_resistance_zones` -> `detect_support_resistance_zones_structure_v1`). Tune swing sensitivity and break thresholds under `zones:` in `config.yaml`.
+Detector lives under `src/zones/` and stays support-oriented. Tune swing sensitivity under `zones:` in `config.yaml`.
 
-`support_structure_v1` treats candles as a time-price path:
+High level:
 
-- high/low/body ranges detect raw internal and external swing points
-- external swing points are filtered into prominent 4H pivots using the configured ATR/percent reversal thresholds
-- support evidence can come from prominent swing lows, reclaimed swing highs (`flipped_resistance`), retested wick floors, dense reclaimed internal-high clusters inside large support gaps, and higher-timeframe 1D low-pivot body anchors
-- support candidates are grouped when their source prices fit within the fixed 500 USD zone width
-- support bands are anchored to the relevant support base for that evidence type
-- a deep external swing-low rejection followed by a quick higher-low retest is split into a variable-width `wick_retest_support` floor and a fixed-width `body_rejection_support` shelf; these replace an ambiguous `mixed_structure` band trapped between them
-- complete 1D candles are derived from six closed 4H candles; a prominent 1D low pivot can add `daily_body_support`, anchored from the daily body low with the same fixed `$500` width
-- when a 1D body-support zone overlaps a 4H `mixed_structure` bridge or sits immediately below a nearby 4H `flipped_resistance` body band, the 1D zone replaces the 4H band
-- zones require at least `min_touches` unique source touches
-- support-biased zones stay in the support list even if they are currently above, below, or touching price
+- High/low/body ranges detect internal and external swing points on closed 4h OHLC.
+- External swings are filtered into prominent pivots with ATR/percent thresholds.
+- Support evidence includes swing lows, reclaimed resistance, wick-floor retests, and derived 1D body-support overlays.
+- Candidates group into fixed-width (~$500) bands; zones need at least `min_touches` touches.
+- Detector returns `support` / `resistance` / `active` / `all`; `resistance` and `active` stay empty. Hourly trading uses the full `support` list (including zones currently above price) so below-zone entries still work.
 
-The default prominent-pivot filter requires an external swing reversal of at least `max(4.0 * ATR, 2.5% of price)`. Set `external_min_swing_atr_mult: 0.0` and `external_min_swing_pct: 0.0` to inspect the raw local-extrema behavior. The chart hides internal pivot labels unless `show_internal_pivots: true` is set.
+Default prominent-pivot filter: reversal of at least `max(4.0 * ATR, 2.5% of price)`. Set `external_min_swing_atr_mult: 0.0` and `external_min_swing_pct: 0.0` to inspect raw local extrema. Chart internal pivots stay hidden unless `show_internal_pivots: true`.
 
-The output remains compatible with the paper signal logic: the detector still returns `support`, `resistance`, `active`, and `all` keys, but `resistance` and `active` are always empty. Every support zone includes `low`, `high`, `mid`, `width`, `width_pct`, `touches`, `origin`, `role`, `source_closes`, and `source_indexes`. Additional metadata such as `score`, `structure_role`, `last_touch_index`, and `zone_width` is included for inspection. Daily overlay zones also include `source_timeframe="1d"`.
+After each rebuild, `zone_refresh` resolves `source_indexes` → `source_open_times` / `zone_source_time`, computes deterministic `zf1` fingerprints, and persists them with a `zone_sets` manifest. The hourly signal path never recomputes fingerprints from raw indexes.
 
-**`source_closes`** - one price per touch that formed the zone (same length and order as `source_indexes`). Despite the name, these are **not always** the candle `close` from OHLC; most values are body edges such as `min(open, close)` for swing lows or `max(open, close)` for reclaimed highs. `touches` is `len(source_closes)`.
+## Safety
 
-## Safety Warning
-
-Phase 1 is paper signal mode only. It has no private key support, no wallet
-logic, no smart contract calls, and no real trade execution path.
+- Default mode is observe-only decision logging.
+- Live trading (when enabled later) requires `execution.live_enabled`, a pinned wallet address, and the prod loopback quote host.
+- Keystores and `.env` are gitignored; never commit passwords, private keys, signed txs, or RPC URLs with API keys.
+- Canary intent: **1 USDT** per trade, **10 USDT** cumulative cap, capped router approval (not unlimited).
 
 ## Tests
 
