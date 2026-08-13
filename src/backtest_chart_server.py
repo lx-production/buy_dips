@@ -44,7 +44,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Serving backtest chart at http://{args.host}:{args.port}")
     print(
         f"Range {ms_to_iso(result.start_ms)} -> {ms_to_iso(result.end_ms)} | "
-        f"BUY={result.buy_count} rebuilds={result.zone_rebuild_count}"
+        f"BUY={result.buy_count} zones={result.zone_snapshot_count} "
+        f"cache_hits={result.zone_cache_hit_count} builds={result.zone_rebuild_count}"
     )
     print("Press Ctrl+C to stop.")
     try:
@@ -153,6 +154,7 @@ _INDEX_HTML = """<!doctype html>
       <div class="controls">
         <button type="button" id="reset-view">Reset viewport</button>
       </div>
+      <div class="meta">Wheel: time zoom. Shift+wheel or price axis: price zoom. Drag price axis to pan.</div>
     </div>
   </div>
   <div class="tooltip" id="tooltip"></div>
@@ -175,6 +177,7 @@ _INDEX_HTML = """<!doctype html>
     let chartData = null;
     let viewStart = 0;
     let viewEnd = 0;
+    let priceView = null;
     let drag = null;
 
     function setHudCollapsed(collapsed) {
@@ -197,7 +200,8 @@ _INDEX_HTML = """<!doctype html>
       title.textContent = `${chartData.meta.symbol} 1H backtest`;
       meta.textContent = [
         `${formatUtc(chartData.meta.start_ms)} → ${formatUtc(chartData.meta.end_ms)}`,
-        `${chartData.meta.evaluated_candles} candles • ${chartData.meta.zone_rebuild_count} rebuilds • ${chartData.meta.buy_count} BUY`
+        `${chartData.meta.evaluated_candles} candles • ${chartData.meta.zone_snapshot_count} zone snapshots • ${chartData.meta.buy_count} BUY`,
+        `${chartData.meta.zone_cache_hit_count} cache hits • ${chartData.meta.zone_rebuild_count} detector builds`
       ].join('\\n');
       resetViewport();
       draw();
@@ -206,6 +210,7 @@ _INDEX_HTML = """<!doctype html>
     function resetViewport() {
       viewStart = 0;
       viewEnd = chartData && chartData.candles ? chartData.candles.length : 0;
+      priceView = null;
       draw();
     }
 
@@ -258,22 +263,29 @@ _INDEX_HTML = """<!doctype html>
       const minPrice = Math.min(...prices);
       const maxPrice = Math.max(...prices);
       const padding = Math.max((maxPrice - minPrice) * 0.08, 1);
+      const autoMin = minPrice - padding;
+      const autoMax = maxPrice + padding;
       const scale = {
         left: 56,
         right: 92,
         top: 38,
         bottom: 44,
-        min: minPrice - padding,
-        max: maxPrice + padding,
+        min: priceView ? priceView.min : autoMin,
+        max: priceView ? priceView.max : autoMax,
         plotWidth: width - 148,
         plotHeight: height - 82,
         firstTime,
         lastTime
       };
       drawGrid(width, height, scale);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(scale.left, scale.top, scale.plotWidth, scale.plotHeight);
+      ctx.clip();
       drawZoneSegments(zones, candles, scale);
       drawCandles(candles, scale);
       drawBuys(buys, candles, scale);
+      ctx.restore();
       drawPriceAxis(scale, width);
       drawTimeAxis(candles, scale, height);
       canvas._scale = scale;
@@ -298,6 +310,38 @@ _INDEX_HTML = """<!doctype html>
 
     function yFor(price, scale) {
       return scale.top + ((scale.max - price) / (scale.max - scale.min)) * scale.plotHeight;
+    }
+
+    function priceForY(y, scale) {
+      const ratio = Math.min(1, Math.max(0, (y - scale.top) / scale.plotHeight));
+      return scale.max - ratio * (scale.max - scale.min);
+    }
+
+    function isPriceAxis(x, scale) {
+      return x >= scale.left + scale.plotWidth;
+    }
+
+    function zoomPriceAt(clientY, factor) {
+      const scale = canvas._scale;
+      if (!scale) return;
+      const rect = canvas.getBoundingClientRect();
+      const y = clientY - rect.top;
+      const ratio = Math.min(1, Math.max(0, (y - scale.top) / scale.plotHeight));
+      const anchor = priceForY(y, scale);
+      const nextRange = Math.max(10, (scale.max - scale.min) * factor);
+      priceView = {
+        max: anchor + ratio * nextRange,
+        min: anchor - (1 - ratio) * nextRange
+      };
+      draw();
+    }
+
+    function panPrice(dy) {
+      const scale = canvas._scale;
+      if (!scale) return;
+      const delta = dy * ((scale.max - scale.min) / scale.plotHeight);
+      priceView = { min: scale.min + delta, max: scale.max + delta };
+      draw();
     }
 
     function drawBackground(width, height) {
@@ -490,10 +534,14 @@ _INDEX_HTML = """<!doctype html>
 
     canvas.addEventListener('mousemove', (event) => {
       if (drag) {
+        if (drag.axis === 'price') {
+          panPrice(event.clientY - drag.y);
+          drag.y = event.clientY;
+          return;
+        }
         const dx = event.clientX - drag.x;
         const candlesPerPixel = Math.max(1, (drag.end - drag.start) / Math.max(1, window.innerWidth - 148));
         const shift = Math.round(-dx * candlesPerPixel);
-        const width = drag.end - drag.start;
         let nextStart = drag.start + shift;
         let nextEnd = drag.end + shift;
         if (nextStart < 0) { nextEnd -= nextStart; nextStart = 0; }
@@ -511,7 +559,12 @@ _INDEX_HTML = """<!doctype html>
     canvas.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
     canvas.addEventListener('mousedown', (event) => {
       if (event.button !== 0) return;
-      drag = { x: event.clientX, start: viewStart, end: viewEnd };
+      const rect = canvas.getBoundingClientRect();
+      const scale = canvas._scale;
+      const onPriceAxis = scale && isPriceAxis(event.clientX - rect.left, scale);
+      drag = onPriceAxis
+        ? { axis: 'price', y: event.clientY }
+        : { axis: 'time', x: event.clientX, start: viewStart, end: viewEnd };
     });
     window.addEventListener('mouseup', () => { drag = null; });
     canvas.addEventListener('wheel', (event) => {
@@ -521,9 +574,13 @@ _INDEX_HTML = """<!doctype html>
       const x = event.clientX - rect.left;
       const scale = canvas._scale;
       if (!scale) return;
+      const factor = event.deltaY < 0 ? 0.85 : 1.18;
+      if (event.shiftKey || isPriceAxis(x, scale)) {
+        zoomPriceAt(event.clientY, factor);
+        return;
+      }
       const ratio = Math.min(1, Math.max(0, (x - scale.left) / scale.plotWidth));
       const count = viewEnd - viewStart;
-      const factor = event.deltaY < 0 ? 0.85 : 1.18;
       let nextCount = Math.max(20, Math.min(chartData.candles.length, Math.round(count * factor)));
       let nextStart = Math.round(viewStart + ratio * (count - nextCount));
       nextStart = Math.max(0, Math.min(nextStart, chartData.candles.length - nextCount));

@@ -65,6 +65,21 @@ CREATE TABLE IF NOT EXISTS zone_sets (
   PRIMARY KEY(exchange, symbol, timeframe, detector_version, zone_set_as_of)
 );
 
+CREATE TABLE IF NOT EXISTS backtest_zone_cache (
+  exchange TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  timeframe TEXT NOT NULL,
+  zone_set_as_of INTEGER NOT NULL,
+  detector_version TEXT NOT NULL,
+  detector_signature TEXT NOT NULL,
+  zone_config_hash TEXT NOT NULL,
+  input_hash TEXT NOT NULL,
+  zone_count INTEGER NOT NULL CHECK(zone_count >= 0),
+  zones_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY(exchange, symbol, timeframe, zone_set_as_of)
+);
+
 CREATE TABLE IF NOT EXISTS decisions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   created_at INTEGER NOT NULL,

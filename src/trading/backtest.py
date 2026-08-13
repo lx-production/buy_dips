@@ -4,8 +4,9 @@ import csv
 
 from pathlib import Path
 from datetime import datetime
-from typing import Any, Callable
 from dataclasses import dataclass, field
+
+from typing import Any, Callable
 
 import pandas as pd
 
@@ -15,6 +16,7 @@ from ..utils import ms_to_iso
 from .aggregate_4h import OverdueIncompleteFourHourError, aggregate_four_hour_bucket
 from .constants import DETECTOR_VERSION, FOUR_HOURS_MS, HOURLY_TIMEFRAME, LOOKBACK_48H_MS, ONE_HOUR_MS, STRATEGY_VERSION, ZONE_TIMEFRAME
 from .signal import BUY, evaluate_support_close_v1
+from .backtest_zone_cache import ZoneCacheIdentity, build_four_hour_input_hashes, build_zone_cache_identity, load_cached_zone_snapshot, prune_incompatible_zone_cache, store_cached_zone_snapshot
 from .zone_refresh import ZoneRefreshError, build_fingerprinted_support_zones
 
 
@@ -65,7 +67,9 @@ class BacktestResult:
     zone_snapshots: list[ZoneSnapshot]
     zone_segments: list[dict[str, Any]]
     evaluated_candles: int
+    zone_snapshot_count: int
     zone_rebuild_count: int
+    zone_cache_hit_count: int
     buy_count: int
     prior_buys: list[PriorBuy] = field(default_factory=list)
 
@@ -150,13 +154,26 @@ def run_backtest(
         warm_up_4h,
         through_ms=resolved_end,
     )
+    cache_identity: ZoneCacheIdentity | None = None
+    input_hashes: dict[int, str] = {}
+    if detector is None:
+        cache_identity = build_zone_cache_identity(config.zones)
+        input_hashes = build_four_hour_input_hashes(four_hour_history)
+        prune_incompatible_zone_cache(
+            database_path,
+            exchange=config.exchange,
+            symbol=config.symbol,
+            identity=cache_identity,
+        )
 
     prior_buys: list[PriorBuy] = []
     buys: list[dict[str, Any]] = []
     snapshots: list[ZoneSnapshot] = []
     current_zones: list[dict[str, Any]] = []
     watermark: int | None = None
+    zone_snapshot_count = 0
     zone_rebuild_count = 0
+    zone_cache_hit_count = 0
     detector_fn = detector
 
     for _, row in display.iterrows():
@@ -176,32 +193,58 @@ def run_backtest(
                 raise BacktestError(
                     f"Insufficient completed 4h history at trigger {ms_to_iso(trigger_open)}"
                 )
-            try:
-                if detector_fn is None:
-                    zones = build_fingerprinted_support_zones(
-                        derived_frame,
-                        zone_config=config.zones,
-                        zone_set_as_of=latest_completed,
+            input_hash = input_hashes.get(latest_completed)
+            cached_zones = None
+            if cache_identity is not None and input_hash is not None:
+                cached_zones = load_cached_zone_snapshot(
+                    database_path,
+                    exchange=config.exchange,
+                    symbol=config.symbol,
+                    zone_set_as_of=latest_completed,
+                    input_hash=input_hash,
+                    identity=cache_identity,
+                )
+            if cached_zones is not None:
+                zones = cached_zones
+                zone_cache_hit_count += 1
+            else:
+                try:
+                    if detector_fn is None:
+                        zones = build_fingerprinted_support_zones(
+                            derived_frame,
+                            zone_config=config.zones,
+                            zone_set_as_of=latest_completed,
+                            exchange=config.exchange,
+                            symbol=config.symbol,
+                            detector_version=DETECTOR_VERSION,
+                        )
+                    else:
+                        zones = build_fingerprinted_support_zones(
+                            derived_frame,
+                            zone_config=config.zones,
+                            zone_set_as_of=latest_completed,
+                            exchange=config.exchange,
+                            symbol=config.symbol,
+                            detector_version=DETECTOR_VERSION,
+                            detector=detector_fn,
+                        )
+                except ZoneRefreshError as exc:
+                    raise BacktestError(str(exc)) from exc
+                zone_rebuild_count += 1
+                if cache_identity is not None and input_hash is not None:
+                    store_cached_zone_snapshot(
+                        database_path,
+                        zones,
                         exchange=config.exchange,
                         symbol=config.symbol,
-                        detector_version=DETECTOR_VERSION,
-                    )
-                else:
-                    zones = build_fingerprinted_support_zones(
-                        derived_frame,
-                        zone_config=config.zones,
                         zone_set_as_of=latest_completed,
-                        exchange=config.exchange,
-                        symbol=config.symbol,
-                        detector_version=DETECTOR_VERSION,
-                        detector=detector_fn,
+                        input_hash=input_hash,
+                        identity=cache_identity,
                     )
-            except ZoneRefreshError as exc:
-                raise BacktestError(str(exc)) from exc
             current_zones = zones
             watermark = latest_completed
             snapshots.append(ZoneSnapshot(zone_set_as_of=latest_completed, zones=zones))
-            zone_rebuild_count += 1
+            zone_snapshot_count += 1
             rebuilt = True
 
         assert watermark is not None
@@ -253,7 +296,9 @@ def run_backtest(
         zone_snapshots=snapshots,
         zone_segments=segments,
         evaluated_candles=len(display),
+        zone_snapshot_count=zone_snapshot_count,
         zone_rebuild_count=zone_rebuild_count,
+        zone_cache_hit_count=zone_cache_hit_count,
         buy_count=len(buys),
         prior_buys=prior_buys,
     )
@@ -335,7 +380,9 @@ def backtest_api_payload(result: BacktestResult, *, config: AppConfig) -> dict[s
             "start_ms": result.start_ms,
             "end_ms": result.end_ms,
             "evaluated_candles": result.evaluated_candles,
+            "zone_snapshot_count": result.zone_snapshot_count,
             "zone_rebuild_count": result.zone_rebuild_count,
+            "zone_cache_hit_count": result.zone_cache_hit_count,
             "buy_count": result.buy_count,
         },
         "candles": result.candles,

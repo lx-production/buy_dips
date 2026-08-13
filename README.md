@@ -52,7 +52,7 @@ Default database path:
 data/prana_buy_the_dips.sqlite
 ```
 
-`init_db` creates `candles`, `zones`, `zone_sets`, `decisions`, and `bot_state`, and drops any leftover Phase 1 `signals` table. It also creates read-only UTC+7 views for convenient inspection. Existing databases only need one `init-db` or `trade-once` run to receive the views; do not delete the database or backfill existing rows.
+`init_db` creates `candles`, `zones`, `zone_sets`, `backtest_zone_cache`, `decisions`, and `bot_state`, and drops any leftover Phase 1 `signals` table. It also creates read-only UTC+7 views for convenient inspection. Existing databases are upgraded automatically on the next command that initializes or reads the database; do not delete the database or backfill existing rows.
 
 ### Read Database Times In UTC+7
 
@@ -108,6 +108,8 @@ Replay `support_close_v1` on stored closed 1h candles. The engine is the same as
 - `--start` is inclusive, `--end` is exclusive. Both must be ISO-8601 with timezone on any UTC hour boundary; 4h alignment is not required.
 - `--end` defaults to after the latest closed 1h candle.
 - Requires continuous 1h data from `start - 48h`. Incomplete overdue 4h buckets abort the run.
+- Zone snapshots are cached in the separate `backtest_zone_cache` table. The first run builds them; later runs reuse matching snapshots and build only new or stale 4h watermarks.
+- Cache validity includes zone config, detector source code, and a cumulative hash of the exact 4h candle input. Config/code edits and historical candle changes invalidate affected snapshots automatically.
 - Output is BUY-only: CLI summary + CSV. HOLD is computed for correct replay but not printed or exported.
 
 ```bash
@@ -117,7 +119,7 @@ python3 -m src.cli backtest \
   --csv data/backtest_buys.csv
 ```
 
-CLI prints the range, evaluated candle count, zone rebuild count, BUY count, and CSV path.
+CLI prints the range, evaluated candle count, zone snapshot count, cache hits, detector builds, BUY count, and CSV path.
 
 BUY CSV columns:
 
@@ -155,9 +157,9 @@ python3 scripts/serve_backtest_chart.py \
   --end 2026-07-01T00:00:00+00:00
 ```
 
-Then open `http://127.0.0.1:8001`. The server prints the replay range, runs the offline replay once, and only then binds the port; bad/missing data prevents startup. Wheel zooms at the cursor, drag pans, and Reset viewport restores the full window. Hover BUY/zone for details. There is no HOLD marker or HOLD table. For readability the chart only draws support zones with `low > 56000` and `high < 70000`; the replay and API still include every zone.
+Then open `http://127.0.0.1:8001`. The server prints the replay range, runs the offline replay once, and only then binds the port; bad/missing data prevents startup. Wheel zooms time at the cursor; Shift+wheel or wheel on the price axis zooms price; drag the price axis to pan vertically; drag the plot to pan time. Reset viewport restores the full window and auto price scale. Hover BUY/zone for details. There is no HOLD marker or HOLD table. For readability the chart only draws support zones with `low > 56000` and `high < 70000`; the replay and API still include every zone.
 
-During replay, each completed 4h bucket is aggregated once and reused by later 1h trigger candles, so long default-to-latest windows do not repeatedly rescan the full 1h dataset.
+During replay, each completed 4h bucket is aggregated once and reused by later 1h trigger candles. Cached zone snapshots are validated before use; malformed cache JSON is rebuilt from canonical candles. Backtest still never reads or writes the live `zones`, `zone_sets`, `decisions`, or `bot_state` rows.
 
 ## Run One Observe Cycle
 
