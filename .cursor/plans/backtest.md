@@ -22,7 +22,9 @@
   - Nhận `start` inclusive và `end` exclusive; `start` bắt buộc, `end` mặc định sau cây 1h đóng cuối cùng.
   - Thời gian đầu vào phải là ISO-8601 có timezone và nằm trên biên giờ UTC.
   - Yêu cầu đủ dữ liệu 1h liên tục từ `start - 48h`; thiếu nến hoặc bucket 4h không đủ bốn nến thì abort.
+  - `start` có thể nằm trên bất kỳ biên giờ UTC; bucket 4h derive đầu tiên là bucket đầu tiên được phủ đủ bốn nến 1h.
   - Dùng 4h lịch sử trước vùng 1h làm detector warm-up; từ vùng có 1h trở đi luôn derive 4h từ bốn nến 1h và không dùng 4h tương lai.
+  - Mỗi bucket 4h được aggregate đúng một lần cho cả replay, sau đó frame as-of chỉ được cắt lại khi watermark 4h tiến lên.
   - Khởi tạo zone snapshot tại cây trigger đầu tiên, sau đó rebuild trong memory đúng lúc một 4h mới hoàn tất.
   - Helper thuần dùng chung với live zone refresh: `build_fingerprinted_support_zones`.
   - Gọi `evaluate_support_close_v1(..., mode="backtest")`; mode này có trong pure engine nhưng không thêm vào schema `decisions`.
@@ -34,7 +36,7 @@
 ## Hành vi chart
 
 - Ban đầu fit toàn bộ khoảng backtest; wheel zoom theo vị trí con trỏ, kéo ngang để pan, có nút reset viewport.
-- Vẽ tất cả support zone chỉ trong thời gian snapshot của chúng có hiệu lực.
+- Vẽ support zone chỉ trong thời gian snapshot của chúng có hiệu lực, và chỉ các band có `low > 56000` và `high < 70000` (lọc hiển thị; API vẫn trả đủ segment).
 - Vẽ BUY bằng marker xanh tại `trigger_close`; selected zone tại BUY được nhấn mạnh.
 - Hover BUY / zone như đã khóa; không có marker/bảng/tooltip dành cho no-BUY.
 

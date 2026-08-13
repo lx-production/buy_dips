@@ -105,7 +105,7 @@ Backtest also needs enough older **4h** history in SQLite for detector warm-up b
 
 Replay `support_close_v1` on stored closed 1h candles. The engine is the same as observe; cooldown uses an in-memory prior-BUY list for that run only (never reads/writes `decisions`, `zones`, `zone_sets`, or `bot_state`).
 
-- `--start` is inclusive, `--end` is exclusive. Both must be ISO-8601 with timezone on a UTC hour boundary.
+- `--start` is inclusive, `--end` is exclusive. Both must be ISO-8601 with timezone on any UTC hour boundary; 4h alignment is not required.
 - `--end` defaults to after the latest closed 1h candle.
 - Requires continuous 1h data from `start - 48h`. Incomplete overdue 4h buckets abort the run.
 - Output is BUY-only: CLI summary + CSV. HOLD is computed for correct replay but not printed or exported.
@@ -155,7 +155,9 @@ python3 scripts/serve_backtest_chart.py \
   --end 2026-07-01T00:00:00+00:00
 ```
 
-Then open `http://127.0.0.1:8001`. The server runs the offline replay once before binding; bad/missing data prevents startup. Wheel zooms at the cursor, drag pans, and Reset viewport restores the full window. Hover BUY/zone for details. There is no HOLD marker or HOLD table.
+Then open `http://127.0.0.1:8001`. The server prints the replay range, runs the offline replay once, and only then binds the port; bad/missing data prevents startup. Wheel zooms at the cursor, drag pans, and Reset viewport restores the full window. Hover BUY/zone for details. There is no HOLD marker or HOLD table. For readability the chart only draws support zones with `low > 56000` and `high < 70000`; the replay and API still include every zone.
+
+During replay, each completed 4h bucket is aggregated once and reused by later 1h trigger candles, so long default-to-latest windows do not repeatedly rescan the full 1h dataset.
 
 ## Run One Observe Cycle
 

@@ -31,6 +31,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         start_ms = parse_backtest_bound(args.start, label="start")
         end_ms = parse_backtest_bound(args.end, label="end") if args.end else None
+        end_label = args.end or "latest closed 1h candle"
+        print(f"Running backtest {args.start} -> {end_label}...", flush=True)
         result = run_backtest(config, database_path, start_ms=start_ms, end_ms=end_ms)
         payload = backtest_api_payload(result, config=config)
     except (BacktestError, Exception) as exc:
@@ -166,6 +168,9 @@ _INDEX_HTML = """<!doctype html>
     const hudToggle = document.getElementById('hud-toggle');
     const resetView = document.getElementById('reset-view');
     const HUD_COLLAPSED_KEY = 'backtestChartHudCollapsed';
+    // Display-only band so far-away supports do not stretch the price axis.
+    const VISIBLE_ZONE_MIN = 56000;
+    const VISIBLE_ZONE_MAX = 70000;
 
     let chartData = null;
     let viewStart = 0;
@@ -212,6 +217,10 @@ _INDEX_HTML = """<!doctype html>
       draw();
     }
 
+    function isVisibleZone(zone) {
+      return Number(zone.low) > VISIBLE_ZONE_MIN && Number(zone.high) < VISIBLE_ZONE_MAX;
+    }
+
     function visibleCandles() {
       if (!chartData || !chartData.candles.length) return [];
       const start = Math.max(0, Math.min(viewStart, chartData.candles.length - 1));
@@ -234,7 +243,11 @@ _INDEX_HTML = """<!doctype html>
       const candles = visibleCandles();
       const firstTime = candles[0].time;
       const lastTime = candles[candles.length - 1].time + 3600000;
-      const zones = (chartData.zone_segments || []).filter(zone => zone.valid_to > firstTime && zone.valid_from < lastTime);
+      const zones = (chartData.zone_segments || []).filter(zone =>
+        zone.valid_to > firstTime &&
+        zone.valid_from < lastTime &&
+        isVisibleZone(zone)
+      );
       const buys = (chartData.buys || []).filter(buy => {
         const t = buy.trigger_open_time;
         return t >= firstTime && t <= candles[candles.length - 1].time;

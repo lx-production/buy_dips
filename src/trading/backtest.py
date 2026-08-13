@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass, field
-from datetime import datetime
+
 from pathlib import Path
+from datetime import datetime
 from typing import Any, Callable
+from dataclasses import dataclass, field
 
 import pandas as pd
 
@@ -12,15 +13,7 @@ from ..config import AppConfig
 from ..db import connect, load_candles_df
 from ..utils import ms_to_iso
 from .aggregate_4h import OverdueIncompleteFourHourError, aggregate_four_hour_bucket
-from .constants import (
-    DETECTOR_VERSION,
-    FOUR_HOURS_MS,
-    HOURLY_TIMEFRAME,
-    LOOKBACK_48H_MS,
-    ONE_HOUR_MS,
-    STRATEGY_VERSION,
-    ZONE_TIMEFRAME,
-)
+from .constants import DETECTOR_VERSION, FOUR_HOURS_MS, HOURLY_TIMEFRAME, LOOKBACK_48H_MS, ONE_HOUR_MS, STRATEGY_VERSION, ZONE_TIMEFRAME
 from .signal import BUY, evaluate_support_close_v1
 from .zone_refresh import ZoneRefreshError, build_fingerprinted_support_zones
 
@@ -152,6 +145,11 @@ def run_backtest(
         symbol=config.symbol,
         hourly_start_ms=lookback_start,
     )
+    four_hour_history = _build_four_hour_history(
+        hourly,
+        warm_up_4h,
+        through_ms=resolved_end,
+    )
 
     prior_buys: list[PriorBuy] = []
     buys: list[dict[str, Any]] = []
@@ -166,19 +164,18 @@ def run_backtest(
         trigger_open = int(trigger["open_time"])
         now_ms = trigger_open + ONE_HOUR_MS
 
-        # As-of this closed 1h bar, every overdue 4h bucket must be fully derivable from 1h data.
-        derived_frame, latest_completed = _four_hour_frame_as_of(
-            hourly,
-            warm_up_4h,
-            now_ms=now_ms,
-        )
-        if latest_completed is None:
-            raise BacktestError(
-                f"Insufficient completed 4h history at trigger {ms_to_iso(trigger_open)}"
-            )
-
         rebuilt = False
-        if watermark is None or latest_completed > watermark:
+        latest_due = (now_ms // FOUR_HOURS_MS) * FOUR_HOURS_MS - FOUR_HOURS_MS
+        if watermark is None or latest_due > watermark:
+            # Slice the precomputed history only when the completed 4h watermark advances.
+            derived_frame, latest_completed = _four_hour_frame_as_of(
+                four_hour_history,
+                now_ms=now_ms,
+            )
+            if latest_completed is None:
+                raise BacktestError(
+                    f"Insufficient completed 4h history at trigger {ms_to_iso(trigger_open)}"
+                )
             try:
                 if detector_fn is None:
                     zones = build_fingerprinted_support_zones(
@@ -440,7 +437,7 @@ def _load_warm_up_four_hour(
     hourly_start_ms: int,
 ) -> pd.DataFrame:
     """Load historical 4h bars that end before the first 1h-covered 4h bucket."""
-    first_derived_bucket = (int(hourly_start_ms) // FOUR_HOURS_MS) * FOUR_HOURS_MS
+    first_derived_bucket = _first_fully_covered_four_hour_bucket(hourly_start_ms)
     four_hour = load_candles_df(
         database_path,
         exchange,
@@ -453,25 +450,23 @@ def _load_warm_up_four_hour(
     return four_hour[four_hour["open_time"].astype("int64") < first_derived_bucket].reset_index(drop=True)
 
 
-def _four_hour_frame_as_of(
+def _build_four_hour_history(
     hourly: pd.DataFrame,
     warm_up_4h: pd.DataFrame,
     *,
-    now_ms: int,
-) -> tuple[pd.DataFrame, int | None]:
-    """Combine warm-up 4h history with 1h-derived closed buckets available at now_ms."""
+    through_ms: int,
+) -> pd.DataFrame:
+    """Aggregate each due 4h bucket once and combine it with older warm-up history."""
     if hourly.empty:
         raise BacktestError("Cannot derive 4h bars without 1h candles")
     hourly_start = int(hourly["open_time"].astype("int64").min())
-    first_derived_bucket = (hourly_start // FOUR_HOURS_MS) * FOUR_HOURS_MS
-    latest_due = (int(now_ms) // FOUR_HOURS_MS) * FOUR_HOURS_MS - FOUR_HOURS_MS
-    if latest_due < 0:
-        return warm_up_4h.copy(), None
+    first_derived_bucket = _first_fully_covered_four_hour_bucket(hourly_start)
+    latest_due = (int(through_ms) // FOUR_HOURS_MS) * FOUR_HOURS_MS - FOUR_HOURS_MS
 
     derived_rows: list[dict[str, Any]] = []
     for bucket in range(first_derived_bucket, latest_due + 1, FOUR_HOURS_MS):
         try:
-            bar = aggregate_four_hour_bucket(hourly, bucket, now_ms=now_ms)
+            bar = aggregate_four_hour_bucket(hourly, bucket, now_ms=through_ms)
         except OverdueIncompleteFourHourError as exc:
             raise BacktestError(str(exc)) from exc
         if bar is not None:
@@ -483,15 +478,35 @@ def _four_hour_frame_as_of(
     if derived_rows:
         frames.append(pd.DataFrame(derived_rows))
     if not frames:
-        return pd.DataFrame(), None
+        return pd.DataFrame()
     combined = pd.concat(frames, ignore_index=True)
     combined = combined.sort_values("open_time").drop_duplicates("open_time", keep="last").reset_index(drop=True)
     if "is_closed" in combined.columns:
         combined = combined[combined["is_closed"].astype(int) == 1].reset_index(drop=True)
-    if combined.empty:
-        return combined, None
+    return combined
+
+
+def _first_fully_covered_four_hour_bucket(hourly_start_ms: int) -> int:
+    """Return the first 4h bucket whose four constituent hours are present in the 1h window."""
+    start = int(hourly_start_ms)
+    return ((start + FOUR_HOURS_MS - 1) // FOUR_HOURS_MS) * FOUR_HOURS_MS
+
+
+def _four_hour_frame_as_of(
+    four_hour_history: pd.DataFrame,
+    *,
+    now_ms: int,
+) -> tuple[pd.DataFrame, int | None]:
+    """Return the precomputed closed 4h history that was available at now_ms."""
+    if four_hour_history is None or four_hour_history.empty:
+        return pd.DataFrame(), None
+    latest_due = (int(now_ms) // FOUR_HOURS_MS) * FOUR_HOURS_MS - FOUR_HOURS_MS
+    if latest_due < 0:
+        return pd.DataFrame(), None
     # Never expose a 4h bar newer than the latest completed bucket at this trigger.
-    combined = combined[combined["open_time"].astype("int64") <= latest_due].reset_index(drop=True)
-    if combined.empty:
-        return combined, None
-    return combined, int(combined.iloc[-1]["open_time"])
+    available = four_hour_history[
+        four_hour_history["open_time"].astype("int64") <= latest_due
+    ].reset_index(drop=True)
+    if available.empty:
+        return available, None
+    return available, int(available.iloc[-1]["open_time"])

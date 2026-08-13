@@ -1,24 +1,20 @@
 from __future__ import annotations
 
 import csv
-from datetime import datetime, timezone
+
 from pathlib import Path
+from datetime import datetime, timezone
 
 import pytest
+
+import src.trading.backtest as backtest_module
 
 from src.cli import build_parser
 from src.config import AppConfig, ZoneConfig
 from src.db import connect, init_db, upsert_candles
 from src.backtest_chart_server import load_backtest_chart_payload
 from src.trading.constants import FOUR_HOURS_MS, ONE_HOUR_MS
-from src.trading.backtest import (
-    BUY_CSV_COLUMNS,
-    BacktestError,
-    live_table_counts,
-    parse_backtest_bound,
-    run_backtest,
-    write_buy_csv,
-)
+from src.trading.backtest import BUY_CSV_COLUMNS, BacktestError, live_table_counts, parse_backtest_bound, run_backtest, write_buy_csv
 
 
 HOUR = ONE_HOUR_MS
@@ -68,11 +64,13 @@ def _four_hour_rows(count: int, *, end_before: int) -> list[dict[str, object]]:
 
 
 def _seed_db(db_path: Path, *, hourly_start: int, hourly_count: int, warm_up_4h: int = 20) -> None:
+    # Seed stored 4h history through the last bucket before full 1h coverage begins.
     init_db(db_path)
     upsert_candles(db_path, _hourly_rows(hourly_start, hourly_count), "binance", "BTCUSDT", "1h")
+    first_fully_covered = ((hourly_start + FOUR - 1) // FOUR) * FOUR
     upsert_candles(
         db_path,
-        _four_hour_rows(warm_up_4h, end_before=hourly_start),
+        _four_hour_rows(warm_up_4h, end_before=first_fully_covered),
         "binance",
         "BTCUSDT",
         "4h",
@@ -181,6 +179,45 @@ def test_rebuild_only_after_full_four_1h_and_no_future_4h(tmp_path: Path) -> Non
     assert start in rebuild_targets
     assert all(target <= start for target in rebuild_targets) or start in rebuild_targets
     assert result.zone_rebuild_count >= 2
+
+
+def test_backtest_aggregates_each_four_hour_bucket_once(tmp_path: Path, monkeypatch) -> None:
+    # Count aggregation calls to prevent replay length from reintroducing quadratic 4h work.
+    db_path = tmp_path / "bot.sqlite"
+    start = 80 * FOUR
+    lookback = start - 48 * HOUR
+    end = start + 24 * HOUR
+    _seed_db(db_path, hourly_start=lookback, hourly_count=48 + 24, warm_up_4h=16)
+    config = AppConfig(database_path=str(db_path), zones=ZoneConfig(external_swing_order=2))
+    aggregate = backtest_module.aggregate_four_hour_bucket
+    bucket_calls: list[int] = []
+
+    def counting_aggregate(hourly_df, bucket_open_time, *, now_ms):
+        # Delegate to the real aggregator after recording the bucket requested by replay.
+        bucket_calls.append(int(bucket_open_time))
+        return aggregate(hourly_df, bucket_open_time, now_ms=now_ms)
+
+    monkeypatch.setattr(backtest_module, "aggregate_four_hour_bucket", counting_aggregate)
+
+    run_backtest(config, db_path, start_ms=start, end_ms=end, detector=_fake_detector)
+
+    assert bucket_calls == list(range(lookback, end, FOUR))
+
+
+def test_start_on_hour_boundary_does_not_require_four_hour_alignment(tmp_path: Path) -> None:
+    # Preserve the CLI contract that every UTC hour boundary is valid, not only 4h boundaries.
+    db_path = tmp_path / "bot.sqlite"
+    start = 80 * FOUR + HOUR
+    lookback = start - 48 * HOUR
+    end = start + 5 * HOUR
+    _seed_db(db_path, hourly_start=lookback, hourly_count=48 + 5, warm_up_4h=16)
+    config = AppConfig(database_path=str(db_path), zones=ZoneConfig(external_swing_order=2))
+
+    result = run_backtest(config, db_path, start_ms=start, end_ms=end, detector=_fake_detector)
+
+    assert result.start_ms == start
+    assert result.end_ms == end
+    assert result.evaluated_candles == 5
 
 
 def test_missing_warmup_gap_and_bad_alignment_fail(tmp_path: Path) -> None:
