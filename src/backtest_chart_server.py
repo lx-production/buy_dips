@@ -108,6 +108,7 @@ def _make_handler(payload: dict[str, Any]) -> type[BaseHTTPRequestHandler]:
 
 
 def _build_index_html() -> str:
+    # Serve the Lightweight Charts page; replay data still comes from GET /api/backtest.
     return _INDEX_HTML
 
 
@@ -120,8 +121,7 @@ _INDEX_HTML = """<!doctype html>
   <style>
     :root { color-scheme: dark; }
     html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #090c10; color: #e6edf3; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    #app { position: fixed; inset: 0; }
-    canvas { display: block; width: 100vw; height: 100vh; cursor: crosshair; }
+    #app, #chart { position: fixed; inset: 0; }
     .hud { position: fixed; top: 18px; left: 22px; z-index: 2; padding: 12px 14px; border: 1px solid rgba(255,255,255,.08); border-radius: 12px; background: rgba(9,12,16,.78); backdrop-filter: blur(10px); max-width: min(420px, calc(100vw - 44px)); }
     .hud-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
     .title { font-size: 15px; font-weight: 700; letter-spacing: .03em; }
@@ -137,9 +137,10 @@ _INDEX_HTML = """<!doctype html>
     .tooltip { position: fixed; z-index: 3; display: none; max-width: min(360px, calc(100vw - 24px)); padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,.12); background: rgba(9,12,16,.92); color: #e6edf3; font-size: 12px; line-height: 1.45; pointer-events: none; white-space: pre-wrap; }
     .error { position: fixed; inset: auto 22px 22px 22px; padding: 12px 14px; border-radius: 10px; color: #ffdcd7; background: rgba(248,81,73,.14); border: 1px solid rgba(248,81,73,.35); font-size: 13px; display: none; }
   </style>
+  <script src="https://unpkg.com/lightweight-charts@5.0.8/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
-  <div id="app"><canvas id="chart"></canvas></div>
+  <div id="app"><div id="chart"></div></div>
   <div class="hud" id="hud">
     <div class="hud-header">
       <div class="title" id="title">Backtest</div>
@@ -154,14 +155,13 @@ _INDEX_HTML = """<!doctype html>
       <div class="controls">
         <button type="button" id="reset-view">Reset viewport</button>
       </div>
-      <div class="meta">Wheel: time zoom. Shift+wheel or price axis: price zoom. Drag price axis to pan.</div>
+      <div class="meta">Times are UTC+7. Scroll to zoom time. Drag plot to pan. Drag / scroll the price axis to scale price.</div>
     </div>
   </div>
   <div class="tooltip" id="tooltip"></div>
   <div class="error" id="error"></div>
   <script>
-    const canvas = document.getElementById('chart');
-    const ctx = canvas.getContext('2d');
+    const container = document.getElementById('chart');
     const hud = document.getElementById('hud');
     const title = document.getElementById('title');
     const meta = document.getElementById('meta');
@@ -170,15 +170,15 @@ _INDEX_HTML = """<!doctype html>
     const hudToggle = document.getElementById('hud-toggle');
     const resetView = document.getElementById('reset-view');
     const HUD_COLLAPSED_KEY = 'backtestChartHudCollapsed';
-    // Display-only band so far-away supports do not stretch the price axis.
+    // Display-only band so far-away supports do not clutter the pane.
     const VISIBLE_ZONE_MIN = 56000;
     const VISIBLE_ZONE_MAX = 70000;
 
     let chartData = null;
-    let viewStart = 0;
-    let viewEnd = 0;
-    let priceView = null;
-    let drag = null;
+    let visibleZones = [];
+    let visibleBuys = [];
+    let chart = null;
+    let candleSeries = null;
 
     function setHudCollapsed(collapsed) {
       hud.classList.toggle('collapsed', collapsed);
@@ -191,266 +191,102 @@ _INDEX_HTML = """<!doctype html>
     try { setHudCollapsed(localStorage.getItem(HUD_COLLAPSED_KEY) === '1'); } catch (_) { setHudCollapsed(false); }
     hudToggle.addEventListener('click', () => setHudCollapsed(!hud.classList.contains('collapsed')));
 
-    async function load() {
-      error.style.display = 'none';
-      const response = await fetch('/api/backtest');
-      if (!response.ok) throw new Error(`Backtest API failed: ${response.status}`);
-      chartData = await response.json();
-      if (chartData.holds) throw new Error('API payload unexpectedly contains HOLD decisions');
-      title.textContent = `${chartData.meta.symbol} 1H backtest`;
-      meta.textContent = [
-        `${formatUtc(chartData.meta.start_ms)} → ${formatUtc(chartData.meta.end_ms)}`,
-        `${chartData.meta.evaluated_candles} candles • ${chartData.meta.zone_snapshot_count} zone snapshots • ${chartData.meta.buy_count} BUY`,
-        `${chartData.meta.zone_cache_hit_count} cache hits • ${chartData.meta.zone_rebuild_count} detector builds`
-      ].join('\\n');
-      resetViewport();
-      draw();
-    }
-
-    function resetViewport() {
-      viewStart = 0;
-      viewEnd = chartData && chartData.candles ? chartData.candles.length : 0;
-      priceView = null;
-      draw();
-    }
-
-    function resize() {
-      const ratio = window.devicePixelRatio || 1;
-      canvas.width = Math.floor(window.innerWidth * ratio);
-      canvas.height = Math.floor(window.innerHeight * ratio);
-      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-      draw();
+    function toSec(ms) {
+      return Math.floor(Number(ms) / 1000);
     }
 
     function isVisibleZone(zone) {
       return Number(zone.low) > VISIBLE_ZONE_MIN && Number(zone.high) < VISIBLE_ZONE_MAX;
     }
 
-    function visibleCandles() {
-      if (!chartData || !chartData.candles.length) return [];
-      const start = Math.max(0, Math.min(viewStart, chartData.candles.length - 1));
-      const end = Math.max(start + 1, Math.min(viewEnd, chartData.candles.length));
-      return chartData.candles.slice(start, end).map((candle, offset) => ({
-        ...candle,
-        absoluteIndex: start + offset
-      }));
-    }
-
-    function draw() {
-      const width = window.innerWidth;
-      const height = window.innerHeight;
-      ctx.clearRect(0, 0, width, height);
-      drawBackground(width, height);
-      if (!chartData || !chartData.candles.length) {
-        drawCentered('No closed candles in backtest window.');
-        return;
+    // Map a UTC-ms bound onto the bar edge. valid_to is exclusive.
+    function zoneEdgeX(timeScale, timeMs, which, spacing) {
+      const sec = toSec(timeMs);
+      const x = timeScale.timeToCoordinate(sec);
+      if (x !== null) return x - spacing / 2;
+      if (which === 'end') {
+        const prev = timeScale.timeToCoordinate(sec - 3600);
+        if (prev !== null) return prev + spacing / 2;
       }
-      const candles = visibleCandles();
-      const firstTime = candles[0].time;
-      const lastTime = candles[candles.length - 1].time + 3600000;
-      const zones = (chartData.zone_segments || []).filter(zone =>
-        zone.valid_to > firstTime &&
-        zone.valid_from < lastTime &&
-        isVisibleZone(zone)
-      );
-      const buys = (chartData.buys || []).filter(buy => {
-        const t = buy.trigger_open_time;
-        return t >= firstTime && t <= candles[candles.length - 1].time;
-      });
-      const prices = candles.flatMap(c => [c.high, c.low])
-        .concat(zones.flatMap(z => [z.low, z.high]))
-        .concat(buys.map(b => Number(b.trigger_close)));
-      const minPrice = Math.min(...prices);
-      const maxPrice = Math.max(...prices);
-      const padding = Math.max((maxPrice - minPrice) * 0.08, 1);
-      const autoMin = minPrice - padding;
-      const autoMax = maxPrice + padding;
-      const scale = {
-        left: 56,
-        right: 92,
-        top: 38,
-        bottom: 44,
-        min: priceView ? priceView.min : autoMin,
-        max: priceView ? priceView.max : autoMax,
-        plotWidth: width - 148,
-        plotHeight: height - 82,
-        firstTime,
-        lastTime
-      };
-      drawGrid(width, height, scale);
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(scale.left, scale.top, scale.plotWidth, scale.plotHeight);
-      ctx.clip();
-      drawZoneSegments(zones, candles, scale);
-      drawCandles(candles, scale);
-      drawBuys(buys, candles, scale);
-      ctx.restore();
-      drawPriceAxis(scale, width);
-      drawTimeAxis(candles, scale, height);
-      canvas._scale = scale;
-      canvas._candles = candles;
-      canvas._zones = zones;
-      canvas._buys = buys;
+      return null;
     }
 
-    function xForIndex(index, count, scale) {
-      const step = scale.plotWidth / count;
-      return scale.left + step * index + step / 2;
-    }
-
-    function xForTime(time, candles, scale) {
-      const index = candles.findIndex(c => c.time === time);
-      if (index >= 0) return xForIndex(index, candles.length, scale);
-      const step = scale.plotWidth / candles.length;
-      const approx = candles.findIndex(c => c.time > time);
-      const i = approx < 0 ? candles.length - 1 : Math.max(0, approx - 1);
-      return xForIndex(i, candles.length, scale);
-    }
-
-    function yFor(price, scale) {
-      return scale.top + ((scale.max - price) / (scale.max - scale.min)) * scale.plotHeight;
-    }
-
-    function priceForY(y, scale) {
-      const ratio = Math.min(1, Math.max(0, (y - scale.top) / scale.plotHeight));
-      return scale.max - ratio * (scale.max - scale.min);
-    }
-
-    function isPriceAxis(x, scale) {
-      return x >= scale.left + scale.plotWidth;
-    }
-
-    function zoomPriceAt(clientY, factor) {
-      const scale = canvas._scale;
-      if (!scale) return;
-      const rect = canvas.getBoundingClientRect();
-      const y = clientY - rect.top;
-      const ratio = Math.min(1, Math.max(0, (y - scale.top) / scale.plotHeight));
-      const anchor = priceForY(y, scale);
-      const nextRange = Math.max(10, (scale.max - scale.min) * factor);
-      priceView = {
-        max: anchor + ratio * nextRange,
-        min: anchor - (1 - ratio) * nextRange
-      };
-      draw();
-    }
-
-    function panPrice(dy) {
-      const scale = canvas._scale;
-      if (!scale) return;
-      const delta = dy * ((scale.max - scale.min) / scale.plotHeight);
-      priceView = { min: scale.min + delta, max: scale.max + delta };
-      draw();
-    }
-
-    function drawBackground(width, height) {
-      const gradient = ctx.createLinearGradient(0, 0, 0, height);
-      gradient.addColorStop(0, '#0d1117');
-      gradient.addColorStop(1, '#05070a');
-      ctx.fillStyle = gradient;
-      ctx.fillRect(0, 0, width, height);
-    }
-
-    function drawGrid(width, height, scale) {
-      ctx.strokeStyle = 'rgba(139,148,158,.15)';
-      ctx.lineWidth = 1;
-      for (let i = 0; i <= 6; i++) {
-        const y = scale.top + (scale.plotHeight / 6) * i;
-        ctx.beginPath(); ctx.moveTo(scale.left, y); ctx.lineTo(width - scale.right, y); ctx.stroke();
+    class ZoneBandsRenderer {
+      constructor(boxes) {
+        this._boxes = boxes;
       }
-      for (let i = 0; i <= 8; i++) {
-        const x = scale.left + (scale.plotWidth / 8) * i;
-        ctx.beginPath(); ctx.moveTo(x, scale.top); ctx.lineTo(x, height - scale.bottom); ctx.stroke();
+      draw(target) {
+        target.useMediaCoordinateSpace((scope) => {
+          const ctx = scope.context;
+          for (const box of this._boxes) {
+            const x = Math.min(box.x1, box.x2);
+            const y = Math.min(box.y1, box.y2);
+            const width = Math.max(Math.abs(box.x2 - box.x1), 1);
+            const height = Math.max(Math.abs(box.y2 - box.y1), 1);
+            ctx.fillStyle = 'rgba(46,160,67,0.16)';
+            ctx.strokeStyle = box.highlight ? 'rgba(63,185,80,0.95)' : 'rgba(46,160,67,0.55)';
+            ctx.lineWidth = box.highlight ? 2 : 1;
+            ctx.fillRect(x, y, width, height);
+            ctx.strokeRect(x, y, width, height);
+          }
+        });
       }
     }
 
-    function drawZoneSegments(zones, candles, scale) {
-      for (const zone of zones) {
-        const startX = Math.max(scale.left, xForTime(zone.valid_from, candles, scale) - (scale.plotWidth / candles.length) / 2);
-        const endExclusive = Math.min(scale.lastTime, zone.valid_to);
-        const endX = Math.min(scale.left + scale.plotWidth, xForTime(Math.max(zone.valid_from, endExclusive - 3600000), candles, scale) + (scale.plotWidth / candles.length) / 2);
-        const width = Math.max(endX - startX, 2);
-        const top = yFor(zone.high, scale);
-        const bottom = yFor(zone.low, scale);
-        const color = '46,160,67';
-        ctx.fillStyle = `rgba(${color}, .14)`;
-        ctx.strokeStyle = `rgba(${color}, .5)`;
-        ctx.fillRect(startX, top, width, Math.max(bottom - top, 2));
-        ctx.strokeRect(startX, top, width, Math.max(bottom - top, 2));
+    class ZoneBandsPaneView {
+      constructor(source) {
+        this._source = source;
+        this._boxes = [];
       }
-    }
-
-    function drawCandles(candles, scale) {
-      const step = scale.plotWidth / candles.length;
-      const bodyWidth = Math.max(2, Math.min(12, step * 0.62));
-      candles.forEach((candle, index) => {
-        const x = xForIndex(index, candles.length, scale);
-        const openY = yFor(candle.open, scale);
-        const closeY = yFor(candle.close, scale);
-        const highY = yFor(candle.high, scale);
-        const lowY = yFor(candle.low, scale);
-        const up = candle.close >= candle.open;
-        ctx.strokeStyle = up ? '#3fb950' : '#ff7b72';
-        ctx.fillStyle = up ? '#3fb950' : '#ff7b72';
-        ctx.beginPath(); ctx.moveTo(x, highY); ctx.lineTo(x, lowY); ctx.stroke();
-        ctx.fillRect(x - bodyWidth / 2, Math.min(openY, closeY), bodyWidth, Math.max(Math.abs(closeY - openY), 1));
-      });
-    }
-
-    function drawBuys(buys, candles, scale) {
-      for (const buy of buys) {
-        const x = xForTime(buy.trigger_open_time, candles, scale);
-        const y = yFor(Number(buy.trigger_close), scale);
-        const selected = (canvas._zones || []).find(z =>
-          z.fingerprint === buy.selected_zone_fingerprint &&
-          buy.trigger_open_time >= z.valid_from &&
-          buy.trigger_open_time < z.valid_to
-        );
-        if (selected) {
-          const top = yFor(selected.high, scale);
-          const bottom = yFor(selected.low, scale);
-          ctx.strokeStyle = 'rgba(63,185,80,.95)';
-          ctx.lineWidth = 2;
-          ctx.strokeRect(x - 10, top, 20, Math.max(bottom - top, 2));
-          ctx.lineWidth = 1;
+      zOrder() {
+        return 'bottom';
+      }
+      update() {
+        const host = this._source._chart;
+        const series = this._source._series;
+        if (!host || !series) {
+          this._boxes = [];
+          return;
         }
-        ctx.fillStyle = '#3fb950';
-        ctx.beginPath();
-        ctx.moveTo(x, y - 10);
-        ctx.lineTo(x - 7, y + 6);
-        ctx.lineTo(x + 7, y + 6);
-        ctx.closePath();
-        ctx.fill();
+        const timeScale = host.timeScale();
+        const spacing = timeScale.options().barSpacing || 6;
+        this._boxes = [];
+        for (const zone of this._source._zones) {
+          const x1 = zoneEdgeX(timeScale, zone.valid_from, 'start', spacing);
+          const x2 = zoneEdgeX(timeScale, zone.valid_to, 'end', spacing);
+          const y1 = series.priceToCoordinate(Number(zone.high));
+          const y2 = series.priceToCoordinate(Number(zone.low));
+          if (x1 === null || x2 === null || y1 === null || y2 === null) continue;
+          this._boxes.push({ x1, x2, y1, y2, highlight: Boolean(zone.highlight) });
+        }
+      }
+      renderer() {
+        return new ZoneBandsRenderer(this._boxes);
       }
     }
 
-    function drawPriceAxis(scale, width) {
-      ctx.fillStyle = '#8b949e';
-      ctx.font = '12px ui-sans-serif, system-ui';
-      ctx.textAlign = 'left';
-      for (let i = 0; i <= 6; i++) {
-        const price = scale.max - ((scale.max - scale.min) / 6) * i;
-        ctx.fillText(formatPrice(price), width - scale.right + 12, yFor(price, scale) + 4);
+    // One primitive draws every time-bounded support band so zoom/pan stay on the library.
+    class ZoneBandsPrimitive {
+      constructor(zones) {
+        this._zones = zones;
+        this._views = [new ZoneBandsPaneView(this)];
+        this._chart = null;
+        this._series = null;
       }
-    }
-
-    function drawTimeAxis(candles, scale, height) {
-      ctx.fillStyle = '#8b949e';
-      ctx.font = '12px ui-sans-serif, system-ui';
-      ctx.textAlign = 'center';
-      for (let i = 0; i <= 4; i++) {
-        const index = Math.min(candles.length - 1, Math.floor((candles.length - 1) * (i / 4)));
-        const x = scale.left + scale.plotWidth * (i / 4);
-        ctx.fillText(formatUtcShort(candles[index].time), x, height - 18);
+      attached(param) {
+        this._chart = param.chart;
+        this._series = param.series;
       }
-    }
-
-    function drawCentered(message) {
-      ctx.fillStyle = '#8b949e';
-      ctx.font = '16px ui-sans-serif, system-ui';
-      ctx.textAlign = 'center';
-      ctx.fillText(message, window.innerWidth / 2, window.innerHeight / 2);
+      detached() {
+        this._chart = null;
+        this._series = null;
+      }
+      updateAllViews() {
+        this._views[0].update();
+      }
+      paneViews() {
+        return this._views;
+      }
     }
 
     function formatPrice(value) {
@@ -458,42 +294,33 @@ _INDEX_HTML = """<!doctype html>
       return Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 });
     }
 
-    function formatUtc(ms) {
-      return new Date(ms).toISOString().replace('.000Z', 'Z');
+    const UTC7_OFFSET_MS = 7 * 60 * 60 * 1000;
+
+    // Display-only: shift the UTC instant into UTC+7 wall time. Replay math stays UTC.
+    function formatUtc7(ms, withSeconds) {
+      if (ms === null || ms === undefined || !Number.isFinite(Number(ms))) return 'n/a';
+      const shifted = new Date(Number(ms) + UTC7_OFFSET_MS);
+      const stamp = shifted.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
+      return (withSeconds === false ? stamp.slice(0, 16) : stamp) + ' +07:00';
     }
 
-    function formatUtcShort(ms) {
-      const d = new Date(ms);
-      return d.toISOString().slice(5, 16).replace('T', ' ') + 'Z';
+    function formatUtc7Tick(time, tickMarkType) {
+      const shifted = new Date(Number(time) * 1000 + UTC7_OFFSET_MS);
+      const year = shifted.getUTCFullYear();
+      const month = String(shifted.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(shifted.getUTCDate()).padStart(2, '0');
+      const hour = String(shifted.getUTCHours()).padStart(2, '0');
+      const minute = String(shifted.getUTCMinutes()).padStart(2, '0');
+      if (tickMarkType === 0) return String(year);
+      if (tickMarkType === 1) return `${year}-${month}`;
+      if (tickMarkType === 2) return `${month}-${day}`;
+      if (tickMarkType === 4) return `${hour}:${minute}:00`;
+      return `${month}-${day} ${hour}:${minute}`;
     }
 
     function shortFp(fp) {
       if (!fp) return 'n/a';
       return fp.length > 18 ? `${fp.slice(0, 10)}…${fp.slice(-6)}` : fp;
-    }
-
-    function hitTest(clientX, clientY) {
-      const rect = canvas.getBoundingClientRect();
-      const x = clientX - rect.left;
-      const y = clientY - rect.top;
-      const scale = canvas._scale;
-      const candles = canvas._candles || [];
-      const buys = canvas._buys || [];
-      const zones = canvas._zones || [];
-      if (!scale || !candles.length) return null;
-      for (const buy of buys) {
-        const bx = xForTime(buy.trigger_open_time, candles, scale);
-        const by = yFor(Number(buy.trigger_close), scale);
-        if (Math.hypot(x - bx, y - by) <= 10) return { type: 'buy', item: buy };
-      }
-      for (const zone of zones) {
-        const startX = Math.max(scale.left, xForTime(zone.valid_from, candles, scale) - (scale.plotWidth / candles.length) / 2);
-        const endX = Math.min(scale.left + scale.plotWidth, xForTime(Math.max(zone.valid_from, Math.min(scale.lastTime, zone.valid_to) - 3600000), candles, scale) + (scale.plotWidth / candles.length) / 2);
-        const top = yFor(zone.high, scale);
-        const bottom = yFor(zone.low, scale);
-        if (x >= startX && x <= endX && y >= top && y <= bottom) return { type: 'zone', item: zone };
-      }
-      return null;
     }
 
     function showTooltip(hit, clientX, clientY) {
@@ -505,7 +332,7 @@ _INDEX_HTML = """<!doctype html>
       if (hit.type === 'buy') {
         const b = hit.item;
         text = [
-          `BUY ${b.trigger_time}`,
+          `BUY ${formatUtc7(b.trigger_open_time)}`,
           `close ${formatPrice(b.trigger_close)}`,
           `entry ${b.entry_region}`,
           `zone ${formatPrice(b.zone_low)} / ${formatPrice(b.zone_mid)} / ${formatPrice(b.zone_high)}`,
@@ -513,14 +340,14 @@ _INDEX_HTML = """<!doctype html>
           `next-lower ${shortFp(b.next_lower_zone_fingerprint)} high=${formatPrice(b.next_lower_zone_high)}`,
           `midpoint ${formatPrice(b.internal_range_midpoint)}`,
           `below-zone % ${b.below_zone_pct == null ? 'n/a' : Number(b.below_zone_pct).toFixed(3)}`,
-          `dip ${b.dip_origin_time} @ ${formatPrice(b.dip_origin_close)}`,
-          `zone_set_as_of ${b.zone_set_as_of_iso || b.zone_set_as_of}`
+          `dip ${formatUtc7(b.dip_origin_open_time)} @ ${formatPrice(b.dip_origin_close)}`,
+          `zone_set_as_of ${formatUtc7(b.zone_set_as_of)}`
         ].join('\\n');
       } else {
         const z = hit.item;
         text = [
           `zone ${formatPrice(z.low)}-${formatPrice(z.high)} mid ${formatPrice(z.mid)}`,
-          `valid ${formatUtc(z.valid_from)} → ${formatUtc(z.valid_to)}`,
+          `valid ${formatUtc7(z.valid_from)} → ${formatUtc7(z.valid_to)}`,
           `source ${z.source_timeframe} • touches ${z.touches}`,
           `fp ${shortFp(z.fingerprint)}`
         ].join('\\n');
@@ -532,70 +359,138 @@ _INDEX_HTML = """<!doctype html>
       tooltip.style.top = Math.min(clientY + pad, window.innerHeight - tooltip.offsetHeight - 8) + 'px';
     }
 
-    canvas.addEventListener('mousemove', (event) => {
-      if (drag) {
-        if (drag.axis === 'price') {
-          panPrice(event.clientY - drag.y);
-          drag.y = event.clientY;
+    function hitAt(timeSec, price) {
+      const timeMs = Number(timeSec) * 1000;
+      const buy = visibleBuys.find((item) => item.trigger_open_time === timeMs);
+      if (buy) return { type: 'buy', item: buy };
+      if (price === null || price === undefined) return null;
+      const zone = visibleZones.find((item) =>
+        timeMs >= item.valid_from && timeMs < item.valid_to &&
+        price >= Number(item.low) && price <= Number(item.high)
+      );
+      return zone ? { type: 'zone', item: zone } : null;
+    }
+
+    function resetViewport() {
+      if (!chart) return;
+      chart.timeScale().fitContent();
+      chart.priceScale('right').applyOptions({ autoScale: true });
+    }
+
+    function requireLightweightCharts() {
+      const lib = window.LightweightCharts;
+      if (!lib || typeof lib.createChart !== 'function') {
+        throw new Error('Lightweight Charts failed to load. The backtest page needs network once to fetch the CDN script.');
+      }
+      return lib;
+    }
+
+    function renderChart(data) {
+      const lib = requireLightweightCharts();
+      const candles = (data.candles || []).map((candle) => ({
+        time: toSec(candle.time),
+        open: Number(candle.open),
+        high: Number(candle.high),
+        low: Number(candle.low),
+        close: Number(candle.close)
+      }));
+      if (!candles.length) throw new Error('No closed candles in backtest window.');
+
+      visibleBuys = data.buys || [];
+      visibleZones = (data.zone_segments || []).filter(isVisibleZone).map((zone) => ({
+        ...zone,
+        highlight: visibleBuys.some((buy) =>
+          buy.selected_zone_fingerprint === zone.fingerprint &&
+          buy.trigger_open_time >= zone.valid_from &&
+          buy.trigger_open_time < zone.valid_to
+        )
+      }));
+
+      if (chart) {
+        chart.remove();
+        chart = null;
+        candleSeries = null;
+      }
+      chart = lib.createChart(container, {
+        autoSize: true,
+        layout: {
+          background: { color: '#090c10' },
+          textColor: '#8b949e',
+          attributionLogo: false
+        },
+        grid: {
+          vertLines: { color: 'rgba(139,148,158,.15)' },
+          horzLines: { color: 'rgba(139,148,158,.15)' }
+        },
+        crosshair: { mode: lib.CrosshairMode ? lib.CrosshairMode.Normal : 0 },
+        rightPriceScale: { borderColor: 'rgba(255,255,255,.12)', scaleMargins: { top: 0.08, bottom: 0.08 } },
+        timeScale: {
+          borderColor: 'rgba(255,255,255,.12)',
+          timeVisible: true,
+          secondsVisible: false,
+          tickMarkFormatter: (time, tickMarkType) => formatUtc7Tick(time, tickMarkType)
+        },
+        localization: {
+          locale: 'en-GB',
+          timeFormatter: (time) => formatUtc7(Number(time) * 1000),
+          priceFormatter: (price) => formatPrice(price)
+        }
+      });
+      candleSeries = chart.addSeries(lib.CandlestickSeries, {
+        upColor: '#3fb950',
+        downColor: '#ff7b72',
+        borderUpColor: '#3fb950',
+        borderDownColor: '#ff7b72',
+        wickUpColor: '#3fb950',
+        wickDownColor: '#ff7b72'
+      });
+      candleSeries.setData(candles);
+      candleSeries.attachPrimitive(new ZoneBandsPrimitive(visibleZones));
+
+      const markers = visibleBuys.map((buy) => ({
+        time: toSec(buy.trigger_open_time),
+        position: 'belowBar',
+        color: '#3fb950',
+        shape: 'arrowUp',
+        text: 'BUY'
+      }));
+      if (typeof lib.createSeriesMarkers === 'function') {
+        lib.createSeriesMarkers(candleSeries, markers);
+      } else if (typeof candleSeries.setMarkers === 'function') {
+        candleSeries.setMarkers(markers);
+      }
+
+      chart.subscribeCrosshairMove((param) => {
+        if (!param.point || param.time === undefined || param.time === null) {
+          showTooltip(null);
           return;
         }
-        const dx = event.clientX - drag.x;
-        const candlesPerPixel = Math.max(1, (drag.end - drag.start) / Math.max(1, window.innerWidth - 148));
-        const shift = Math.round(-dx * candlesPerPixel);
-        let nextStart = drag.start + shift;
-        let nextEnd = drag.end + shift;
-        if (nextStart < 0) { nextEnd -= nextStart; nextStart = 0; }
-        if (nextEnd > chartData.candles.length) {
-          nextStart -= (nextEnd - chartData.candles.length);
-          nextEnd = chartData.candles.length;
-        }
-        viewStart = Math.max(0, nextStart);
-        viewEnd = Math.max(viewStart + 1, nextEnd);
-        draw();
-        return;
-      }
-      showTooltip(hitTest(event.clientX, event.clientY), event.clientX, event.clientY);
-    });
-    canvas.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
-    canvas.addEventListener('mousedown', (event) => {
-      if (event.button !== 0) return;
-      const rect = canvas.getBoundingClientRect();
-      const scale = canvas._scale;
-      const onPriceAxis = scale && isPriceAxis(event.clientX - rect.left, scale);
-      drag = onPriceAxis
-        ? { axis: 'price', y: event.clientY }
-        : { axis: 'time', x: event.clientX, start: viewStart, end: viewEnd };
-    });
-    window.addEventListener('mouseup', () => { drag = null; });
-    canvas.addEventListener('wheel', (event) => {
-      if (!chartData || !chartData.candles.length) return;
-      event.preventDefault();
-      const rect = canvas.getBoundingClientRect();
-      const x = event.clientX - rect.left;
-      const scale = canvas._scale;
-      if (!scale) return;
-      const factor = event.deltaY < 0 ? 0.85 : 1.18;
-      if (event.shiftKey || isPriceAxis(x, scale)) {
-        zoomPriceAt(event.clientY, factor);
-        return;
-      }
-      const ratio = Math.min(1, Math.max(0, (x - scale.left) / scale.plotWidth));
-      const count = viewEnd - viewStart;
-      let nextCount = Math.max(20, Math.min(chartData.candles.length, Math.round(count * factor)));
-      let nextStart = Math.round(viewStart + ratio * (count - nextCount));
-      nextStart = Math.max(0, Math.min(nextStart, chartData.candles.length - nextCount));
-      viewStart = nextStart;
-      viewEnd = nextStart + nextCount;
-      draw();
-    }, { passive: false });
+        const price = candleSeries.coordinateToPrice(param.point.y);
+        const rect = container.getBoundingClientRect();
+        showTooltip(hitAt(param.time, price), rect.left + param.point.x, rect.top + param.point.y);
+      });
+      resetViewport();
+    }
+
+    async function load() {
+      error.style.display = 'none';
+      const response = await fetch('/api/backtest');
+      if (!response.ok) throw new Error(`Backtest API failed: ${response.status}`);
+      chartData = await response.json();
+      if (chartData.holds) throw new Error('API payload unexpectedly contains HOLD decisions');
+      title.textContent = `${chartData.meta.symbol} 1H backtest`;
+      meta.textContent = [
+        `${formatUtc7(chartData.meta.start_ms)} → ${formatUtc7(chartData.meta.end_ms)}`,
+        `${chartData.meta.evaluated_candles} candles • ${chartData.meta.zone_snapshot_count} zone snapshots • ${chartData.meta.buy_count} BUY`,
+        `${chartData.meta.zone_cache_hit_count} cache hits • ${chartData.meta.zone_rebuild_count} detector builds`
+      ].join('\\n');
+      renderChart(chartData);
+    }
 
     resetView.addEventListener('click', resetViewport);
-    window.addEventListener('resize', resize);
-    resize();
     load().catch((err) => {
       error.style.display = 'block';
       error.textContent = err.message;
-      drawCentered('Unable to load backtest chart.');
     });
   </script>
 </body>
