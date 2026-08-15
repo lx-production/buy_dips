@@ -212,7 +212,7 @@ The trigger 1h candle must be **red** (`close < open`). A green or doji candle i
 
 Entry regions for the current closed 1h `close`:
 
-- **Inside support:** `zone.low <= close` and close sits **strictly below 80%** of the zone span (`0%` = `zone.low`, `100%` = `zone.high`)
+- **Inside support:** `zone.low <= close <= zone.high` (full zone span: `0%` = `zone.low`, `100%` = `zone.high`)
 - **Immediately below support:** `close < zone.low` and close sits in the **50%–100%** band of the gap from the next-lower zone high up to this zone’s low
 
 Shared setup gates:
@@ -225,7 +225,6 @@ Reason codes:
 
 - `CLOSE_NOT_BELOW_OPEN`
 - `CLOSE_OUTSIDE_ENTRY_REGION`
-- `CLOSE_NOT_BELOW_ZONE_MID`
 - `NO_HIGHER_ZONE`
 - `NO_RECENT_CLOSE_ABOVE_INTERNAL_MID`
 - `NO_LOWER_ZONE`

@@ -266,7 +266,6 @@ def run_backtest(
             mode="backtest",
             strategy_version=config.strategy.version or STRATEGY_VERSION,
             config_version=config.strategy.config_version,
-            inside_zone_max_pct=config.strategy.inside_zone_max_pct,
         )
         if decision["decision"] == BUY:
             fingerprint = str(decision["selected_zone_fingerprint"])

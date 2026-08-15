@@ -43,5 +43,4 @@ strategy:
   config_version: "1"
   dip_lookback_hours: 48
   cooldown_hours: 24
-  below_zone_min_pct: 0.50
-  inside_zone_max_pct: 0.80 # inside-zone BUY requires close strictly below this fraction of (low→high)
+  below_zone_min_pct: 0.50 # below-zone BUY requires close in this fraction…100% of (next_lower.high → zone.low)

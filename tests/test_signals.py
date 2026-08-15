@@ -44,8 +44,8 @@ def _hourly(
     return pd.DataFrame(rows)
 
 
-def test_inside_below_80_uses_nearest_qualifying_prior_close() -> None:
-    # close=92 is 20% of zone 90–100, so it is inside and below the 80% cutoff.
+def test_inside_zone_uses_nearest_qualifying_prior_close() -> None:
+    # close=92 is 20% of zone 90–100, so it is inside the full 0%–100% band.
     trigger_time = 100 * HOUR
     candles = _hourly(
         trigger_time,
@@ -60,7 +60,7 @@ def test_inside_below_80_uses_nearest_qualifying_prior_close() -> None:
 
     assert decision["decision"] == "BUY"
     assert decision["reason_code"] == "BUY_GATES_PASSED"
-    assert decision["entry_region"] == "inside_below_80"
+    assert decision["entry_region"] == "inside_zone"
     assert decision["dip_origin_open_time"] == trigger_time - 2 * HOUR
 
 
@@ -134,8 +134,8 @@ def test_cooldown_is_for_selected_zone_only() -> None:
     assert other_zone["decision"] == "BUY"
 
 
-def test_inside_at_or_above_80_percent_is_hold() -> None:
-    # close=98 is exactly 80% of zone 90–100; the inside band is strictly below 80%.
+def test_inside_at_80_percent_is_buy() -> None:
+    # close=98 is exactly 80% of zone 90–100; the full inside band now includes this level.
     trigger_time = 100 * HOUR
     candles = _hourly(trigger_time, [(trigger_time - HOUR, 106)], 98)
     zones = [_zone(90, 100, "selected"), _zone(110, 120, "higher")]
@@ -144,13 +144,15 @@ def test_inside_at_or_above_80_percent_is_hold() -> None:
         candles.iloc[-1].to_dict(), candles, zones, zone_set_as_of=96 * HOUR
     )
 
-    assert decision["reason_code"] == "CLOSE_NOT_BELOW_ZONE_MID"
+    assert decision["decision"] == "BUY"
+    assert decision["entry_region"] == "inside_zone"
+    assert decision["reason_code"] == "BUY_GATES_PASSED"
 
 
-def test_inside_just_below_80_percent_is_buy() -> None:
-    # close=97.9 is 79% of zone 90–100, so it still qualifies for inside-below-80.
+def test_inside_at_zone_high_is_buy() -> None:
+    # close=100 is 100% of zone 90–100 (zone.high), so it still qualifies for inside_zone.
     trigger_time = 100 * HOUR
-    candles = _hourly(trigger_time, [(trigger_time - HOUR, 106)], 97.9)
+    candles = _hourly(trigger_time, [(trigger_time - HOUR, 106)], 100)
     zones = [_zone(90, 100, "selected"), _zone(110, 120, "higher")]
 
     decision = evaluate_support_close_v1(
@@ -158,7 +160,7 @@ def test_inside_just_below_80_percent_is_buy() -> None:
     )
 
     assert decision["decision"] == "BUY"
-    assert decision["entry_region"] == "inside_below_80"
+    assert decision["entry_region"] == "inside_zone"
 
 
 def test_mar5_floor_78_percent_close_is_buy() -> None:
@@ -172,12 +174,12 @@ def test_mar5_floor_78_percent_close_is_buy() -> None:
     )
 
     assert decision["decision"] == "BUY"
-    assert decision["entry_region"] == "inside_below_80"
+    assert decision["entry_region"] == "inside_zone"
     assert decision["reason_code"] == "BUY_GATES_PASSED"
 
 
 def test_green_trigger_candle_holds_before_zone_gates() -> None:
-    # Same close as the inside-below-80 BUY case, but open is lower so the candle is green.
+    # Same close as the inside-zone BUY case, but open is lower so the candle is green.
     trigger_time = 100 * HOUR
     candles = _hourly(
         trigger_time,
