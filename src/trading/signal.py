@@ -120,7 +120,8 @@ def evaluate_support_close_v1(
         payload["below_zone_band_low"] = float(gap_low)
         payload["below_zone_band_high"] = float(gap_high)
         payload["below_zone_pct"] = float(below_pct)
-        if not (Decimal("0.70") <= below_pct <= Decimal("1.0") and close < _low(selected)):
+        # Immediately-below entry: close must sit in the 50%–100% portion of (next_lower.high → zone.low).
+        if not (Decimal("0.50") <= below_pct <= Decimal("1.0") and close < _low(selected)):
             return _finish(payload, HOLD, "BELOW_ZONE_OUT_OF_BAND")
         payload["entry_region"] = "below_zone_band"
         payload["gate_results"]["entry_region"] = True

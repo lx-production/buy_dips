@@ -35,7 +35,7 @@ class StrategyConfig(BaseModel):
     config_version: str = "1"
     dip_lookback_hours: int = 48
     cooldown_hours: int = 24
-    below_zone_min_pct: float = 0.70
+    below_zone_min_pct: float = 0.50
 
 
 class WalletConfig(BaseModel):

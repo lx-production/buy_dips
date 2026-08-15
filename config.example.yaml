@@ -43,4 +43,4 @@ strategy:
   config_version: "1"
   dip_lookback_hours: 48
   cooldown_hours: 24
-  below_zone_min_pct: 0.70
+  below_zone_min_pct: 0.50

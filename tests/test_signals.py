@@ -50,7 +50,8 @@ def test_inside_below_mid_uses_nearest_qualifying_prior_close() -> None:
     assert decision["dip_origin_open_time"] == trigger_time - 2 * HOUR
 
 
-def test_below_zone_uses_70_to_100_percent_band() -> None:
+def test_below_zone_uses_50_to_100_percent_band() -> None:
+    # Gap is 85 → 90. close=89 sits at 80% of that gap, inside the 50%–100% band.
     trigger_time = 100 * HOUR
     candles = _hourly(trigger_time, [(trigger_time - HOUR, 106)], 89)
     zones = [_zone(80, 85, "lower"), _zone(90, 100, "selected"), _zone(110, 120, "higher")]
@@ -63,6 +64,36 @@ def test_below_zone_uses_70_to_100_percent_band() -> None:
     assert decision["entry_region"] == "below_zone_band"
     assert decision["below_zone_pct"] == 0.8
     assert decision["next_lower_zone_fingerprint"] == "zf1:lower"
+
+
+def test_below_zone_at_50_percent_is_buy() -> None:
+    # close=87.5 is exactly 50% of the 85 → 90 gap, so it is the inclusive lower edge.
+    trigger_time = 100 * HOUR
+    candles = _hourly(trigger_time, [(trigger_time - HOUR, 106)], 87.5)
+    zones = [_zone(80, 85, "lower"), _zone(90, 100, "selected"), _zone(110, 120, "higher")]
+
+    decision = evaluate_support_close_v1(
+        candles.iloc[-1].to_dict(), candles, zones, zone_set_as_of=96 * HOUR
+    )
+
+    assert decision["decision"] == "BUY"
+    assert decision["entry_region"] == "below_zone_band"
+    assert decision["below_zone_pct"] == 0.5
+
+
+def test_below_zone_below_50_percent_is_hold() -> None:
+    # close=87 is 40% of the 85 → 90 gap, so it is outside the 50%–100% band.
+    trigger_time = 100 * HOUR
+    candles = _hourly(trigger_time, [(trigger_time - HOUR, 106)], 87)
+    zones = [_zone(80, 85, "lower"), _zone(90, 100, "selected"), _zone(110, 120, "higher")]
+
+    decision = evaluate_support_close_v1(
+        candles.iloc[-1].to_dict(), candles, zones, zone_set_as_of=96 * HOUR
+    )
+
+    assert decision["decision"] == "HOLD"
+    assert decision["reason_code"] == "BELOW_ZONE_OUT_OF_BAND"
+    assert decision["below_zone_pct"] == 0.4
 
 
 def test_cooldown_is_for_selected_zone_only() -> None:
