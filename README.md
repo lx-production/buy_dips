@@ -210,7 +210,7 @@ One dip-to-support flow. Output is gate-based (not scored): exactly one `decisio
 
 Entry regions for the current closed 1h `close`:
 
-- **Inside support:** `zone.low <= close < zone.mid`
+- **Inside support:** `zone.low <= close` and close sits **strictly below 70%** of the zone span (`0%` = `zone.low`, `100%` = `zone.high`)
 - **Immediately below support:** `close < zone.low` and close sits in the **50%–100%** band of the gap from the next-lower zone high up to this zone’s low
 
 Shared setup gates:

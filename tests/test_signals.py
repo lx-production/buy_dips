@@ -31,7 +31,8 @@ def _hourly(trigger_time: int, previous: list[tuple[int, float]], trigger_close:
     return pd.DataFrame(rows)
 
 
-def test_inside_below_mid_uses_nearest_qualifying_prior_close() -> None:
+def test_inside_below_70_uses_nearest_qualifying_prior_close() -> None:
+    # close=92 is 20% of zone 90–100, so it is inside and below the 70% cutoff.
     trigger_time = 100 * HOUR
     candles = _hourly(
         trigger_time,
@@ -46,7 +47,7 @@ def test_inside_below_mid_uses_nearest_qualifying_prior_close() -> None:
 
     assert decision["decision"] == "BUY"
     assert decision["reason_code"] == "BUY_GATES_PASSED"
-    assert decision["entry_region"] == "inside_below_mid"
+    assert decision["entry_region"] == "inside_below_70"
     assert decision["dip_origin_open_time"] == trigger_time - 2 * HOUR
 
 
@@ -120,9 +121,10 @@ def test_cooldown_is_for_selected_zone_only() -> None:
     assert other_zone["decision"] == "BUY"
 
 
-def test_inside_at_or_above_mid_is_hold() -> None:
+def test_inside_at_or_above_70_percent_is_hold() -> None:
+    # close=97 is exactly 70% of zone 90–100; the inside band is strictly below 70%.
     trigger_time = 100 * HOUR
-    candles = _hourly(trigger_time, [(trigger_time - HOUR, 106)], 95)
+    candles = _hourly(trigger_time, [(trigger_time - HOUR, 106)], 97)
     zones = [_zone(90, 100, "selected"), _zone(110, 120, "higher")]
 
     decision = evaluate_support_close_v1(
@@ -130,3 +132,17 @@ def test_inside_at_or_above_mid_is_hold() -> None:
     )
 
     assert decision["reason_code"] == "CLOSE_NOT_BELOW_ZONE_MID"
+
+
+def test_inside_just_below_70_percent_is_buy() -> None:
+    # close=96.9 is 69% of zone 90–100, so it still qualifies for inside-below-70.
+    trigger_time = 100 * HOUR
+    candles = _hourly(trigger_time, [(trigger_time - HOUR, 106)], 96.9)
+    zones = [_zone(90, 100, "selected"), _zone(110, 120, "higher")]
+
+    decision = evaluate_support_close_v1(
+        candles.iloc[-1].to_dict(), candles, zones, zone_set_as_of=96 * HOUR
+    )
+
+    assert decision["decision"] == "BUY"
+    assert decision["entry_region"] == "inside_below_70"

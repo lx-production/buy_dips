@@ -381,7 +381,7 @@ def test_cooldown_same_zone_blocks_second_buy_other_zone_allowed(tmp_path: Path)
     lookback = start - 48 * HOUR
     rows = _hourly_rows(lookback, 48 + 30, base_close=106.0)
     # Force two inside-zone BUYs on the selected band, then a deeper-band BUY.
-    # Trigger A: inside 90-100 below mid, with prior close above internal midpoint 105.
+    # Trigger A: inside 90-100 below 70% of the zone span, with prior close above internal midpoint 105.
     rows[48]["close"] = 92.0
     rows[48]["open"] = 92.0
     rows[48]["high"] = 93.0
@@ -394,7 +394,7 @@ def test_cooldown_same_zone_blocks_second_buy_other_zone_allowed(tmp_path: Path)
     rows[50]["high"] = 92.0
     rows[50]["low"] = 90.5
     rows[49]["close"] = 106.0
-    # Deeper zone B: inside 80-85 strictly below mid (not the same selected fingerprint as A).
+    # Deeper zone B: inside 80-85 below 70% of the zone span (not the same selected fingerprint as A).
     rows[52]["close"] = 82.0
     rows[52]["open"] = 82.0
     rows[52]["high"] = 83.0

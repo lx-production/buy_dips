@@ -44,3 +44,4 @@ strategy:
   dip_lookback_hours: 48
   cooldown_hours: 24
   below_zone_min_pct: 0.50
+  inside_zone_max_pct: 0.70

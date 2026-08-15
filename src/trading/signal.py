@@ -99,9 +99,10 @@ def evaluate_support_close_v1(
     if containing:
         selected = max(containing, key=_low)
         _set_selected(payload, selected)
-        if close >= _mid(selected):
+        # Inside-zone entry: 0% = zone.low, 100% = zone.high. Close must be strictly below 70%.
+        if close >= _inside_zone_70_level(selected):
             return _finish(payload, HOLD, "CLOSE_NOT_BELOW_ZONE_MID")
-        payload["entry_region"] = "inside_below_mid"
+        payload["entry_region"] = "inside_below_70"
         payload["gate_results"]["entry_region"] = True
     else:
         above = [zone for zone in ordered_zones if _low(zone) > close]
@@ -247,6 +248,11 @@ def _high(zone: Mapping[str, Any]) -> Decimal:
 
 def _mid(zone: Mapping[str, Any]) -> Decimal:
     return _decimal(zone.get("mid"), "zone mid")
+
+
+def _inside_zone_70_level(zone: Mapping[str, Any]) -> Decimal:
+    """Return the 70% price of the zone span. 0% is zone.low, 100% is zone.high."""
+    return _low(zone) + Decimal("0.70") * (_high(zone) - _low(zone))
 
 
 def _decimal(value: Any, label: str) -> Decimal:
