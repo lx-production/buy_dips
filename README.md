@@ -9,7 +9,7 @@ The hourly CLI path today is **`trade-once --mode observe`**: fetch → zones �
 - Fetches public Binance Spot `BTCUSDT` **1h** klines into SQLite (`candles`, `timeframe="1h"`).
 - Derives closed Binance-aligned **4h** bars from those 1h candles and stores them as `timeframe="4h"`.
 - Rebuilds support zones only when a newer completed 4h bar appears (scoped `bot_state` watermark).
-- Persists zone fingerprints (`zf1:…`) and evaluates `support_close_v1` on the latest closed 1h close.
+- Persists zone fingerprints (`zf1:…`) and evaluates `support_close_v1` on the latest closed 1h candle. BUY requires a **red** trigger candle (`close < open`).
 - Stores every decision (`BUY` / `HOLD` + `reason_code`) in `decisions`.
 - Offline backtest replays history in memory (no live table writes), prints a BUY summary, writes a BUY CSV, and can serve a 1h chart with time-bounded zones.
 - Creates an encrypted local keystore, checks Polygon contracts/balances, and can grant/revoke a capped USDT router allowance.
@@ -208,6 +208,8 @@ python3 -m src.cli revoke-trading
 
 One dip-to-support flow. Output is gate-based (not scored): exactly one `decision` (`BUY` / `HOLD`) and one `reason_code` per cycle.
 
+The trigger 1h candle must be **red** (`close < open`). A green or doji candle is `HOLD` immediately (`CLOSE_NOT_BELOW_OPEN`) and never selects a zone.
+
 Entry regions for the current closed 1h `close`:
 
 - **Inside support:** `zone.low <= close` and close sits **strictly below 70%** of the zone span (`0%` = `zone.low`, `100%` = `zone.high`)
@@ -215,11 +217,13 @@ Entry regions for the current closed 1h `close`:
 
 Shared setup gates:
 
+- The trigger 1h candle is **red**: `close < open`.
 - In the prior **48h** (floored by the selected zone’s `zone_source_time`), there is a nearest earlier closed 1h candle whose `close` is **strictly above** the internal-range midpoint (midpoint between the selected zone high and the next higher zone low).
 - No prior `BUY` for the **same selected zone fingerprint** in the prior **24h**. Cooldown is per-zone: a deeper zone may still `BUY` within 24h of a shallower-zone `BUY`.
 
 Reason codes:
 
+- `CLOSE_NOT_BELOW_OPEN`
 - `CLOSE_OUTSIDE_ENTRY_REGION`
 - `CLOSE_NOT_BELOW_ZONE_MID`
 - `NO_HIGHER_ZONE`

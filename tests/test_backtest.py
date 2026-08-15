@@ -383,20 +383,20 @@ def test_cooldown_same_zone_blocks_second_buy_other_zone_allowed(tmp_path: Path)
     # Force two inside-zone BUYs on the selected band, then a deeper-band BUY.
     # Trigger A: inside 90-100 below 70% of the zone span, with prior close above internal midpoint 105.
     rows[48]["close"] = 92.0
-    rows[48]["open"] = 92.0
+    rows[48]["open"] = 93.0
     rows[48]["high"] = 93.0
     rows[48]["low"] = 91.0
     # Keep dip-origin above midpoint in the hour before first trigger.
     rows[47]["close"] = 106.0
     # Second same-zone attempt a few hours later still inside cooldown.
     rows[50]["close"] = 91.0
-    rows[50]["open"] = 91.0
+    rows[50]["open"] = 92.0
     rows[50]["high"] = 92.0
     rows[50]["low"] = 90.5
     rows[49]["close"] = 106.0
     # Deeper zone B: inside 80-85 below 70% of the zone span (not the same selected fingerprint as A).
     rows[52]["close"] = 82.0
-    rows[52]["open"] = 82.0
+    rows[52]["open"] = 83.0
     rows[52]["high"] = 83.0
     rows[52]["low"] = 81.0
     rows[51]["close"] = 106.0

@@ -119,6 +119,7 @@ CREATE TABLE IF NOT EXISTS decisions (
   zones_rebuilt INTEGER NOT NULL CHECK(zones_rebuilt IN (0, 1)),
   decision TEXT NOT NULL CHECK(decision IN ('BUY', 'HOLD')),
   reason_code TEXT NOT NULL CHECK(reason_code IN (
+    'CLOSE_NOT_BELOW_OPEN',
     'CLOSE_OUTSIDE_ENTRY_REGION',
     'CLOSE_NOT_BELOW_ZONE_MID',
     'NO_HIGHER_ZONE',
@@ -229,7 +230,37 @@ def init_db(database_path: str | Path) -> None:
     with connect(database_path) as conn:
         _drop_disposable_phase1_tables(conn)
         conn.executescript(SCHEMA)
+        _upgrade_decisions_reason_codes(conn)
         conn.commit()
+
+
+def _upgrade_decisions_reason_codes(conn: sqlite3.Connection) -> None:
+    """Rebuild `decisions` when its CHECK constraint is missing CLOSE_NOT_BELOW_OPEN.
+
+    SQLite cannot ALTER a CHECK list in place. Existing databases keep the old
+    table after `CREATE TABLE IF NOT EXISTS`, so copy rows into a new table
+    that accepts the red-candle reason code, then drop the old one.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='decisions'"
+    ).fetchone()
+    if row is None:
+        return
+    sql = row["sql"] if isinstance(row, sqlite3.Row) else row[0]
+    if sql is None or "CLOSE_NOT_BELOW_OPEN" in sql:
+        return
+    conn.execute("DROP VIEW IF EXISTS decisions_readable")
+    conn.execute("DROP INDEX IF EXISTS decisions_buy_zone_time")
+    conn.execute("ALTER TABLE decisions RENAME TO decisions_pre_red_candle")
+    conn.executescript(SCHEMA)
+    old_columns = [item["name"] for item in conn.execute("PRAGMA table_info(decisions_pre_red_candle)")]
+    new_columns = [item["name"] for item in conn.execute("PRAGMA table_info(decisions)")]
+    shared = [column for column in old_columns if column in set(new_columns)]
+    column_sql = ",".join(shared)
+    conn.execute(
+        f"INSERT INTO decisions ({column_sql}) SELECT {column_sql} FROM decisions_pre_red_candle"
+    )
+    conn.execute("DROP TABLE decisions_pre_red_candle")
 
 
 def _drop_disposable_phase1_tables(conn: sqlite3.Connection) -> None:

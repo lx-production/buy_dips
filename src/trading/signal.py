@@ -12,6 +12,7 @@ BUY = "BUY"
 HOLD = "HOLD"
 REASON_CODES = frozenset(
     {
+        "CLOSE_NOT_BELOW_OPEN",
         "CLOSE_OUTSIDE_ENTRY_REGION",
         "CLOSE_NOT_BELOW_ZONE_MID",
         "NO_HIGHER_ZONE",
@@ -42,13 +43,19 @@ def evaluate_support_close_v1(
     strategy_version: str = STRATEGY_VERSION,
     config_version: str = "1",
 ) -> dict[str, Any]:
-    """Evaluate the one gate-based dip-to-support flow on a closed 1h candle."""
+    """Evaluate the one gate-based dip-to-support flow on a closed 1h candle.
+
+    The first gate requires a red trigger candle (`close < open`) so a green
+    reclaim into a higher zone cannot BUY. Later gates then select the nearest
+    support and apply the inside-below-70 / below-zone-band entry regions.
+    """
     # backtest is allowed in the pure engine only; decisions.mode schema stays observe/dry_run/live.
     if mode not in {"observe", "dry_run", "live", "backtest"}:
         raise DecisionInputError(f"Unsupported decision mode: {mode}")
     trigger_open_time = _required_int(trigger_candle, "open_time")
     trigger_close_time = _required_int(trigger_candle, "close_time")
     close = _decimal(trigger_candle.get("close"), "trigger close")
+    open_price = _decimal(trigger_candle.get("open"), "trigger open")
     ordered_zones = [dict(zone) for zone in zones]
 
     payload: dict[str, Any] = {
@@ -82,6 +89,7 @@ def evaluate_support_close_v1(
         "dip_origin_close": None,
         "recent_buy_in_24h": False,
         "gate_results": {
+            "red_candle": False,
             "entry_region": False,
             "higher_zone": False,
             "dip_origin": False,
@@ -93,6 +101,11 @@ def evaluate_support_close_v1(
         "config_version": str(config_version),
         "sanitized_error": None,
     }
+
+    # Buy the dip only. A green or doji candle is rejected before zone selection.
+    if close >= open_price:
+        return _finish(payload, HOLD, "CLOSE_NOT_BELOW_OPEN")
+    payload["gate_results"]["red_candle"] = True
 
     containing = [zone for zone in ordered_zones if _low(zone) <= close <= _high(zone)]
     selected: dict[str, Any] | None = None

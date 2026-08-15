@@ -20,13 +20,26 @@ def _zone(low: float, high: float, suffix: str, source_time: int = 0) -> dict[st
     }
 
 
-def _hourly(trigger_time: int, previous: list[tuple[int, float]], trigger_close: float) -> pd.DataFrame:
+def _hourly(
+    trigger_time: int,
+    previous: list[tuple[int, float]],
+    trigger_close: float,
+    trigger_open: float | None = None,
+) -> pd.DataFrame:
+    """Build closed 1h rows. Default trigger is red (`open > close`) so later gates can be tested alone."""
+    open_price = trigger_close + 1.0 if trigger_open is None else trigger_open
     rows = [
         {"open_time": open_time, "close_time": open_time + HOUR - 1, "close": close, "is_closed": 1}
         for open_time, close in previous
     ]
     rows.append(
-        {"open_time": trigger_time, "close_time": trigger_time + HOUR - 1, "close": trigger_close, "is_closed": 1}
+        {
+            "open_time": trigger_time,
+            "close_time": trigger_time + HOUR - 1,
+            "open": open_price,
+            "close": trigger_close,
+            "is_closed": 1,
+        }
     )
     return pd.DataFrame(rows)
 
@@ -146,3 +159,38 @@ def test_inside_just_below_70_percent_is_buy() -> None:
 
     assert decision["decision"] == "BUY"
     assert decision["entry_region"] == "inside_below_70"
+
+
+def test_green_trigger_candle_holds_before_zone_gates() -> None:
+    # Same close as the inside-below-70 BUY case, but open is lower so the candle is green.
+    trigger_time = 100 * HOUR
+    candles = _hourly(
+        trigger_time,
+        [(trigger_time - 3 * HOUR, 108), (trigger_time - 2 * HOUR, 106), (trigger_time - HOUR, 104)],
+        92,
+        trigger_open=90,
+    )
+    zones = [_zone(80, 85, "lower"), _zone(90, 100, "selected"), _zone(110, 120, "higher")]
+
+    decision = evaluate_support_close_v1(
+        candles.iloc[-1].to_dict(), candles, zones, zone_set_as_of=96 * HOUR
+    )
+
+    assert decision["decision"] == "HOLD"
+    assert decision["reason_code"] == "CLOSE_NOT_BELOW_OPEN"
+    assert decision["entry_region"] is None
+    assert decision["gate_results"]["red_candle"] is False
+
+
+def test_doji_trigger_candle_is_hold() -> None:
+    # close == open is not a red candle, so it cannot BUY.
+    trigger_time = 100 * HOUR
+    candles = _hourly(trigger_time, [(trigger_time - HOUR, 106)], 92, trigger_open=92)
+    zones = [_zone(90, 100, "selected"), _zone(110, 120, "higher")]
+
+    decision = evaluate_support_close_v1(
+        candles.iloc[-1].to_dict(), candles, zones, zone_set_as_of=96 * HOUR
+    )
+
+    assert decision["decision"] == "HOLD"
+    assert decision["reason_code"] == "CLOSE_NOT_BELOW_OPEN"

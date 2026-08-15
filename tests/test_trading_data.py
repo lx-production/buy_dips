@@ -169,8 +169,9 @@ def test_observe_runner_persists_one_decision_after_deriving_latest_4h(tmp_path)
 
     result = run_trade_once(config, db_path, now_ms=12 * FOUR_HOURS, fetch=False)
 
+    # Seeded 1h bars are green (close > open), so the red-candle gate holds first.
     assert result.derived_four_hour_candles == 1
-    assert result.decision["reason_code"] == "CLOSE_OUTSIDE_ENTRY_REGION"
+    assert result.decision["reason_code"] == "CLOSE_NOT_BELOW_OPEN"
     with connect(db_path) as conn:
         assert conn.execute("SELECT COUNT(*) AS count FROM decisions").fetchone()["count"] == 1
         assert conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='signals'").fetchone() is None

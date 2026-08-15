@@ -175,6 +175,84 @@ def test_readable_views_convert_all_timestamps_without_changing_canonical_values
             conn.execute("DELETE FROM candles_readable")
 
 
+def test_init_db_accepts_close_not_below_open_reason(tmp_path) -> None:
+    """Fresh databases must persist the red-candle HOLD reason."""
+    db_path = tmp_path / "bot.sqlite"
+    init_db(db_path)
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO decisions(
+              created_at, exchange, symbol, timeframe, candle_open_time, candle_close_time,
+              reference_close, zone_set_as_of, fingerprint_version, gate_results_json,
+              zones_rebuilt, decision, reason_code, mode, strategy_version, config_version
+            ) VALUES (
+              1, 'binance', 'BTCUSDT', '1h', 1000, 1000,
+              1, 1000, 'zf1', '{}',
+              0, 'HOLD', 'CLOSE_NOT_BELOW_OPEN', 'observe', 'strategy-v1', 'config-v1'
+            )
+            """
+        )
+        conn.commit()
+        row = conn.execute("SELECT reason_code FROM decisions").fetchone()
+        assert row["reason_code"] == "CLOSE_NOT_BELOW_OPEN"
+
+
+def test_init_db_upgrades_decisions_reason_code_check(tmp_path) -> None:
+    """Existing databases keep rows and gain CLOSE_NOT_BELOW_OPEN on the next init_db."""
+    db_path = tmp_path / "bot.sqlite"
+    init_db(db_path)
+    with connect(db_path) as conn:
+        sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='decisions'"
+        ).fetchone()[0]
+        old_sql = sql.replace("'CLOSE_NOT_BELOW_OPEN',\n    ", "")
+        assert "CLOSE_NOT_BELOW_OPEN" not in old_sql
+        conn.execute("DROP VIEW IF EXISTS decisions_readable")
+        conn.execute("DROP INDEX IF EXISTS decisions_buy_zone_time")
+        conn.execute("DROP TABLE decisions")
+        conn.execute(old_sql)
+        conn.execute(
+            """
+            INSERT INTO decisions(
+              created_at, exchange, symbol, timeframe, candle_open_time, candle_close_time,
+              reference_close, zone_set_as_of, fingerprint_version, gate_results_json,
+              zones_rebuilt, decision, reason_code, mode, strategy_version, config_version
+            ) VALUES (
+              1, 'binance', 'BTCUSDT', '1h', 1000, 1000,
+              1, 1000, 'zf1', '{}',
+              0, 'HOLD', 'CLOSE_OUTSIDE_ENTRY_REGION', 'observe', 'strategy-v1', 'config-v1'
+            )
+            """
+        )
+        conn.commit()
+
+    init_db(db_path)
+
+    with connect(db_path) as conn:
+        sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='decisions'"
+        ).fetchone()[0]
+        assert "CLOSE_NOT_BELOW_OPEN" in sql
+        assert conn.execute("SELECT COUNT(*) AS count FROM decisions").fetchone()["count"] == 1
+        conn.execute(
+            """
+            INSERT INTO decisions(
+              created_at, exchange, symbol, timeframe, candle_open_time, candle_close_time,
+              reference_close, zone_set_as_of, fingerprint_version, gate_results_json,
+              zones_rebuilt, decision, reason_code, mode, strategy_version, config_version
+            ) VALUES (
+              2, 'binance', 'BTCUSDT', '1h', 2000, 2000,
+              1, 1000, 'zf1', '{}',
+              0, 'HOLD', 'CLOSE_NOT_BELOW_OPEN', 'observe', 'strategy-v1', 'config-v1'
+            )
+            """
+        )
+        conn.commit()
+        codes = [row["reason_code"] for row in conn.execute("SELECT reason_code FROM decisions ORDER BY id")]
+        assert codes == ["CLOSE_OUTSIDE_ENTRY_REGION", "CLOSE_NOT_BELOW_OPEN"]
+
+
 def test_readable_views_are_added_to_an_existing_database(tmp_path) -> None:
     """Verify rerunning init_db adds views without recreating or backfilling canonical rows."""
     db_path = tmp_path / "bot.sqlite"
