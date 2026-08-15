@@ -8,6 +8,7 @@ from src.zones import (
     _average_true_range,
     _build_daily_body_support_zones,
     _build_local_reaction_zones,
+    _build_persistent_wick_floor_zones,
     _build_split_rejection_zone_pairs,
     _filter_prominent_structure_pivots,
     _fill_support_staircase_gaps,
@@ -15,6 +16,7 @@ from src.zones import (
     _fixed_support_zone_bounds,
     _label_structure_pivots,
     _overlay_daily_support_zones,
+    _overlay_persistent_wick_floors,
     _overlay_split_rejection_zones,
     _support_floor_candidates,
     aggregate_ohlc_to_daily,
@@ -833,6 +835,110 @@ def test_split_rejection_pair_replaces_mixed_structure_inside_it() -> None:
         (59130.91, 59500.0, "wick_retest_support"),
         (60438.0, 60938.0, "body_rejection_support"),
     ]
+
+
+def test_persistent_wick_floor_pins_long_wick_low_plus_500() -> None:
+    # Mar 5 2024-style dump: zone low is the wick, high is wick + $500, one touch is enough.
+    zones = _build_persistent_wick_floor_zones(
+        [
+            StructurePivot(
+                index=2,
+                kind="low",
+                wick_price=59005.0,
+                body_price=61410.98,
+                atr=1.0,
+                term="external",
+                structure_role="L",
+            ),
+            StructurePivot(index=3, kind="high", wick_price=73777.0, body_price=73000.0, atr=1.0, term="external"),
+            StructurePivot(
+                index=8,
+                kind="low",
+                wick_price=59130.91,
+                body_price=60300.24,
+                atr=1.0,
+                term="external",
+                structure_role="LL",
+            ),
+        ],
+        zone_width=500.0,
+        current_price=63000.0,
+        buffer_pct=0.0015,
+    )
+
+    assert [(zone["low"], zone["high"], zone["origin"], zone["touches"]) for zone in zones] == [
+        (59005.0, 59505.0, "persistent_wick_floor", 1),
+        (59130.91, 59630.91, "persistent_wick_floor", 1),
+    ]
+    assert zones[0]["source_closes"] == [59005.0]
+    assert zones[0]["source_indexes"] == [2]
+
+
+def test_persistent_wick_floor_ignores_short_wicks() -> None:
+    zones = _build_persistent_wick_floor_zones(
+        [
+            StructurePivot(index=1, kind="low", wick_price=100.0, body_price=200.0, atr=1.0, term="external"),
+        ],
+        zone_width=500.0,
+        current_price=300.0,
+        buffer_pct=0.0015,
+    )
+
+    assert zones == []
+
+
+def test_overlay_persistent_wick_floors_keeps_oldest_and_drops_overlapping_swing() -> None:
+    mixed = _support_zone(low=59000.0, high=59500.0, source_closes=[59000.0], score=12.0)
+    mixed["origin"] = "mixed_structure"
+    daily = _support_zone(low=57864.97, high=58364.97, source_closes=[58364.97], score=102.0)
+    daily["origin"] = "daily_body_support"
+    older = _support_zone(low=59005.0, high=59505.0, source_closes=[59005.0], score=2.0)
+    older["origin"] = "persistent_wick_floor"
+    older["source_indexes"] = [2]
+    newer = _support_zone(low=59130.91, high=59630.91, source_closes=[59130.91], score=2.0)
+    newer["origin"] = "persistent_wick_floor"
+    newer["source_indexes"] = [8]
+    deeper = _support_zone(low=56552.82, high=57052.82, source_closes=[56552.82], score=2.0)
+    deeper["origin"] = "persistent_wick_floor"
+    deeper["source_indexes"] = [4]
+
+    zones = _overlay_persistent_wick_floors([mixed, daily], [older, newer, deeper])
+
+    assert [(zone["low"], zone["high"], zone["origin"]) for zone in zones] == [
+        (56552.82, 57052.82, "persistent_wick_floor"),
+        (57864.97, 58364.97, "daily_body_support"),
+        (59005.0, 59505.0, "persistent_wick_floor"),
+    ]
+
+
+def test_detector_keeps_mar5_style_wick_floor_after_later_lower_low() -> None:
+    # A later deeper low must not erase the frozen 59005-59505 shelf.
+    df = pd.DataFrame(
+        {
+            "open": [67000.0, 66773.05, 61410.98, 64000.0, 69000.0, 68500.0, 57500.0, 59000.0],
+            "high": [67100.0, 66996.36, 65000.0, 70000.0, 69500.0, 68800.0, 60000.0, 62000.0],
+            "low": [66500.0, 59005.0, 61000.0, 63000.0, 68000.0, 56552.82, 57000.0, 58500.0],
+            "close": [67000.0, 61410.98, 64000.0, 69000.0, 68500.0, 57500.0, 59000.0, 61000.0],
+        }
+    )
+
+    result = detect_support_resistance_zones_structure_v1(
+        df,
+        external_swing_order=1,
+        atr_period=3,
+        external_min_swing_atr_mult=0.0,
+        external_min_swing_pct=0.0,
+        min_touches=1,
+        current_price=61000.0,
+    )
+    persistent = [
+        (zone["low"], zone["high"], zone["origin"])
+        for zone in result["support"]
+        if zone["origin"] == "persistent_wick_floor"
+    ]
+
+    assert (59005.0, 59505.0, "persistent_wick_floor") in persistent
+    assert (56552.82, 57052.82, "persistent_wick_floor") in persistent
 
 
 def test_support_bands_anchor_to_support_upper_anchor() -> None:

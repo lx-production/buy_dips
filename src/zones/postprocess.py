@@ -162,9 +162,22 @@ def _make_support_zones_distinct(
 
 
 def _prefer_support_zone(first: dict[str, Any], second: dict[str, Any]) -> dict[str, Any]:
+    # Pinned wick floors outrank swing/daily bands so distinct() cannot drop them.
+    first_persistent = str(first.get("origin")) == "persistent_wick_floor"
+    second_persistent = str(second.get("origin")) == "persistent_wick_floor"
+    if first_persistent != second_persistent:
+        return dict(first if first_persistent else second)
+    if first_persistent and second_persistent:
+        return dict(first if _persistent_source_index(first) <= _persistent_source_index(second) else second)
     first_score = (float(first.get("score", 0.0)), int(first["touches"]), -float(first["width_pct"]))
     second_score = (float(second.get("score", 0.0)), int(second["touches"]), -float(second["width_pct"]))
     return dict(first if first_score >= second_score else second)
+
+
+# Oldest forming candle wins when two persistent floors overlap.
+def _persistent_source_index(zone: dict[str, Any]) -> int:
+    indexes = [int(index) for index in zone.get("source_indexes") or []]
+    return min(indexes) if indexes else 0
 
 
 def _zones_overlap(first: dict[str, Any], second: dict[str, Any]) -> bool:

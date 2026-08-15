@@ -118,6 +118,7 @@ def run_trade_once(
             mode=mode,
             strategy_version=config.strategy.version,
             config_version=config.strategy.config_version,
+            inside_zone_max_pct=config.strategy.inside_zone_max_pct,
         )
         decision_id = insert_decision(
             conn,

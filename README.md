@@ -212,7 +212,7 @@ The trigger 1h candle must be **red** (`close < open`). A green or doji candle i
 
 Entry regions for the current closed 1h `close`:
 
-- **Inside support:** `zone.low <= close` and close sits **strictly below 70%** of the zone span (`0%` = `zone.low`, `100%` = `zone.high`)
+- **Inside support:** `zone.low <= close` and close sits **strictly below 80%** of the zone span (`0%` = `zone.low`, `100%` = `zone.high`)
 - **Immediately below support:** `close < zone.low` and close sits in the **50%–100%** band of the gap from the next-lower zone high up to this zone’s low
 
 Shared setup gates:
@@ -243,8 +243,9 @@ High level:
 
 - High/low/body ranges detect internal and external swing points on closed 4h OHLC.
 - External swings are filtered into prominent pivots with ATR/percent thresholds.
-- Support evidence includes swing lows, reclaimed resistance, wick-floor retests, and derived 1D body-support overlays.
-- Candidates group into fixed-width (~$500) bands; zones need at least `min_touches` touches.
+- Support evidence includes swing lows, reclaimed resistance, wick-floor retests, derived 1D body-support overlays, and **persistent wick floors**.
+- A closed 4H local swing low whose wick hangs at least `$500` below the body pins `low = wick`, `high = wick + 500` (`origin=persistent_wick_floor`, one touch). Rebuilds re-emit that frozen band from the original source candle so a later deeper low cannot merge or daily-overlay it away.
+- Other candidates group into fixed-width (~$500) bands; those swing zones need at least `min_touches` touches.
 - Detector returns `support` / `resistance` / `active` / `all`; `resistance` and `active` stay empty. Hourly trading uses the full `support` list (including zones currently above price) so below-zone entries still work.
 
 Default prominent-pivot filter: reversal of at least `max(4.0 * ATR, 2.5% of price)`. Set `external_min_swing_atr_mult: 0.0` and `external_min_swing_pct: 0.0` to use raw local extrema. The chart does not overlay external pivots; optional internal debug markers stay hidden unless `show_internal_pivots: true`.

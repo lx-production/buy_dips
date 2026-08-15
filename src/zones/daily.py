@@ -116,11 +116,13 @@ def _nearest_replaceable_upper_zone(zones: list[Zone], daily_zone: Zone) -> int 
     return None if nearest is None else nearest[1]
 
 
-# True when a daily overlay may replace this zone (daily, mixed_structure; not local_reaction).
+# True when a daily overlay may replace this zone (daily, mixed_structure; not local_reaction or pinned wick floors).
 def _daily_zone_can_replace(zone: Zone) -> bool:
     if zone.get("source_timeframe") == "1d":
         return True
     if zone.get("bounds_style") == "local_reaction":
+        return False
+    if str(zone.get("origin")) == "persistent_wick_floor":
         return False
     return str(zone.get("origin")) == "mixed_structure"
 

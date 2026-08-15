@@ -42,12 +42,13 @@ def evaluate_support_close_v1(
     mode: str = "observe",
     strategy_version: str = STRATEGY_VERSION,
     config_version: str = "1",
+    inside_zone_max_pct: float = 0.80,
 ) -> dict[str, Any]:
     """Evaluate the one gate-based dip-to-support flow on a closed 1h candle.
 
     The first gate requires a red trigger candle (`close < open`) so a green
     reclaim into a higher zone cannot BUY. Later gates then select the nearest
-    support and apply the inside-below-70 / below-zone-band entry regions.
+    support and apply the inside-below-80 / below-zone-band entry regions.
     """
     # backtest is allowed in the pure engine only; decisions.mode schema stays observe/dry_run/live.
     if mode not in {"observe", "dry_run", "live", "backtest"}:
@@ -112,10 +113,11 @@ def evaluate_support_close_v1(
     if containing:
         selected = max(containing, key=_low)
         _set_selected(payload, selected)
-        # Inside-zone entry: 0% = zone.low, 100% = zone.high. Close must be strictly below 70%.
-        if close >= _inside_zone_70_level(selected):
+        # Inside-zone entry: 0% = zone.low, 100% = zone.high. Close must be strictly below the cutoff.
+        cutoff = _inside_zone_cutoff_level(selected, inside_zone_max_pct)
+        if close >= cutoff:
             return _finish(payload, HOLD, "CLOSE_NOT_BELOW_ZONE_MID")
-        payload["entry_region"] = "inside_below_70"
+        payload["entry_region"] = "inside_below_80"
         payload["gate_results"]["entry_region"] = True
     else:
         above = [zone for zone in ordered_zones if _low(zone) > close]
@@ -263,9 +265,12 @@ def _mid(zone: Mapping[str, Any]) -> Decimal:
     return _decimal(zone.get("mid"), "zone mid")
 
 
-def _inside_zone_70_level(zone: Mapping[str, Any]) -> Decimal:
-    """Return the 70% price of the zone span. 0% is zone.low, 100% is zone.high."""
-    return _low(zone) + Decimal("0.70") * (_high(zone) - _low(zone))
+def _inside_zone_cutoff_level(zone: Mapping[str, Any], max_pct: float) -> Decimal:
+    """Return the cutoff price of the zone span. 0% is zone.low, 100% is zone.high."""
+    cutoff_pct = _decimal(max_pct, "inside zone max pct")
+    if cutoff_pct <= 0 or cutoff_pct > 1:
+        raise DecisionInputError(f"Invalid inside zone max pct: {max_pct!r}")
+    return _low(zone) + cutoff_pct * (_high(zone) - _low(zone))
 
 
 def _decimal(value: Any, label: str) -> Decimal:
