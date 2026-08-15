@@ -41,7 +41,7 @@
 - Ban đầu fit toàn bộ khoảng backtest; zoom/pan thời gian và giá do thư viện; nút reset viewport gọi `fitContent`.
 - Vẽ support zone bằng một series primitive (hình chữ nhật `valid_from` → `valid_to`, `low` → `high`); chỉ các band có `low > 56000` và `high < 70000` (lọc hiển thị; API vẫn trả đủ segment).
 - Vẽ BUY bằng marker xanh tại `trigger_close`; selected zone tại BUY được nhấn mạnh.
-- Hover BUY / zone như đã khóa; không có marker/bảng/tooltip dành cho no-BUY.
+- Hover nến hiện OHLC; hover BUY / zone vẫn append chi tiết như đã khóa. Không có marker/bảng/tooltip dành cho no-BUY.
 
 ## Kiểm thử và tiêu chí chấp nhận
 

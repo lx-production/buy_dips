@@ -177,6 +177,7 @@ _INDEX_HTML = """<!doctype html>
     let chartData = null;
     let visibleZones = [];
     let visibleBuys = [];
+    let candleByTime = new Map();
     let chart = null;
     let candleSeries = null;
 
@@ -323,15 +324,28 @@ _INDEX_HTML = """<!doctype html>
       return fp.length > 18 ? `${fp.slice(0, 10)}…${fp.slice(-6)}` : fp;
     }
 
-    function showTooltip(hit, clientX, clientY) {
-      if (!hit) {
+    // Candle OHLC for the hovered 1h bar. Time is UTC+7 display only.
+    function formatOhlcLines(candle) {
+      return [
+        formatUtc7(Number(candle.time) * 1000),
+        `O ${formatPrice(candle.open)}`,
+        `H ${formatPrice(candle.high)}`,
+        `L ${formatPrice(candle.low)}`,
+        `C ${formatPrice(candle.close)}`
+      ];
+    }
+
+    // Always show the hovered candle OHLC; append BUY or zone details when the pointer is on those.
+    function showTooltip(candle, hit, clientX, clientY) {
+      if (!candle && !hit) {
         tooltip.style.display = 'none';
         return;
       }
-      let text = '';
-      if (hit.type === 'buy') {
+      const parts = [];
+      if (candle) parts.push(formatOhlcLines(candle).join('\\n'));
+      if (hit && hit.type === 'buy') {
         const b = hit.item;
-        text = [
+        parts.push([
           `BUY ${formatUtc7(b.trigger_open_time)}`,
           `close ${formatPrice(b.trigger_close)}`,
           `entry ${b.entry_region}`,
@@ -342,17 +356,17 @@ _INDEX_HTML = """<!doctype html>
           `below-zone % ${b.below_zone_pct == null ? 'n/a' : Number(b.below_zone_pct).toFixed(3)}`,
           `dip ${formatUtc7(b.dip_origin_open_time)} @ ${formatPrice(b.dip_origin_close)}`,
           `zone_set_as_of ${formatUtc7(b.zone_set_as_of)}`
-        ].join('\\n');
-      } else {
+        ].join('\\n'));
+      } else if (hit && hit.type === 'zone') {
         const z = hit.item;
-        text = [
+        parts.push([
           `zone ${formatPrice(z.low)}-${formatPrice(z.high)} mid ${formatPrice(z.mid)}`,
           `valid ${formatUtc7(z.valid_from)} → ${formatUtc7(z.valid_to)}`,
           `source ${z.source_timeframe} • touches ${z.touches}`,
           `fp ${shortFp(z.fingerprint)}`
-        ].join('\\n');
+        ].join('\\n'));
       }
-      tooltip.textContent = text;
+      tooltip.textContent = parts.join('\\n\\n');
       tooltip.style.display = 'block';
       const pad = 14;
       tooltip.style.left = Math.min(clientX + pad, window.innerWidth - tooltip.offsetWidth - 8) + 'px';
@@ -395,6 +409,7 @@ _INDEX_HTML = """<!doctype html>
         close: Number(candle.close)
       }));
       if (!candles.length) throw new Error('No closed candles in backtest window.');
+      candleByTime = new Map(candles.map((candle) => [candle.time, candle]));
 
       visibleBuys = data.buys || [];
       visibleZones = (data.zone_segments || []).filter(isVisibleZone).map((zone) => ({
@@ -462,12 +477,14 @@ _INDEX_HTML = """<!doctype html>
 
       chart.subscribeCrosshairMove((param) => {
         if (!param.point || param.time === undefined || param.time === null) {
-          showTooltip(null);
+          showTooltip(null, null);
           return;
         }
+        const seriesPoint = param.seriesData && param.seriesData.get(candleSeries);
+        const candle = seriesPoint || candleByTime.get(param.time) || null;
         const price = candleSeries.coordinateToPrice(param.point.y);
         const rect = container.getBoundingClientRect();
-        showTooltip(hitAt(param.time, price), rect.left + param.point.x, rect.top + param.point.y);
+        showTooltip(candle, hitAt(param.time, price), rect.left + param.point.x, rect.top + param.point.y);
       });
       resetViewport();
     }
