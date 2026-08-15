@@ -10,6 +10,7 @@ from src.zones import (
     _build_local_reaction_zones,
     _build_persistent_wick_floor_zones,
     _build_split_rejection_zone_pairs,
+    _enforce_support_zone_spacing,
     _filter_prominent_structure_pivots,
     _fill_support_staircase_gaps,
     _find_structure_pivots,
@@ -838,7 +839,7 @@ def test_split_rejection_pair_replaces_mixed_structure_inside_it() -> None:
 
 
 def test_persistent_wick_floor_pins_long_wick_low_plus_500() -> None:
-    # Mar 5 2024-style dump: zone low is the wick, high is wick + $500, one touch is enough.
+    # Mar 5 2024 dump (~4% wick) pins wick→wick+$500. The later ~2% overlapping dump does not.
     zones = _build_persistent_wick_floor_zones(
         [
             StructurePivot(
@@ -868,23 +869,46 @@ def test_persistent_wick_floor_pins_long_wick_low_plus_500() -> None:
 
     assert [(zone["low"], zone["high"], zone["origin"], zone["touches"]) for zone in zones] == [
         (59005.0, 59505.0, "persistent_wick_floor", 1),
-        (59130.91, 59630.91, "persistent_wick_floor", 1),
     ]
     assert zones[0]["source_closes"] == [59005.0]
     assert zones[0]["source_indexes"] == [2]
 
 
 def test_persistent_wick_floor_ignores_short_wicks() -> None:
+    # $500 wick at 59005 is only ~0.85% of price, so it is not a persistent dump.
     zones = _build_persistent_wick_floor_zones(
         [
-            StructurePivot(index=1, kind="low", wick_price=100.0, body_price=200.0, atr=1.0, term="external"),
+            StructurePivot(index=1, kind="low", wick_price=59005.0, body_price=59505.0, atr=1.0, term="external"),
         ],
         zone_width=500.0,
-        current_price=300.0,
+        current_price=63000.0,
         buffer_pct=0.0015,
     )
 
     assert zones == []
+
+
+def test_persistent_wick_floor_uses_percent_of_wick_price() -> None:
+    # 2% of 50000 is $1000: body exactly at the cutoff pins, one dollar short does not.
+    pinned = _build_persistent_wick_floor_zones(
+        [
+            StructurePivot(index=1, kind="low", wick_price=50000.0, body_price=51000.0, atr=1.0, term="external"),
+        ],
+        zone_width=500.0,
+        current_price=52000.0,
+        buffer_pct=0.0015,
+    )
+    skipped = _build_persistent_wick_floor_zones(
+        [
+            StructurePivot(index=1, kind="low", wick_price=50000.0, body_price=50999.0, atr=1.0, term="external"),
+        ],
+        zone_width=500.0,
+        current_price=52000.0,
+        buffer_pct=0.0015,
+    )
+
+    assert [(zone["low"], zone["high"]) for zone in pinned] == [(50000.0, 50500.0)]
+    assert skipped == []
 
 
 def test_overlay_persistent_wick_floors_keeps_oldest_and_drops_overlapping_swing() -> None:
@@ -908,6 +932,54 @@ def test_overlay_persistent_wick_floors_keeps_oldest_and_drops_overlapping_swing
         (56552.82, 57052.82, "persistent_wick_floor"),
         (57864.97, 58364.97, "daily_body_support"),
         (59005.0, 59505.0, "persistent_wick_floor"),
+    ]
+
+
+def test_enforce_support_zone_spacing_keeps_older_persistent_in_same_slot() -> None:
+    # Gap $495 and midpoint gap $995 both sit inside the $650 / $1000 window.
+    older = _support_zone(low=59005.0, high=59505.0, source_closes=[59005.0], score=2.0)
+    older["origin"] = "persistent_wick_floor"
+    older["source_indexes"] = [2]
+    newer = _support_zone(low=60000.0, high=60500.0, source_closes=[60000.0], score=2.0)
+    newer["origin"] = "persistent_wick_floor"
+    newer["source_indexes"] = [8]
+
+    zones = _enforce_support_zone_spacing([newer, older])
+
+    assert [(zone["low"], zone["high"], zone["origin"]) for zone in zones] == [
+        (59005.0, 59505.0, "persistent_wick_floor"),
+    ]
+
+
+def test_enforce_support_zone_spacing_persistent_outranks_nearby_swing() -> None:
+    # A stronger mixed band just above 59505 must not crowd out the pinned Mar 5 floor.
+    persistent = _support_zone(low=59005.0, high=59505.0, source_closes=[59005.0], score=2.0)
+    persistent["origin"] = "persistent_wick_floor"
+    persistent["source_indexes"] = [2]
+    mixed = _support_zone(low=59800.0, high=60300.0, source_closes=[59800.0], score=12.0)
+    mixed["origin"] = "mixed_structure"
+
+    zones = _enforce_support_zone_spacing([mixed, persistent])
+
+    assert [(zone["low"], zone["high"], zone["origin"]) for zone in zones] == [
+        (59005.0, 59505.0, "persistent_wick_floor"),
+    ]
+
+
+def test_enforce_support_zone_spacing_keeps_far_apart_zones() -> None:
+    # Gap $1495 and midpoint gap $1995 are outside both spacing windows, so both stay.
+    older = _support_zone(low=59005.0, high=59505.0, source_closes=[59005.0], score=2.0)
+    older["origin"] = "persistent_wick_floor"
+    older["source_indexes"] = [2]
+    far = _support_zone(low=61000.0, high=61500.0, source_closes=[61000.0], score=2.0)
+    far["origin"] = "persistent_wick_floor"
+    far["source_indexes"] = [8]
+
+    zones = _enforce_support_zone_spacing([far, older])
+
+    assert [(zone["low"], zone["high"], zone["origin"]) for zone in zones] == [
+        (59005.0, 59505.0, "persistent_wick_floor"),
+        (61000.0, 61500.0, "persistent_wick_floor"),
     ]
 
 
@@ -937,8 +1009,9 @@ def test_detector_keeps_mar5_style_wick_floor_after_later_lower_low() -> None:
         if zone["origin"] == "persistent_wick_floor"
     ]
 
+    # Later 56552 low is deeper but only ~1.7% wick, so it does not pin or erase 59005.
     assert (59005.0, 59505.0, "persistent_wick_floor") in persistent
-    assert (56552.82, 57052.82, "persistent_wick_floor") in persistent
+    assert (56552.82, 57052.82, "persistent_wick_floor") not in persistent
 
 
 def test_support_bands_anchor_to_support_upper_anchor() -> None:

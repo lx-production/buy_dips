@@ -7,7 +7,7 @@ from .factory import _fixed_support_zone_bounds
 from .ohlc import _average_true_range, _coerce_ohlc
 from .pivots import _filter_prominent_structure_pivots, _find_structure_pivots, _label_structure_pivots
 from .persistent import _build_persistent_wick_floor_zones, _overlay_persistent_wick_floors
-from .postprocess import _fill_support_staircase_gaps
+from .postprocess import _enforce_support_zone_spacing, _fill_support_staircase_gaps
 from .reactions import _build_local_reaction_zones
 from .rejections import _build_split_rejection_zone_pairs, _overlay_split_rejection_zones
 from .timeframes import aggregate_ohlc_to_daily
@@ -24,6 +24,7 @@ __all__ = [
     "_build_persistent_wick_floor_zones",
     "_build_split_rejection_zone_pairs",
     "_coerce_ohlc",
+    "_enforce_support_zone_spacing",
     "_filter_prominent_structure_pivots",
     "_fill_support_staircase_gaps",
     "_find_structure_pivots",

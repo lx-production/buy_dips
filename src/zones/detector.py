@@ -10,7 +10,7 @@ from .daily import _build_daily_body_support_zones, _overlay_daily_support_zones
 from .ohlc import _average_true_range, _coerce_ohlc
 from .pivots import _filter_prominent_structure_pivots, _find_structure_pivots, _label_structure_pivots
 from .persistent import _build_persistent_wick_floor_zones, _overlay_persistent_wick_floors
-from .postprocess import _fill_support_staircase_gaps, _make_support_zones_distinct
+from .postprocess import _enforce_support_zone_spacing, _fill_support_staircase_gaps, _make_support_zones_distinct
 from .reactions import _build_local_reaction_zones
 from .rejections import _build_split_rejection_zone_pairs, _overlay_split_rejection_zones
 from .types import STRUCTURE_ZONE_WIDTH
@@ -146,6 +146,9 @@ def detect_support_resistance_zones_structure_v1(
         buffer_pct=buffer_pct,
     )
     zones = _overlay_persistent_wick_floors(zones, persistent_floors)
+    # Overlay skips gap/midpoint spacing; collapse near neighbors so the ladder stays one zone per step.
+    zones = _make_support_zones_distinct(zones, current_price=float(current_price), buffer_pct=buffer_pct)
+    zones = _enforce_support_zone_spacing(zones)
 
     support = sorted(zones, key=lambda zone: float(zone["low"]))
     return {"support": support, "resistance": [], "active": [], "all": support}

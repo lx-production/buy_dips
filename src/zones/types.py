@@ -9,6 +9,7 @@ SwingTerm = Literal["internal", "external"]
 BoundsStyle = Literal["body", "support_floor", "local_reaction"] # how the zone edges are anchored
 
 STRUCTURE_ZONE_WIDTH = 500.0
+STRUCTURE_PERSISTENT_WICK_MIN_PCT = 2.0 # wick must hang this % of wick price below the body
 STRUCTURE_MACRO_GAP = 300.0
 STRUCTURE_MACRO_MAX_SOURCE_SPAN = 2000.0
 STRUCTURE_IMPORTANT_ZONE_SPACING = 1000.0

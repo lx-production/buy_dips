@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from .types import StructurePivot
 from .factory import Zone, _make_support_zone
+from .types import STRUCTURE_PERSISTENT_WICK_MIN_PCT, StructurePivot
 
 PERSISTENT_WICK_FLOOR_ORIGIN = "persistent_wick_floor"
 
 
-# Pin a fixed $500 wick-floor from each confirmed local swing-low with a long wick.
+# Pin a fixed-width wick-floor from each confirmed local swing-low with a long wick.
 def _build_persistent_wick_floor_zones(
     raw_external_pivots: list[StructurePivot],
     zone_width: float,
@@ -19,6 +19,8 @@ def _build_persistent_wick_floor_zones(
     current prominent set. A later deeper low must not erase an earlier shelf.
     Bounds freeze at first print: low = wick, high = wick + zone_width. One
     touch is enough; later overlays keep the oldest overlapping floor.
+    Qualification is wick >= STRUCTURE_PERSISTENT_WICK_MIN_PCT of wick price,
+    not zone_width — $500 is band height, not a dump filter.
     """
     width = float(zone_width)
     zones: list[Zone] = []
@@ -27,8 +29,7 @@ def _build_persistent_wick_floor_zones(
             continue
         wick = float(pivot.wick_price)
         body_low = float(pivot.body_price)
-        # Skip ordinary candles; only pin dumps whose wick hangs at least one zone width below the body.
-        if body_low - wick < width:
+        if not _persistent_wick_meets_min_pct(wick, body_low):
             continue
         zones.append(
             _make_support_zone(
@@ -49,6 +50,20 @@ def _build_persistent_wick_floor_zones(
             )
         )
     return zones
+
+
+# True when the lower wick hangs at least min_pct of the wick price below the body.
+def _persistent_wick_meets_min_pct(wick: float, body_low: float) -> bool:
+    """Qualify dump shelves by wick size relative to that candle's price.
+
+    Uses wick_price as the percent base, same as prominent-swing pct moves.
+    A 2% wick at 59005 is ~$1180; the Mar 5 2024 dump was ~4% and still pins.
+    """
+    floor = float(wick)
+    if floor <= 0.0:
+        return False
+    min_span = abs(floor) * STRUCTURE_PERSISTENT_WICK_MIN_PCT / 100.0
+    return float(body_low) - floor >= min_span
 
 
 # Insert pinned wick floors after merge/daily so those steps cannot absorb them.

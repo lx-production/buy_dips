@@ -244,7 +244,8 @@ High level:
 - High/low/body ranges detect internal and external swing points on closed 4h OHLC.
 - External swings are filtered into prominent pivots with ATR/percent thresholds.
 - Support evidence includes swing lows, reclaimed resistance, wick-floor retests, derived 1D body-support overlays, and **persistent wick floors**.
-- A closed 4H local swing low whose wick hangs at least `$500` below the body pins `low = wick`, `high = wick + 500` (`origin=persistent_wick_floor`, one touch). Rebuilds re-emit that frozen band from the original source candle so a later deeper low cannot merge or daily-overlay it away.
+- A closed 4H local swing low whose wick hangs at least `2%` of the wick price below the body pins `low = wick`, `high = wick + 500` (`origin=persistent_wick_floor`, one touch). Band height stays `$500`; the `2%` filter is independent so ordinary `$500` wicks are not pinned. Rebuilds re-emit that frozen band from the original source candle so a later deeper low cannot merge or daily-overlay it away.
+- After that overlay, zones closer than a `$650` gap or a `$1000` midpoint are collapsed to one ladder step. Persistent floors outrank swing/daily bands; overlapping or nearby persistent floors keep the oldest.
 - Other candidates group into fixed-width (~$500) bands; those swing zones need at least `min_touches` touches.
 - Detector returns `support` / `resistance` / `active` / `all`; `resistance` and `active` stay empty. Hourly trading uses the full `support` list (including zones currently above price) so below-zone entries still work.
 

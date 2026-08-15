@@ -7,6 +7,8 @@ import numpy as np
 from .candidates import _first_reclaim_index, _high_is_confirmed_reclaimed
 from .state import _classify_price_state
 from .types import (
+    STRUCTURE_ADJACENT_ZONE_MIN_GAP,
+    STRUCTURE_IMPORTANT_ZONE_SPACING,
     STRUCTURE_STAIR_STEP_MAX_INSERTIONS,
     STRUCTURE_STAIR_STEP_MAX_SUPPORT_GAP,
     StructurePivot,
@@ -159,6 +161,44 @@ def _make_support_zones_distinct(
         else:
             distinct.append(zone)
     return distinct
+
+
+# Keep one zone per nearby ladder slot after persistent overlay.
+def _enforce_support_zone_spacing(zones: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop neighbors that sit inside the $650 gap or $1000 midpoint window.
+
+    Overlay only removes true overlaps, so a 59005 floor and a 59800 swing band
+    both survived. This pass uses the same spacing as swing suppress, but pinned
+    wick floors outrank swing/daily bands and older persistent floors win.
+    """
+    kept: list[dict[str, Any]] = []
+    for zone in sorted(zones, key=_spaced_support_zone_rank, reverse=True):
+        zone = dict(zone)
+        if any(_support_zones_share_ladder_slot(zone, previous) for previous in kept):
+            continue
+        kept.append(zone)
+    return sorted(kept, key=lambda item: float(item["low"]))
+
+
+# True when two zones are close enough to count as the same support step.
+def _support_zones_share_ladder_slot(first: dict[str, Any], second: dict[str, Any]) -> bool:
+    lower, upper = (first, second) if float(first["low"]) <= float(second["low"]) else (second, first)
+    gap = float(upper["low"]) - float(lower["high"])
+    midpoint_gap = abs(float(first["mid"]) - float(second["mid"]))
+    return gap < STRUCTURE_ADJACENT_ZONE_MIN_GAP or midpoint_gap < STRUCTURE_IMPORTANT_ZONE_SPACING
+
+
+# Persistent floors first, then older source candle, then score/touches/width.
+def _spaced_support_zone_rank(zone: dict[str, Any]) -> tuple[int, int, float, int, float]:
+    persistent = 1 if str(zone.get("origin")) == "persistent_wick_floor" else 0
+    persistent_age = -_persistent_source_index(zone) if persistent else 0
+    return (
+        persistent,
+        persistent_age,
+        float(zone.get("score", 0.0)),
+        int(zone["touches"]),
+        -float(zone["width_pct"]),
+    )
 
 
 def _prefer_support_zone(first: dict[str, Any], second: dict[str, Any]) -> dict[str, Any]:
