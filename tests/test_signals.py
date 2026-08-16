@@ -211,3 +211,106 @@ def test_doji_trigger_candle_is_hold() -> None:
 
     assert decision["decision"] == "HOLD"
     assert decision["reason_code"] == "CLOSE_NOT_BELOW_OPEN"
+
+
+def test_inside_zone_max_pct_rejects_close_above_cap() -> None:
+    # close=100 is 100% of zone 90–100; a 0.80 cap must reject the top of the band.
+    trigger_time = 100 * HOUR
+    candles = _hourly(trigger_time, [(trigger_time - HOUR, 106)], 100)
+    zones = [_zone(90, 100, "selected"), _zone(110, 120, "higher")]
+
+    decision = evaluate_support_close_v1(
+        candles.iloc[-1].to_dict(),
+        candles,
+        zones,
+        zone_set_as_of=96 * HOUR,
+        inside_zone_max_pct=0.80,
+    )
+
+    assert decision["decision"] == "HOLD"
+    assert decision["reason_code"] == "CLOSE_OUTSIDE_ENTRY_REGION"
+    assert decision["entry_region"] is None
+
+
+def test_inside_zone_max_pct_allows_close_at_cap() -> None:
+    # close=98 is exactly 80% of zone 90–100, so it still qualifies under a 0.80 cap.
+    trigger_time = 100 * HOUR
+    candles = _hourly(trigger_time, [(trigger_time - HOUR, 106)], 98)
+    zones = [_zone(90, 100, "selected"), _zone(110, 120, "higher")]
+
+    decision = evaluate_support_close_v1(
+        candles.iloc[-1].to_dict(),
+        candles,
+        zones,
+        zone_set_as_of=96 * HOUR,
+        inside_zone_max_pct=0.80,
+    )
+
+    assert decision["decision"] == "BUY"
+    assert decision["entry_region"] == "inside_zone"
+
+
+def test_below_zone_min_pct_comes_from_argument() -> None:
+    # close=87.5 is 50% of the 85 → 90 gap; raising the floor to 0.60 must HOLD.
+    trigger_time = 100 * HOUR
+    candles = _hourly(trigger_time, [(trigger_time - HOUR, 106)], 87.5)
+    zones = [_zone(80, 85, "lower"), _zone(90, 100, "selected"), _zone(110, 120, "higher")]
+
+    decision = evaluate_support_close_v1(
+        candles.iloc[-1].to_dict(),
+        candles,
+        zones,
+        zone_set_as_of=96 * HOUR,
+        below_zone_min_pct=0.60,
+    )
+
+    assert decision["decision"] == "HOLD"
+    assert decision["reason_code"] == "BELOW_ZONE_OUT_OF_BAND"
+    assert decision["below_zone_pct"] == 0.5
+
+
+def test_dip_lookback_hours_limits_origin_scan() -> None:
+    # The only close above the midpoint is 3h ago, so a 1h lookback cannot see it.
+    trigger_time = 100 * HOUR
+    candles = _hourly(
+        trigger_time,
+        [(trigger_time - 3 * HOUR, 108), (trigger_time - 2 * HOUR, 104), (trigger_time - HOUR, 104)],
+        92,
+    )
+    zones = [_zone(80, 85, "lower"), _zone(90, 100, "selected"), _zone(110, 120, "higher")]
+
+    decision = evaluate_support_close_v1(
+        candles.iloc[-1].to_dict(),
+        candles,
+        zones,
+        zone_set_as_of=96 * HOUR,
+        dip_lookback_hours=1,
+    )
+
+    assert decision["decision"] == "HOLD"
+    assert decision["reason_code"] == "NO_RECENT_CLOSE_ABOVE_INTERNAL_MID"
+    assert decision["lookback_start_time"] == trigger_time - HOUR
+
+
+def test_cooldown_hours_sets_prior_buy_window() -> None:
+    # The engine must pass YAML cooldown_hours into the prior-BUY lookup, not a hard-coded 24h.
+    trigger_time = 100 * HOUR
+    candles = _hourly(trigger_time, [(trigger_time - HOUR, 106)], 92)
+    zones = [_zone(90, 100, "selected"), _zone(110, 120, "higher")]
+    seen: list[tuple[int, int]] = []
+
+    def capture(_fingerprint: str, start: int, end: int) -> bool:
+        seen.append((start, end))
+        return False
+
+    decision = evaluate_support_close_v1(
+        candles.iloc[-1].to_dict(),
+        candles,
+        zones,
+        zone_set_as_of=96 * HOUR,
+        prior_buy_exists=capture,
+        cooldown_hours=6,
+    )
+
+    assert decision["decision"] == "BUY"
+    assert seen == [(trigger_time - 6 * HOUR, trigger_time)]

@@ -118,6 +118,10 @@ def run_trade_once(
             mode=mode,
             strategy_version=config.strategy.version,
             config_version=config.strategy.config_version,
+            dip_lookback_hours=config.strategy.dip_lookback_hours,
+            cooldown_hours=config.strategy.cooldown_hours,
+            below_zone_min_pct=config.strategy.below_zone_min_pct,
+            inside_zone_max_pct=config.strategy.inside_zone_max_pct,
         )
         decision_id = insert_decision(
             conn,

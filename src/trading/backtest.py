@@ -14,7 +14,7 @@ from ..config import AppConfig
 from ..db import connect, load_candles_df
 from ..utils import ms_to_iso
 from .aggregate_4h import OverdueIncompleteFourHourError, aggregate_four_hour_bucket
-from .constants import DETECTOR_VERSION, FOUR_HOURS_MS, HOURLY_TIMEFRAME, LOOKBACK_48H_MS, ONE_HOUR_MS, STRATEGY_VERSION, ZONE_TIMEFRAME
+from .constants import DETECTOR_VERSION, FOUR_HOURS_MS, HOURLY_TIMEFRAME, ONE_HOUR_MS, STRATEGY_VERSION, ZONE_TIMEFRAME
 from .signal import BUY, evaluate_support_close_v1
 from .backtest_zone_cache import ZoneCacheIdentity, build_four_hour_input_hashes, build_zone_cache_identity, load_cached_zone_snapshot, prune_incompatible_zone_cache, store_cached_zone_snapshot
 from .zone_refresh import ZoneRefreshError, build_fingerprinted_support_zones
@@ -111,7 +111,8 @@ def run_backtest(
         if end_ms <= start_ms:
             raise BacktestError("end must be strictly after start")
 
-    lookback_start = start_ms - LOOKBACK_48H_MS
+    # First-trigger dip-origin scan needs this many hours of closed 1h candles before start.
+    lookback_start = start_ms - config.strategy.dip_lookback_hours * ONE_HOUR_MS
     hourly_all = load_candles_df(
         database_path,
         config.exchange,
@@ -266,6 +267,10 @@ def run_backtest(
             mode="backtest",
             strategy_version=config.strategy.version or STRATEGY_VERSION,
             config_version=config.strategy.config_version,
+            dip_lookback_hours=config.strategy.dip_lookback_hours,
+            cooldown_hours=config.strategy.cooldown_hours,
+            below_zone_min_pct=config.strategy.below_zone_min_pct,
+            inside_zone_max_pct=config.strategy.inside_zone_max_pct,
         )
         if decision["decision"] == BUY:
             fingerprint = str(decision["selected_zone_fingerprint"])

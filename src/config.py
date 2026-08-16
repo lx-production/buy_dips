@@ -31,11 +31,14 @@ class PriceFeedConfig(BaseModel):
 
 
 class StrategyConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     version: str = "support_close_v1"
     config_version: str = "1"
-    dip_lookback_hours: int = 48
-    cooldown_hours: int = 24
-    below_zone_min_pct: float = 0.50
+    dip_lookback_hours: int = Field(default=48, gt=0)
+    cooldown_hours: int = Field(default=24, gt=0)
+    below_zone_min_pct: float = Field(default=0.50, ge=0, le=1)
+    inside_zone_max_pct: float = Field(default=1.0, ge=0, le=1)
 
 
 class WalletConfig(BaseModel):

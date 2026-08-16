@@ -22,7 +22,7 @@
 - Replay engine trong `src/trading/backtest.py`:
   - Nhận `start` inclusive và `end` exclusive; `start` bắt buộc, `end` mặc định sau cây 1h đóng cuối cùng.
   - Thời gian đầu vào phải là ISO-8601 có timezone và nằm trên biên giờ UTC.
-  - Yêu cầu đủ dữ liệu 1h liên tục từ `start - 48h`; thiếu nến hoặc bucket 4h không đủ bốn nến thì abort.
+  - Yêu cầu đủ dữ liệu 1h liên tục từ `start - dip_lookback_hours` (mặc định 48h); thiếu nến hoặc bucket 4h không đủ bốn nến thì abort.
   - `start` có thể nằm trên bất kỳ biên giờ UTC; bucket 4h derive đầu tiên là bucket đầu tiên được phủ đủ bốn nến 1h.
   - Dùng 4h lịch sử trước vùng 1h làm detector warm-up; từ vùng có 1h trở đi luôn derive 4h từ bốn nến 1h và không dùng 4h tương lai.
   - Mỗi bucket 4h được aggregate đúng một lần cho cả replay, sau đó frame as-of chỉ được cắt lại khi watermark 4h tiến lên.
@@ -51,6 +51,6 @@
 ## Giả định đã khóa
 
 - Chart và quyết định dùng timeframe 1h; replay/API giữ Unix UTC, còn nhãn trục / HUD / hover của backtest chart hiển thị UTC+7.
-- `start` là ranh giới bắt đầu một replay độc lập: prior-BUY state rỗng tại đó, còn 48h trước `start` chỉ dùng cho dip-origin lookback.
+- `start` là ranh giới bắt đầu một replay độc lập: prior-BUY state rỗng tại đó, còn `dip_lookback_hours` trước `start` chỉ dùng cho dip-origin lookback.
 - Backtest là signal-only: không PnL, sell, quote, slippage, gas, wallet hoặc transaction simulation.
 - Backtest chart được phép dùng Lightweight Charts + một rectangle primitive cho zone time-bounded. Chart 4h live (`serve_chart.py`) vẫn canvas cho đến khi đổi riêng.

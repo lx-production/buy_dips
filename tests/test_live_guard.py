@@ -73,3 +73,38 @@ def test_config_rejects_unsafe_wallet_execution_values(payload) -> None:
     # Lock immutable Polygon, router, canary, secret-source, and development safety settings.
     with pytest.raises(ValidationError):
         AppConfig.model_validate(payload)
+
+
+def test_strategy_yaml_fields_are_loaded() -> None:
+    # Prove the four engine knobs survive YAML → StrategyConfig instead of being dropped.
+    config = AppConfig.model_validate(
+        {
+            "strategy": {
+                "dip_lookback_hours": 12,
+                "cooldown_hours": 6,
+                "below_zone_min_pct": 0.60,
+                "inside_zone_max_pct": 0.80,
+            }
+        }
+    )
+
+    assert config.strategy.dip_lookback_hours == 12
+    assert config.strategy.cooldown_hours == 6
+    assert config.strategy.below_zone_min_pct == 0.60
+    assert config.strategy.inside_zone_max_pct == 0.80
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"strategy": {"inside_zone_max_percent": 0.80}},
+        {"strategy": {"dip_lookback_hours": 0}},
+        {"strategy": {"cooldown_hours": -1}},
+        {"strategy": {"below_zone_min_pct": 1.5}},
+        {"strategy": {"inside_zone_max_pct": -0.1}},
+    ],
+)
+def test_strategy_rejects_unknown_or_invalid_yaml(payload) -> None:
+    # Unknown keys and out-of-range values must fail closed at config load.
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate(payload)

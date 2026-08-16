@@ -5,7 +5,7 @@ from typing import Any, Callable, Iterable, Mapping
 
 import pandas as pd
 
-from .constants import COOLDOWN_24H_MS, FINGERPRINT_VERSION, LOOKBACK_48H_MS, STRATEGY_VERSION
+from .constants import FINGERPRINT_VERSION, ONE_HOUR_MS, STRATEGY_VERSION
 
 
 BUY = "BUY"
@@ -41,16 +41,24 @@ def evaluate_support_close_v1(
     mode: str = "observe",
     strategy_version: str = STRATEGY_VERSION,
     config_version: str = "1",
+    dip_lookback_hours: int = 48,
+    cooldown_hours: int = 24,
+    below_zone_min_pct: float = 0.50,
+    inside_zone_max_pct: float = 1.0,
 ) -> dict[str, Any]:
     """Evaluate the one gate-based dip-to-support flow on a closed 1h candle.
 
     The first gate requires a red trigger candle (`close < open`) so a green
     reclaim into a higher zone cannot BUY. Later gates then select the nearest
-    support and apply the inside-zone (0%–100%) / below-zone-band entry regions.
+    support and apply the YAML inside-zone / below-zone-band entry regions.
     """
     # backtest is allowed in the pure engine only; decisions.mode schema stays observe/dry_run/live.
     if mode not in {"observe", "dry_run", "live", "backtest"}:
         raise DecisionInputError(f"Unsupported decision mode: {mode}")
+    lookback_ms = _hours_to_ms(dip_lookback_hours, "dip_lookback_hours")
+    cooldown_ms = _hours_to_ms(cooldown_hours, "cooldown_hours")
+    below_min = _fraction(below_zone_min_pct, "below_zone_min_pct")
+    inside_max = _fraction(inside_zone_max_pct, "inside_zone_max_pct")
     trigger_open_time = _required_int(trigger_candle, "open_time")
     trigger_close_time = _required_int(trigger_candle, "close_time")
     close = _decimal(trigger_candle.get("close"), "trigger close")
@@ -111,7 +119,9 @@ def evaluate_support_close_v1(
     if containing:
         selected = max(containing, key=_low)
         _set_selected(payload, selected)
-        # Inside-zone entry: any close from zone.low (0%) through zone.high (100%) qualifies.
+        # Inside-zone entry: 0% = zone.low; YAML inside_zone_max_pct caps how high in the band still qualifies.
+        if _inside_zone_pct(close, selected) > inside_max:
+            return _finish(payload, HOLD, "CLOSE_OUTSIDE_ENTRY_REGION")
         payload["entry_region"] = "inside_zone"
         payload["gate_results"]["entry_region"] = True
     else:
@@ -131,8 +141,8 @@ def evaluate_support_close_v1(
         payload["below_zone_band_low"] = float(gap_low)
         payload["below_zone_band_high"] = float(gap_high)
         payload["below_zone_pct"] = float(below_pct)
-        # Immediately-below entry: close must sit in the 50%–100% portion of (next_lower.high → zone.low).
-        if not (Decimal("0.50") <= below_pct <= Decimal("1.0") and close < _low(selected)):
+        # Immediately-below entry: close must sit in the YAML min…100% portion of (next_lower.high → zone.low).
+        if not (below_min <= below_pct <= Decimal("1.0") and close < _low(selected)):
             return _finish(payload, HOLD, "BELOW_ZONE_OUT_OF_BAND")
         payload["entry_region"] = "below_zone_band"
         payload["gate_results"]["entry_region"] = True
@@ -151,7 +161,7 @@ def evaluate_support_close_v1(
     payload["gate_results"]["higher_zone"] = True
 
     zone_source_time = _required_zone_source_time(selected)
-    lookback_start = max(trigger_open_time - LOOKBACK_48H_MS, zone_source_time)
+    lookback_start = max(trigger_open_time - lookback_ms, zone_source_time)
     payload["lookback_start_time"] = lookback_start
     dip_origin = nearest_close_above_midpoint(
         hourly_candles,
@@ -166,7 +176,7 @@ def evaluate_support_close_v1(
     payload["gate_results"]["dip_origin"] = True
 
     fingerprint = str(selected["fingerprint"])
-    cooldown_start = trigger_open_time - COOLDOWN_24H_MS
+    cooldown_start = trigger_open_time - cooldown_ms
     recent_buy = bool(prior_buy_exists(fingerprint, cooldown_start, trigger_open_time)) if prior_buy_exists else False
     payload["recent_buy_in_24h"] = recent_buy
     payload["gate_results"]["per_zone_cooldown"] = not recent_buy
@@ -246,6 +256,29 @@ def _required_zone_source_time(zone: Mapping[str, Any]) -> int:
     if value is None:
         raise DecisionInputError("Zone is missing persisted zone_source_time")
     return int(value)
+
+
+def _inside_zone_pct(close: Decimal, zone: Mapping[str, Any]) -> Decimal:
+    # 0% is zone.low and 100% is zone.high; a zero-width band is treated as 0%.
+    span = _high(zone) - _low(zone)
+    if span == 0:
+        return Decimal("0")
+    return (close - _low(zone)) / span
+
+
+def _hours_to_ms(hours: int, label: str) -> int:
+    # Convert a YAML hour count into the millisecond window the engine actually scans.
+    if isinstance(hours, bool) or not isinstance(hours, int) or hours <= 0:
+        raise DecisionInputError(f"{label} must be a positive number of hours")
+    return hours * ONE_HOUR_MS
+
+
+def _fraction(value: float, label: str) -> Decimal:
+    # Reject values outside 0–1 so a percent like 80 cannot silently become an 80x band.
+    parsed = _decimal(value, label)
+    if parsed < 0 or parsed > 1:
+        raise DecisionInputError(f"{label} must be a fraction between 0 and 1")
+    return parsed
 
 
 def _low(zone: Mapping[str, Any]) -> Decimal:

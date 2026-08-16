@@ -107,7 +107,7 @@ Replay `support_close_v1` on stored closed 1h candles. The engine is the same as
 
 - `--start` is inclusive, `--end` is exclusive. Both must be ISO-8601 with timezone on any UTC hour boundary; 4h alignment is not required.
 - `--end` defaults to after the latest closed 1h candle.
-- Requires continuous 1h data from `start - 48h`. Incomplete overdue 4h buckets abort the run.
+- Requires continuous 1h data from `start - dip_lookback_hours` (default 48h). Incomplete overdue 4h buckets abort the run.
 - Zone snapshots are cached in the separate `backtest_zone_cache` table. The first run builds them; later runs reuse matching snapshots and build only new or stale 4h watermarks.
 - Cache validity includes zone config, detector source code, and a cumulative hash of the exact 4h candle input. Config/code edits and historical candle changes invalidate affected snapshots automatically.
 - Output is BUY-only: CLI summary + CSV. HOLD is computed for correct replay but not printed or exported.
@@ -210,16 +210,16 @@ One dip-to-support flow. Output is gate-based (not scored): exactly one `decisio
 
 The trigger 1h candle must be **red** (`close < open`). A green or doji candle is `HOLD` immediately (`CLOSE_NOT_BELOW_OPEN`) and never selects a zone.
 
-Entry regions for the current closed 1h `close`:
+Entry regions for the current closed 1h `close` (thresholds come from `strategy:` in YAML):
 
-- **Inside support:** `zone.low <= close <= zone.high` (full zone span: `0%` = `zone.low`, `100%` = `zone.high`)
-- **Immediately below support:** `close < zone.low` and close sits in the **50%–100%** band of the gap from the next-lower zone high up to this zone’s low
+- **Inside support:** `zone.low <= close` and close sits in the **0%–`inside_zone_max_pct`** portion of the zone span (`0%` = `zone.low`, `100%` = `zone.high`). Default `inside_zone_max_pct` is `1.00` (the full band).
+- **Immediately below support:** `close < zone.low` and close sits in the **`below_zone_min_pct`–100%** band of the gap from the next-lower zone high up to this zone’s low. Default `below_zone_min_pct` is `0.50`.
 
 Shared setup gates:
 
 - The trigger 1h candle is **red**: `close < open`.
-- In the prior **48h** (floored by the selected zone’s `zone_source_time`), there is a nearest earlier closed 1h candle whose `close` is **strictly above** the internal-range midpoint (midpoint between the selected zone high and the next higher zone low).
-- No prior `BUY` for the **same selected zone fingerprint** in the prior **24h**. Cooldown is per-zone: a deeper zone may still `BUY` within 24h of a shallower-zone `BUY`.
+- In the prior **`dip_lookback_hours`** (default 48; floored by the selected zone’s `zone_source_time`), there is a nearest earlier closed 1h candle whose `close` is **strictly above** the internal-range midpoint (midpoint between the selected zone high and the next higher zone low).
+- No prior `BUY` for the **same selected zone fingerprint** in the prior **`cooldown_hours`** (default 24). Cooldown is per-zone: a deeper zone may still `BUY` within that window of a shallower-zone `BUY`.
 
 Reason codes:
 
