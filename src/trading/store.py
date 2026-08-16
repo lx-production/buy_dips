@@ -6,6 +6,7 @@ import sqlite3
 from typing import Any
 
 from ..utils import utc_seconds
+from .constants import ONE_HOUR_MS
 
 
 def has_setup_buy(
@@ -29,6 +30,38 @@ def has_setup_buy(
         LIMIT 1
         """,
         (selected_zone_fingerprint, int(dip_origin_open_time), int(trigger_open_time)),
+    ).fetchone()
+    return row is not None
+
+
+def has_recent_zone_buy(
+    conn: sqlite3.Connection,
+    selected_zone_fingerprint: str,
+    trigger_open_time: int,
+    *,
+    cooldown_hours: int = 24,
+) -> bool:
+    """Return True when the same zone already has a BUY inside the cooldown window.
+
+    The window is (`trigger - cooldown`, `trigger`): the original BUY at exactly
+    `cooldown_hours` earlier does not block. The current trigger candle is
+    excluded so an idempotent rerun of the same hour can still persist BUY.
+    A BUY at a different fingerprint does not count, so a deeper zone may still
+    BUY within 24h of a shallower zone.
+    """
+    if isinstance(cooldown_hours, bool) or not isinstance(cooldown_hours, int) or cooldown_hours <= 0:
+        raise ValueError("cooldown_hours must be a positive number of hours")
+    window_start = int(trigger_open_time) - cooldown_hours * ONE_HOUR_MS
+    row = conn.execute(
+        """
+        SELECT 1 FROM decisions
+        WHERE decision='BUY'
+          AND selected_zone_fingerprint=?
+          AND candle_open_time > ?
+          AND candle_open_time < ?
+        LIMIT 1
+        """,
+        (selected_zone_fingerprint, window_start, int(trigger_open_time)),
     ).fetchone()
     return row is not None
 

@@ -177,6 +177,7 @@ def run_backtest(
     zone_rebuild_count = 0
     zone_cache_hit_count = 0
     detector_fn = detector
+    cooldown_ms = config.strategy.cooldown_hours * ONE_HOUR_MS
 
     for _, row in display.iterrows():
         trigger = row.to_dict()
@@ -263,6 +264,12 @@ def run_backtest(
             zone_set_as_of=watermark,
             setup_already_bought=lambda fingerprint, dip_origin: _setup_already_bought(
                 prior_buys, fingerprint, dip_origin
+            ),
+            recent_zone_buy=lambda fingerprint, _open=trigger_open: _recent_zone_buy(
+                prior_buys,
+                fingerprint,
+                _open,
+                cooldown_ms,
             ),
             zones_rebuilt=rebuilt,
             mode="backtest",
@@ -461,6 +468,22 @@ def _setup_already_bought(prior_buys: list[PriorBuy], fingerprint: str, dip_orig
     """Return True when this replay already bought the same zone + dip-origin setup."""
     for prior in prior_buys:
         if prior.zone_fingerprint == fingerprint and prior.dip_origin_open_time == int(dip_origin_open_time):
+            return True
+    return False
+
+
+def _recent_zone_buy(
+    prior_buys: list[PriorBuy],
+    fingerprint: str,
+    trigger_open_time: int,
+    cooldown_ms: int,
+) -> bool:
+    """Return True when this replay already bought the same zone inside the cooldown window."""
+    window_start = int(trigger_open_time) - int(cooldown_ms)
+    for prior in prior_buys:
+        if prior.zone_fingerprint != fingerprint:
+            continue
+        if window_start < prior.trigger_open_time < int(trigger_open_time):
             return True
     return False
 

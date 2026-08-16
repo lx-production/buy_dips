@@ -17,7 +17,7 @@ from .binance_hourly import fetch_closed_hourly_candles
 from .constants import DETECTOR_VERSION, HOURLY_TIMEFRAME, ZONE_TIMEFRAME
 from .signal import evaluate_support_close_v1
 from .state_store import get_zone_rebuild_watermark, zone_rebuild_watermark_key
-from .store import has_setup_buy, insert_decision
+from .store import has_recent_zone_buy, has_setup_buy, insert_decision
 from .zone_refresh import ZoneRefreshResult, refresh_zones
 
 
@@ -115,6 +115,12 @@ def run_trade_once(
             zone_set_as_of=refresh.zone_set_as_of,
             setup_already_bought=lambda fingerprint, dip_origin: has_setup_buy(
                 conn, fingerprint, dip_origin, int(trigger["open_time"])
+            ),
+            recent_zone_buy=lambda fingerprint: has_recent_zone_buy(
+                conn,
+                fingerprint,
+                int(trigger["open_time"]),
+                cooldown_hours=config.strategy.cooldown_hours,
             ),
             zones_rebuilt=refresh.rebuilt,
             mode=mode,

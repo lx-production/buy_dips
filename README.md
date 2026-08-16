@@ -103,7 +103,7 @@ Backtest also needs enough older **4h** history in SQLite for detector warm-up b
 
 ## Offline Backtest
 
-Replay `support_close_v1` on stored closed 1h candles. The engine is the same as observe; already-bought setups use an in-memory prior-BUY list for that run only (never reads/writes `decisions`, `zones`, `zone_sets`, or `bot_state`).
+Replay `support_close_v1` on stored closed 1h candles. The engine is the same as observe; already-bought setups and the per-zone 24h cooldown use an in-memory prior-BUY list for that run only (never reads/writes `decisions`, `zones`, `zone_sets`, or `bot_state`).
 
 - `--start` is inclusive, `--end` is exclusive. Both must be ISO-8601 with timezone on any UTC hour boundary; 4h alignment is not required.
 - `--end` defaults to after the latest closed 1h candle.
@@ -220,7 +220,7 @@ Shared setup gates:
 - The trigger 1h candle is **red**: `close < open`.
 - In the prior **`dip_lookback_hours`** (default 48; floored by the selected zone’s `zone_source_time`), there is a nearest earlier closed 1h candle whose `close` is **strictly above** the internal-range midpoint (midpoint between the selected zone high and the next higher zone low).
 - The nearest earlier closed 1h candle whose `close` is strictly outside the selected zone must have closed **above** `zone.high` (approach from above). A last-outside close below `zone.low` is `ZONE_APPROACHED_FROM_BELOW`.
-- Each dip setup (`selected_zone_fingerprint` + `dip_origin_open_time`) may `BUY` only once. The same zone can be bought again only after a later close above the internal-range midpoint creates a new dip origin. A deeper zone may still `BUY` (different fingerprint). Elapsing `cooldown_hours` does not reset a setup.
+- Each dip setup (`selected_zone_fingerprint` + `dip_origin_open_time`) may `BUY` only once. After `cooldown_hours` (default 24), the same zone can be bought again only when a later close above the internal-range midpoint creates a new dip origin. Inside that window a new dip origin does **not** unlock the same zone (`RECENT_BUY_IN_24H`). A deeper zone may still `BUY` (different fingerprint).
 
 Reason codes:
 
@@ -231,6 +231,7 @@ Reason codes:
 - `NO_LOWER_ZONE`
 - `BELOW_ZONE_OUT_OF_BAND`
 - `ZONE_APPROACHED_FROM_BELOW`
+- `RECENT_BUY_IN_24H`
 - `SETUP_ALREADY_BOUGHT`
 - `BUY_GATES_PASSED` → `BUY`
 
@@ -247,6 +248,7 @@ High level:
 - Support evidence includes swing lows, reclaimed resistance, wick-floor retests, derived 1D body-support overlays, and **persistent wick floors**.
 - A closed 4H local swing low whose wick hangs at least `2%` of the wick price below the body pins `low = wick`, `high = wick + 500` (`origin=persistent_wick_floor`, one touch). Band height stays `$500`; the `2%` filter is independent so ordinary `$500` wicks are not pinned. Rebuilds re-emit that frozen band from the original source candle so a later deeper low cannot merge or daily-overlay it away.
 - After that overlay, zones closer than a `$650` gap or a `$1000` midpoint are collapsed to one ladder step. Persistent floors outrank swing/daily bands; overlapping or nearby persistent floors keep the oldest.
+- When adjacent persistent floors remain more than `$4000` apart by midpoint, the detector restores the best confirmed reclaimed-high cluster between them as one staircase zone. This recovery also applies above current price because the support ladder is historical structure, not just levels below the latest candle.
 - Other candidates group into fixed-width (~$500) bands; those swing zones need at least `min_touches` touches.
 - Detector returns `support` / `resistance` / `active` / `all`; `resistance` and `active` stay empty. Hourly trading uses the full `support` list (including zones currently above price) so below-zone entries still work.
 

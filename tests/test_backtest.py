@@ -426,6 +426,84 @@ def test_same_setup_blocks_second_buy_other_zone_allowed(tmp_path: Path) -> None
     assert [buy["trigger_open_time"] for buy in second.buys] == buy_times
 
 
+def test_new_dip_origin_within_24h_blocks_same_zone_other_zone_allowed(tmp_path: Path) -> None:
+    # A bounce above the midpoint inside 24h must not unlock the same zone; a deeper zone still BUY.
+    db_path = tmp_path / "bot.sqlite"
+    start = 60 * FOUR
+    lookback = start - 48 * HOUR
+    rows = _hourly_rows(lookback, 48 + 30, base_close=106.0)
+    rows[48]["close"] = 92.0
+    rows[48]["open"] = 93.0
+    rows[48]["high"] = 93.0
+    rows[48]["low"] = 91.0
+    rows[47]["close"] = 106.0
+    # New dip origin one hour later, then a second inside-zone red candle.
+    rows[49]["close"] = 106.0
+    rows[50]["close"] = 91.0
+    rows[50]["open"] = 92.0
+    rows[50]["high"] = 92.0
+    rows[50]["low"] = 90.5
+    rows[52]["close"] = 82.0
+    rows[52]["open"] = 83.0
+    rows[52]["high"] = 83.0
+    rows[52]["low"] = 81.0
+    rows[51]["close"] = 106.0
+
+    init_db(db_path)
+    upsert_candles(db_path, rows, "binance", "BTCUSDT", "1h")
+    upsert_candles(db_path, _four_hour_rows(20, end_before=lookback), "binance", "BTCUSDT", "4h")
+    config = AppConfig(database_path=str(db_path), zones=ZoneConfig(external_swing_order=2))
+
+    result = run_backtest(
+        config,
+        db_path,
+        start_ms=start,
+        end_ms=start + 8 * HOUR,
+        detector=_fake_detector,
+    )
+
+    buy_times = [buy["trigger_open_time"] for buy in result.buys]
+    assert start in buy_times
+    assert start + 2 * HOUR not in buy_times  # new origin, but still inside 24h
+    assert start + 4 * HOUR in buy_times  # deeper zone still allowed
+
+
+def test_new_dip_origin_after_24h_allows_same_zone(tmp_path: Path) -> None:
+    # Once 24h has elapsed, a later close above the midpoint is a new setup and may BUY.
+    db_path = tmp_path / "bot.sqlite"
+    start = 60 * FOUR
+    lookback = start - 48 * HOUR
+    rows = _hourly_rows(lookback, 48 + 30, base_close=106.0)
+    rows[48]["close"] = 92.0
+    rows[48]["open"] = 93.0
+    rows[48]["high"] = 93.0
+    rows[48]["low"] = 91.0
+    rows[47]["close"] = 106.0
+    rows[49]["close"] = 106.0
+    later = 48 + 24
+    rows[later]["close"] = 91.0
+    rows[later]["open"] = 92.0
+    rows[later]["high"] = 92.0
+    rows[later]["low"] = 90.5
+
+    init_db(db_path)
+    upsert_candles(db_path, rows, "binance", "BTCUSDT", "1h")
+    upsert_candles(db_path, _four_hour_rows(20, end_before=lookback), "binance", "BTCUSDT", "4h")
+    config = AppConfig(database_path=str(db_path), zones=ZoneConfig(external_swing_order=2))
+
+    result = run_backtest(
+        config,
+        db_path,
+        start_ms=start,
+        end_ms=start + 25 * HOUR,
+        detector=_fake_detector,
+    )
+
+    buy_times = [buy["trigger_open_time"] for buy in result.buys]
+    assert start in buy_times
+    assert start + 24 * HOUR in buy_times
+
+
 def test_backtest_does_not_mutate_live_tables(tmp_path: Path) -> None:
     db_path = tmp_path / "bot.sqlite"
     start = 70 * FOUR

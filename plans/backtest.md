@@ -30,7 +30,7 @@
   - Khởi tạo zone snapshot tại cây trigger đầu tiên, sau đó rebuild trong memory đúng lúc một 4h mới hoàn tất.
   - Helper thuần dùng chung với live zone refresh: `build_fingerprinted_support_zones`.
   - Gọi `evaluate_support_close_v1(..., mode="backtest")`; mode này có trong pure engine nhưng không thêm vào schema `decisions`.
-  - Setup đã BUY là danh sách in-memory theo `fingerprint + dip_origin_open_time`, bắt đầu rỗng tại `start`; không persist kết quả. Zone chỉ reset khi có dip origin mới (close trên `internal_range_midpoint`).
+  - Setup đã BUY là danh sách in-memory theo `fingerprint + dip_origin_open_time` (và `trigger_open_time` cho cooldown 24h), bắt đầu rỗng tại `start`; không persist kết quả. Trong 24h cùng zone bị chặn dù có dip origin mới. Sau 24h zone chỉ reset khi có dip origin mới (close trên `internal_range_midpoint`).
   - Trả về `BacktestResult` gồm nến trong khoảng hiển thị, danh sách BUY, zone snapshot/segment và thống kê `evaluated_candles`, `zone_snapshot_count`, `zone_cache_hit_count`, `zone_rebuild_count`, `buy_count`.
 
 - CLI / CSV / visual server: như mô tả ở README.
@@ -46,7 +46,7 @@
 ## Kiểm thử và tiêu chí chấp nhận
 
 - Covered by `tests/test_backtest.py` + full pytest green.
-- Synthetic replay: rebuild timing, warm-up/gap/alignment failures, cache cold/warm/extended range, config/candle invalidation, corrupt-cache repair, same-setup block / other-zone still allowed, live-table immutability, CSV header-only for zero BUY, API payload without HOLD, CLI parser for start/end/default end.
+- Synthetic replay: rebuild timing, warm-up/gap/alignment failures, cache cold/warm/extended range, config/candle invalidation, corrupt-cache repair, same-setup block / 24h same-zone block with new dip origin / other-zone still allowed / new origin after 24h allowed, live-table immutability, CSV header-only for zero BUY, API payload without HOLD, CLI parser for start/end/default end.
 
 ## Giả định đã khóa
 

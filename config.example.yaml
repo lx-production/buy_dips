@@ -42,6 +42,6 @@ strategy:
   version: support_close_v1
   config_version: "1"
   dip_lookback_hours: 48
-  cooldown_hours: 24 # kept for config compatibility; same-setup identity now blocks a rebuy until a new dip origin
+  cooldown_hours: 24 # per-zone no-buy window; after it elapses the same zone still needs a new dip origin
   below_zone_min_pct: 0.50 # below-zone BUY requires close in this fraction…100% of (next_lower.high → zone.low)
   inside_zone_max_pct: 1.00 # inside-zone BUY allows close from zone.low (0%) up to this fraction of (zone.low → zone.high)

@@ -24,6 +24,7 @@ from src.zones import (
     detect_support_resistance_zones_structure_v1,
 )
 from src.zones.build import _build_support_zones
+from src.zones.postprocess import _fill_persistent_wick_floor_gaps
 
 
 def test_empty_or_insufficient_data_returns_empty_zones() -> None:
@@ -406,6 +407,37 @@ def test_structure_v1_uses_internal_reclaimed_high_cluster_to_fill_large_gap() -
     stair_steps = [zone for zone in filled if zone["origin"] == "stair_step_flipped_resistance"]
     assert [(zone["low"], zone["high"], zone["touches"]) for zone in stair_steps] == [
         (49488.12, 49988.12, 4),
+    ]
+
+
+def test_persistent_floor_gap_recovers_reclaimed_high_zone_above_current_price() -> None:
+    lower = _support_zone(low=68620.82, high=69120.82, source_closes=[68620.82], score=2.0)
+    lower["origin"] = "persistent_wick_floor"
+    lower["price_state"] = "resistance"
+    upper = _support_zone(low=72945.50, high=73445.50, source_closes=[72945.50], score=2.0)
+    upper["origin"] = "persistent_wick_floor"
+    upper["price_state"] = "resistance"
+    pivots = [
+        _high_pivot(index=1, wick_price=70700.00, body_price=70641.82),
+        _high_pivot(index=2, wick_price=70800.00, body_price=70731.45),
+        _high_pivot(index=3, wick_price=70950.00, body_price=70854.66),
+    ]
+
+    filled = _fill_persistent_wick_floor_gaps(
+        zones=[lower, upper],
+        raw_external_pivots=pivots,
+        closes=pd.Series([63000.0, 63000.0, 63000.0, 63000.0, 80000.0]).to_numpy(dtype=float),
+        break_atr_mult=0.0,
+        zone_width=500.0,
+        min_touches=2,
+        current_price=63093.99,
+        buffer_pct=0.0015,
+    )
+
+    assert [(zone["low"], zone["high"], zone["origin"], zone["touches"]) for zone in filled] == [
+        (68620.82, 69120.82, "persistent_wick_floor", 1),
+        (70354.66, 70854.66, "stair_step_flipped_resistance", 3),
+        (72945.50, 73445.50, "persistent_wick_floor", 1),
     ]
 
 

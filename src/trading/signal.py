@@ -28,6 +28,8 @@ REASON_CODES = frozenset(
 
 # fingerprint + dip_origin_open_time → True when that exact dip setup already has a BUY.
 SetupBuyLookup = Callable[[str, int], bool]
+# fingerprint → True when the same zone already has a BUY inside the cooldown window.
+RecentZoneBuyLookup = Callable[[str], bool]
 
 
 class DecisionInputError(ValueError):
@@ -41,6 +43,7 @@ def evaluate_support_close_v1(
     *,
     zone_set_as_of: int,
     setup_already_bought: SetupBuyLookup | None = None,
+    recent_zone_buy: RecentZoneBuyLookup | None = None,
     zones_rebuilt: bool = False,
     mode: str = "observe",
     strategy_version: str = STRATEGY_VERSION,
@@ -53,8 +56,9 @@ def evaluate_support_close_v1(
 
     The first gate requires a red trigger candle (`close < open`) so a green
     reclaim into a higher zone cannot BUY. Later gates then select the nearest
-    support, require an approach from above the band, and allow each dip setup
-    to BUY only once until a new dip origin forms.
+    support, require an approach from above the band, block a same-zone rebuy
+    inside the cooldown window, and allow each dip setup to BUY only once until
+    a new dip origin forms after that window.
     """
     # backtest is allowed in the pure engine only; decisions.mode schema stays observe/dry_run/live.
     if mode not in {"observe", "dry_run", "live", "backtest"}:
@@ -108,6 +112,7 @@ def evaluate_support_close_v1(
             "higher_zone": False,
             "dip_origin": False,
             "approach_from_above": False,
+            "no_recent_buy_in_24h": False,
             "setup_available": False,
         },
         "zones_rebuilt": bool(zones_rebuilt),
@@ -203,6 +208,12 @@ def evaluate_support_close_v1(
         return _finish(payload, HOLD, "ZONE_APPROACHED_FROM_BELOW")
     payload["gate_results"]["approach_from_above"] = True
 
+    # Same-zone cooldown is checked before setup identity so a new dip origin
+    # inside 24h still HOLD. After the window, SETUP_ALREADY_BOUGHT still requires
+    # a later close above the internal-range midpoint.
+    recent_buy = bool(recent_zone_buy(fingerprint)) if recent_zone_buy else False
+    payload["recent_buy_in_24h"] = recent_buy
+    payload["gate_results"]["no_recent_buy_in_24h"] = not recent_buy
     already_bought = (
         bool(setup_already_bought(fingerprint, int(dip_origin["open_time"])))
         if setup_already_bought
@@ -210,6 +221,8 @@ def evaluate_support_close_v1(
     )
     payload["setup_already_bought"] = already_bought
     payload["gate_results"]["setup_available"] = not already_bought
+    if recent_buy:
+        return _finish(payload, HOLD, "RECENT_BUY_IN_24H")
     if already_bought:
         return _finish(payload, HOLD, "SETUP_ALREADY_BOUGHT")
     return _finish(payload, BUY, "BUY_GATES_PASSED")

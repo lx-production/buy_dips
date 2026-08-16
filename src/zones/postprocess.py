@@ -6,14 +6,7 @@ import numpy as np
 
 from .candidates import _first_reclaim_index, _high_is_confirmed_reclaimed
 from .state import _classify_price_state
-from .types import (
-    STRUCTURE_ADJACENT_ZONE_MIN_GAP,
-    STRUCTURE_IMPORTANT_ZONE_SPACING,
-    STRUCTURE_STAIR_STEP_MAX_INSERTIONS,
-    STRUCTURE_STAIR_STEP_MAX_SUPPORT_GAP,
-    StructurePivot,
-    SupportCandidate,
-)
+from .types import STRUCTURE_ADJACENT_ZONE_MIN_GAP, STRUCTURE_IMPORTANT_ZONE_SPACING, STRUCTURE_STAIR_STEP_MAX_INSERTIONS, STRUCTURE_STAIR_STEP_MAX_SUPPORT_GAP, StructurePivot, SupportCandidate
 
 
 def _fill_support_staircase_gaps(
@@ -53,6 +46,74 @@ def _fill_support_staircase_gaps(
     return filled_zones
 
 
+# Fill wide gaps left between adjacent persistent floors after their final spacing pass.
+def _fill_persistent_wick_floor_gaps(
+    zones: list[dict[str, Any]],
+    raw_external_pivots: list[StructurePivot],
+    closes: np.ndarray,
+    break_atr_mult: float,
+    zone_width: float,
+    min_touches: int,
+    current_price: float,
+    buffer_pct: float,
+    internal_pivots: list[StructurePivot] | None = None,
+) -> list[dict[str, Any]]:
+    """Recover one evidence-backed stair step inside each wide persistent gap.
+
+    Persistent floors are overlaid after the normal staircase pass and can
+    displace a nearby swing band. This pass runs on the resulting ladder and
+    uses midpoint spacing so two fixed-width floors more than the configured
+    maximum apart receive a reclaimed-high zone between them. These historical
+    shelves remain useful when they are above the current price, so candidates
+    are not limited by current price here.
+    """
+    boundary_zones = sorted((dict(zone) for zone in zones), key=lambda zone: float(zone["low"]))
+    pivot_sets = [raw_external_pivots]
+    if internal_pivots is not None:
+        pivot_sets.append(internal_pivots)
+
+    gap_fills: list[dict[str, Any]] = []
+    for lower_zone, upper_zone in zip(boundary_zones, boundary_zones[1:]):
+        if not _is_persistent_wick_floor(lower_zone) or not _is_persistent_wick_floor(upper_zone):
+            continue
+        midpoint_gap = float(upper_zone["mid"]) - float(lower_zone["mid"])
+        if midpoint_gap <= STRUCTURE_STAIR_STEP_MAX_SUPPORT_GAP:
+            continue
+
+        candidate_zones: list[dict[str, Any]] = []
+        for staircase_pivots in pivot_sets:
+            candidate_zones.extend(
+                _stair_step_candidate_zones(
+                    staircase_pivots=staircase_pivots,
+                    closes=closes,
+                    break_atr_mult=break_atr_mult,
+                    zone_width=zone_width,
+                    min_touches=min_touches,
+                    lower_zone=lower_zone,
+                    upper_zone=upper_zone,
+                    current_price=current_price,
+                    buffer_pct=buffer_pct,
+                    include_above_price=True,
+                )
+            )
+        candidate_zones = [
+            zone
+            for zone in candidate_zones
+            if not _support_zones_share_ladder_slot(zone, lower_zone)
+            and not _support_zones_share_ladder_slot(zone, upper_zone)
+        ]
+        if candidate_zones:
+            selected = min(candidate_zones, key=lambda zone: _stair_step_gap_rank(zone, lower_zone, upper_zone))
+            gap_fills.append(selected)
+
+    return _make_support_zones_distinct(
+        boundary_zones + gap_fills,
+        current_price=current_price,
+        buffer_pct=buffer_pct,
+    )
+
+
+# Choose the best reclaimed-high zone across all regular support gaps.
 def _best_support_staircase_gap_fill(
     zones: list[dict[str, Any]],
     staircase_pivots: list[StructurePivot],
@@ -63,8 +124,6 @@ def _best_support_staircase_gap_fill(
     current_price: float,
     buffer_pct: float,
 ) -> dict[str, Any] | None:
-    from .build import _build_support_zones
-
     boundary_zones = sorted(zones, key=lambda zone: float(zone["low"]))
     best_zone: dict[str, Any] | None = None
     best_rank: tuple[float, float, int, float] | None = None
@@ -75,28 +134,17 @@ def _best_support_staircase_gap_fill(
         gap = float(upper_zone["low"]) - float(lower_zone["high"])
         if gap <= STRUCTURE_STAIR_STEP_MAX_SUPPORT_GAP:
             continue
-        candidates = _stair_step_support_candidates(
-            pivots=staircase_pivots,
+        candidate_zones = _stair_step_candidate_zones(
+            staircase_pivots=staircase_pivots,
             closes=closes,
             break_atr_mult=break_atr_mult,
             zone_width=zone_width,
+            min_touches=min_touches,
             lower_zone=lower_zone,
             upper_zone=upper_zone,
             current_price=current_price,
             buffer_pct=buffer_pct,
         )
-        candidate_zones = _build_support_zones(
-            candidates,
-            zone_width=zone_width,
-            min_touches=min_touches,
-            current_price=current_price,
-            buffer_pct=buffer_pct,
-        )
-        candidate_zones = [
-            zone
-            for zone in candidate_zones
-            if float(zone["low"]) > float(lower_zone["high"]) and float(zone["high"]) < float(upper_zone["low"])
-        ]
         if not candidate_zones:
             continue
         selected = min(candidate_zones, key=lambda zone: _stair_step_gap_rank(zone, lower_zone, upper_zone))
@@ -107,6 +155,47 @@ def _best_support_staircase_gap_fill(
     return best_zone
 
 
+# Build all confirmed reclaimed-high zones that fit strictly inside one gap.
+def _stair_step_candidate_zones(
+    staircase_pivots: list[StructurePivot],
+    closes: np.ndarray,
+    break_atr_mult: float,
+    zone_width: float,
+    min_touches: int,
+    lower_zone: dict[str, Any],
+    upper_zone: dict[str, Any],
+    current_price: float,
+    buffer_pct: float,
+    include_above_price: bool = False,
+) -> list[dict[str, Any]]:
+    from .build import _build_support_zones
+
+    candidates = _stair_step_support_candidates(
+        pivots=staircase_pivots,
+        closes=closes,
+        break_atr_mult=break_atr_mult,
+        zone_width=zone_width,
+        lower_zone=lower_zone,
+        upper_zone=upper_zone,
+        current_price=current_price,
+        buffer_pct=buffer_pct,
+        include_above_price=include_above_price,
+    )
+    candidate_zones = _build_support_zones(
+        candidates,
+        zone_width=zone_width,
+        min_touches=min_touches,
+        current_price=current_price,
+        buffer_pct=buffer_pct,
+    )
+    return [
+        zone
+        for zone in candidate_zones
+        if float(zone["low"]) > float(lower_zone["high"]) and float(zone["high"]) < float(upper_zone["low"])
+    ]
+
+
+# Collect confirmed reclaimed highs that can anchor a zone inside one gap.
 def _stair_step_support_candidates(
     pivots: list[StructurePivot],
     closes: np.ndarray,
@@ -116,16 +205,19 @@ def _stair_step_support_candidates(
     upper_zone: dict[str, Any],
     current_price: float,
     buffer_pct: float,
+    include_above_price: bool = False,
 ) -> list[SupportCandidate]:
     lower_high = float(lower_zone["high"])
     upper_low = float(upper_zone["low"])
-    support_ceiling = float(current_price) * (1.0 - float(buffer_pct))
+    support_ceiling = None if include_above_price else float(current_price) * (1.0 - float(buffer_pct))
     candidates: list[SupportCandidate] = []
     for pivot in pivots:
         if pivot.kind != "high":
             continue
         price = float(pivot.body_price)
-        if price - float(zone_width) <= lower_high or price >= upper_low or price >= support_ceiling:
+        if price - float(zone_width) <= lower_high or price >= upper_low:
+            continue
+        if support_ceiling is not None and price >= support_ceiling:
             continue
         if not _high_is_confirmed_reclaimed(pivot, closes, break_atr_mult):
             continue
@@ -139,6 +231,11 @@ def _stair_step_support_candidates(
             )
         )
     return candidates
+
+
+# True when a zone is a pinned long-wick support floor.
+def _is_persistent_wick_floor(zone: dict[str, Any]) -> bool:
+    return str(zone.get("origin")) == "persistent_wick_floor"
 
 
 def _make_support_zones_distinct(
