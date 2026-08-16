@@ -13,7 +13,7 @@
 - Replay: [src/trading/backtest.py](../../src/trading/backtest.py)
 - Shared zone build: `build_fingerprinted_support_zones` trong [src/trading/zone_refresh.py](../../src/trading/zone_refresh.py)
 - CLI: `python3 -m src.cli backtest --start <ISO> [--end <ISO>] --csv <path>`
-- Chart: [scripts/serve_backtest_chart.py](../../scripts/serve_backtest_chart.py) → [src/backtest_chart_server.py](../../src/backtest_chart_server.py)
+- Chart: [scripts/serve_backtest_chart.py](../../scripts/serve_backtest_chart.py) → [src/backtest_chart_server.py](../../src/backtest_chart_server.py) (page: [src/backtest_chart.html](../../src/backtest_chart.html))
 - Tests: [tests/test_backtest.py](../../tests/test_backtest.py)
 - Docs: README offline backtest + chart sections; live plan backtest todo marked completed
 
@@ -39,7 +39,7 @@
 
 - Backtest chart dùng TradingView Lightweight Charts (CDN). `serve_chart.py` vẫn là canvas homemade.
 - Ban đầu fit toàn bộ khoảng backtest; zoom/pan thời gian và giá do thư viện; nút reset viewport gọi `fitContent`.
-- Vẽ support zone bằng một series primitive (hình chữ nhật `valid_from` → `valid_to`, `low` → `high`); chỉ các band có `low > 56000` và `high < 70000` (lọc hiển thị; API vẫn trả đủ segment).
+- Vẽ support zone bằng một series primitive (hình chữ nhật `valid_from` → `valid_to`, `low` → `high`); chỉ các band có `low > 57000` và `high < 75000` (lọc hiển thị; API vẫn trả đủ segment).
 - Vẽ BUY bằng marker xanh tại `trigger_close`; selected zone tại BUY được nhấn mạnh.
 - Hover nến hiện OHLC; hover BUY / zone vẫn append chi tiết như đã khóa. Không có marker/bảng/tooltip dành cho no-BUY.
 
