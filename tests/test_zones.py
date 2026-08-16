@@ -443,6 +443,91 @@ def test_persistent_floor_gap_recovers_reclaimed_high_zone_above_current_price()
     ]
 
 
+def test_final_ladder_gap_fill_recovers_zone_between_local_flip_and_persistent_floor() -> None:
+    # Jul-style pair: local 63650-63917.88 then persistent 66082.66-66582.66.
+    # Edge gap is ~$2165, so the old $4000 rule skipped it, and the mixed origins
+    # also failed the persistent-only gate. A dense cluster near A would be
+    # collapsed onto by _build_support_zones; cluster-only keeps the middle shelf.
+    lower, upper = _mixed_origin_64k_ladder_pair()
+    pivots = [
+        _high_pivot(index=1, wick_price=64500.0, body_price=64420.0),
+        _high_pivot(index=2, wick_price=64510.0, body_price=64430.0),
+        _high_pivot(index=3, wick_price=64520.0, body_price=64440.0),
+        _high_pivot(index=4, wick_price=64530.0, body_price=64445.0),
+        _high_pivot(index=5, wick_price=64540.0, body_price=64450.0),
+        _high_pivot(index=6, wick_price=65400.0, body_price=65300.0),
+        _high_pivot(index=7, wick_price=65450.0, body_price=65350.0),
+    ]
+
+    filled = _fill_persistent_wick_floor_gaps(
+        zones=[lower, upper],
+        raw_external_pivots=pivots,
+        closes=pd.Series([62000.0] * 8 + [80000.0]).to_numpy(dtype=float),
+        break_atr_mult=0.0,
+        zone_width=500.0,
+        min_touches=2,
+        current_price=62000.0,
+        buffer_pct=0.0015,
+    )
+
+    assert [(zone["low"], zone["high"], zone["origin"], zone["touches"]) for zone in filled] == [
+        (63650.0, 63917.88, "local_retested_flip_support", 2),
+        (64850.0, 65350.0, "stair_step_flipped_resistance", 2),
+        (66082.66, 66582.66, "persistent_wick_floor", 1),
+    ]
+
+
+def test_final_ladder_gap_fill_skips_when_reclaimed_highs_are_not_confirmed() -> None:
+    lower, upper = _mixed_origin_64k_ladder_pair()
+    pivots = [
+        _high_pivot(index=1, wick_price=65400.0, body_price=65300.0),
+        _high_pivot(index=2, wick_price=65450.0, body_price=65350.0),
+    ]
+
+    filled = _fill_persistent_wick_floor_gaps(
+        zones=[lower, upper],
+        raw_external_pivots=pivots,
+        closes=pd.Series([62000.0] * 10).to_numpy(dtype=float),
+        break_atr_mult=0.0,
+        zone_width=500.0,
+        min_touches=2,
+        current_price=62000.0,
+        buffer_pct=0.0015,
+    )
+
+    assert [(zone["low"], zone["high"], zone["origin"]) for zone in filled] == [
+        (63650.0, 63917.88, "local_retested_flip_support"),
+        (66082.66, 66582.66, "persistent_wick_floor"),
+    ]
+
+
+def test_structural_factory_collapses_middle_gap_cluster_into_lower_neighbor() -> None:
+    # Same decoy + middle prices as the mixed-origin fill test. Macro-merge and
+    # adjacent collapse inside _build_support_zones keep only the denser 64.45k
+    # cluster, which then shares a ladder slot with zone A.
+    candidates = [
+        SupportCandidate(price=64420.0, index=1, origin="stair_step_flipped_resistance", structure_role="H"),
+        SupportCandidate(price=64430.0, index=2, origin="stair_step_flipped_resistance", structure_role="H"),
+        SupportCandidate(price=64440.0, index=3, origin="stair_step_flipped_resistance", structure_role="H"),
+        SupportCandidate(price=64445.0, index=4, origin="stair_step_flipped_resistance", structure_role="H"),
+        SupportCandidate(price=64450.0, index=5, origin="stair_step_flipped_resistance", structure_role="H"),
+        SupportCandidate(price=65300.0, index=6, origin="stair_step_flipped_resistance", structure_role="H"),
+        SupportCandidate(price=65350.0, index=7, origin="stair_step_flipped_resistance", structure_role="H"),
+    ]
+
+    zones = _build_support_zones(
+        candidates,
+        zone_width=500.0,
+        min_touches=2,
+        current_price=62000.0,
+        buffer_pct=0.0015,
+    )
+
+    assert [(zone["low"], zone["high"], zone["touches"]) for zone in zones] == [
+        (63950.0, 64450.0, 5),
+    ]
+
+
 def test_nearby_reclaimed_high_zone_survives_next_major_level() -> None:
     candidates = [
         SupportCandidate(price=73611.10, index=1, origin="flipped_resistance", structure_role="H"),
@@ -1239,6 +1324,19 @@ def _four_hour_day(
             }
         )
     return candles
+
+
+# Local flip 63.6k and persistent 66.0k from the mixed-origin gap-fill case.
+def _mixed_origin_64k_ladder_pair() -> tuple[dict, dict]:
+    lower = _support_zone(low=63650.0, high=63917.88, source_closes=[63650.0, 63917.88], score=8.0)
+    lower["origin"] = "local_retested_flip_support"
+    lower["bounds_style"] = "local_reaction"
+    lower["price_state"] = "resistance"
+    upper = _support_zone(low=66082.66, high=66582.66, source_closes=[66082.66], score=2.0)
+    upper["origin"] = "persistent_wick_floor"
+    upper["bounds_style"] = "support_floor"
+    upper["price_state"] = "resistance"
+    return lower, upper
 
 
 # Persistent 62.5k, local 63.3k, and structural 64k from the Jul 9 snapshot.

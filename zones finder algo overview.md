@@ -62,7 +62,8 @@ Public entry: `detect_support_resistance_zones()` is a thin alias for `detect_su
 - Macro-merge gap `$300`, source-price span `$2000`
 - Persistent wick must hang `2%` of the wick price below the body
 - Local lookback `150` 4H bars
-- Stair-step gap `$4000`, max `6` insertions
+- Early stair-step gap `$4000`, max `6` insertions
+- Final ladder gap-fill: `$500 + 2 × $650 = $1800` edge gap
 - Split-rejection: wick at least `2 × $500`, retest within `4` bars
 
 **Output:** each zone is a dict. The fields the rest of the bot cares about:
@@ -106,7 +107,7 @@ flowchart TD
     reject --> daily[Daily body overlay]
     daily --> persist[Pin persistent wick floors]
     persist --> space1[Enforce 650 / 1000 spacing]
-    space1 --> persistGaps[Fill wide persistent gaps]
+    space1 --> persistGaps[Fill wide final-ladder gaps]
     persistGaps --> space2[Enforce spacing again]
     space2 --> support[support list sorted low to high]
 ```
@@ -241,7 +242,7 @@ This pass only removes **overlaps**, not “nearby but not overlapping” neighb
 
 If a lower zone is currently classified `price_state = "support"` (below price) and the next zone’s low is more than `$4000` above that zone’s high, the ladder is missing a step.
 
-The filler looks for confirmed reclaimed highs whose `$500` body band would sit **strictly inside** that gap, rebuilds them through the same structural factory (`origin = stair_step_flipped_resistance`), and inserts the best one. “Best” means: smallest max-gap to either neighbor, then higher score/touches, then closer to the gap midpoint.
+The filler looks for confirmed reclaimed highs whose `$500` body band would sit **strictly inside** that gap, rebuilds them through the same structural factory (`origin = stair_step_flipped_resistance`), and inserts the best one. “Best” means: most even distance to both neighbors, then higher score/touches, then closer to the gap midpoint.
 
 It tries raw external pivots first, then internal pivots, and will insert at most `6` stairs total. After each insert it re-runs distinct(). Regular stairs are **not** placed above current price (`include_above_price=False`).
 
@@ -321,11 +322,20 @@ Rank (higher wins):
 
 Losers in a slot are dropped. Survivors are sorted low → high.
 
-### 13. Fill gaps between persistent floors
+### 13. Fill gaps on the final spaced ladder
 
-Pinning floors can delete a swing band that used to sit between two dumps. If two **adjacent persistents** have midpoint distance `> $4000`, recover the best confirmed reclaimed-high stair that fits strictly between them and does not share a ladder slot with either floor.
+Overlays and the first spacing pass can leave a hole between **any** two adjacent survivors, not only two persistent floors. Walk every neighboring pair. The edge gap is fillable when it can hold one `$500` band plus `$650` clearance on both sides:
 
-This recovery **does** allow zones above current price. A historical shelf above spot is still part of the ladder.
+```text
+min_fillable_gap = zone_width + 2 * STRUCTURE_ADJACENT_ZONE_MIN_GAP
+# 500 + 2 * 650 = 1,800
+```
+
+Build candidates **inside that gap only** from confirmed reclaimed highs: cluster by `$500`, keep clusters with `min_touches`, turn each cluster into a body zone (`origin = stair_step_flipped_resistance`). Do **not** run `_build_support_zones` here. That factory macro-merges clusters whose source prices span ≤ `$2000` and then collapses nearby bands, so a middle cluster can be absorbed into a denser cluster that sits on the lower neighbor and then fails the slot check.
+
+Keep a candidate only when it does not share a ladder slot with either boundary (`$650` edge or `$1000` midpoint). Among survivors, pick the most even split of the two side gaps, then higher score/touches.
+
+This pass allows zones above current price. The support list is a historical ladder; overhead shelves stay in it.
 
 Then spacing runs **again**, so an inserted stair cannot sit on a neighbor.
 
@@ -409,7 +419,7 @@ If the finder returns no zones, the decision engine simply sees “close outside
 - It does not fetch prices. Callers hand it a closed 4H frame.
 - It does not persist anything. `zone_refresh` / backtest cache do that.
 - It does not score a BUY. No distance-to-zone heuristics live here anymore.
-- Most thresholds (`$500`, `$650`, `$1000`, `2%` wick, `$4000` stairs) are code constants, not YAML.
+- Most thresholds (`$500`, `$650`, `$1000`, `2%` wick, `$4000` early stairs, `$1800` final gap-fill) are code constants, not YAML.
 
 ## How to inspect it
 

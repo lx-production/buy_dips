@@ -4,8 +4,10 @@ from typing import Any
 
 import numpy as np
 
-from .candidates import _first_reclaim_index, _high_is_confirmed_reclaimed
 from .state import _classify_price_state
+from .factory import _zone_from_support_cluster
+from .candidates import _first_reclaim_index, _high_is_confirmed_reclaimed
+from .build import _cluster_support_candidates, _has_minimum_unique_touches
 from .types import STRUCTURE_ADJACENT_ZONE_MIN_GAP, STRUCTURE_IMPORTANT_ZONE_SPACING, STRUCTURE_STAIR_STEP_MAX_INSERTIONS, STRUCTURE_STAIR_STEP_MAX_SUPPORT_GAP, StructurePivot, SupportCandidate
 
 
@@ -46,7 +48,7 @@ def _fill_support_staircase_gaps(
     return filled_zones
 
 
-# Fill wide gaps left between adjacent persistent floors after their final spacing pass.
+# Fill wide gaps on the final spaced ladder using per-gap reclaimed-high clusters.
 def _fill_persistent_wick_floor_gaps(
     zones: list[dict[str, Any]],
     raw_external_pivots: list[StructurePivot],
@@ -58,32 +60,33 @@ def _fill_persistent_wick_floor_gaps(
     buffer_pct: float,
     internal_pivots: list[StructurePivot] | None = None,
 ) -> list[dict[str, Any]]:
-    """Recover one evidence-backed stair step inside each wide persistent gap.
+    """Recover one evidence-backed stair inside each wide adjacent gap.
 
-    Persistent floors are overlaid after the normal staircase pass and can
-    displace a nearby swing band. This pass runs on the resulting ladder and
-    uses midpoint spacing so two fixed-width floors more than the configured
-    maximum apart receive a reclaimed-high zone between them. These historical
-    shelves remain useful when they are above the current price, so candidates
-    are not limited by current price here.
+    This pass runs after persistent/daily overlays and the first spacing
+    resolver, so the boundaries can be any surviving origins — not only two
+    persistent floors. A gap is fillable when its edge distance can hold one
+    `zone_width` band plus `$650` clearance on both sides. Candidates are
+    clustered inside that gap only; the full structural factory is skipped
+    because its `$2000` macro-merge can swallow a middle cluster into a band
+    that then shares a slot with the lower neighbor. Historical shelves above
+    the current price stay eligible.
     """
     boundary_zones = sorted((dict(zone) for zone in zones), key=lambda zone: float(zone["low"]))
     pivot_sets = [raw_external_pivots]
     if internal_pivots is not None:
         pivot_sets.append(internal_pivots)
+    min_fillable_gap = _min_fillable_support_gap(zone_width)
 
     gap_fills: list[dict[str, Any]] = []
     for lower_zone, upper_zone in zip(boundary_zones, boundary_zones[1:]):
-        if not _is_persistent_wick_floor(lower_zone) or not _is_persistent_wick_floor(upper_zone):
-            continue
-        midpoint_gap = float(upper_zone["mid"]) - float(lower_zone["mid"])
-        if midpoint_gap <= STRUCTURE_STAIR_STEP_MAX_SUPPORT_GAP:
+        gap = float(upper_zone["low"]) - float(lower_zone["high"])
+        if gap < min_fillable_gap:
             continue
 
         candidate_zones: list[dict[str, Any]] = []
         for staircase_pivots in pivot_sets:
             candidate_zones.extend(
-                _stair_step_candidate_zones(
+                _cluster_reclaimed_high_gap_zones(
                     staircase_pivots=staircase_pivots,
                     closes=closes,
                     break_atr_mult=break_atr_mult,
@@ -93,7 +96,6 @@ def _fill_persistent_wick_floor_gaps(
                     upper_zone=upper_zone,
                     current_price=current_price,
                     buffer_pct=buffer_pct,
-                    include_above_price=True,
                 )
             )
         candidate_zones = [
@@ -111,6 +113,12 @@ def _fill_persistent_wick_floor_gaps(
         current_price=current_price,
         buffer_pct=buffer_pct,
     )
+
+
+# Smallest edge gap that can fit one zone_width band with $650 clear of both neighbors.
+# 500 + 2 * 650 = 1800, so the inserted stair cannot share a ladder slot with either side.
+def _min_fillable_support_gap(zone_width: float) -> float:
+    return float(zone_width) + 2.0 * STRUCTURE_ADJACENT_ZONE_MIN_GAP
 
 
 # Choose the best reclaimed-high zone across all regular support gaps.
@@ -153,6 +161,43 @@ def _best_support_staircase_gap_fill(
             best_zone = selected
             best_rank = rank
     return best_zone
+
+
+# Cluster reclaimed highs inside one gap without macro-merge or nearby collapse.
+def _cluster_reclaimed_high_gap_zones(
+    staircase_pivots: list[StructurePivot],
+    closes: np.ndarray,
+    break_atr_mult: float,
+    zone_width: float,
+    min_touches: int,
+    lower_zone: dict[str, Any],
+    upper_zone: dict[str, Any],
+    current_price: float,
+    buffer_pct: float,
+) -> list[dict[str, Any]]:
+    candidates = _stair_step_support_candidates(
+        pivots=staircase_pivots,
+        closes=closes,
+        break_atr_mult=break_atr_mult,
+        zone_width=zone_width,
+        lower_zone=lower_zone,
+        upper_zone=upper_zone,
+        current_price=current_price,
+        buffer_pct=buffer_pct,
+        include_above_price=True,
+    )
+    # Cluster by $500 only. Skip macro-merge / nearby collapse so a middle
+    # shelf cannot be absorbed into a denser cluster sitting on the lower zone.
+    candidate_zones = [
+        _zone_from_support_cluster(cluster, zone_width, current_price, buffer_pct)
+        for cluster in _cluster_support_candidates(candidates, zone_width)
+        if _has_minimum_unique_touches(cluster, min_touches)
+    ]
+    return [
+        zone
+        for zone in candidate_zones
+        if float(zone["low"]) > float(lower_zone["high"]) and float(zone["high"]) < float(upper_zone["low"])
+    ]
 
 
 # Build all confirmed reclaimed-high zones that fit strictly inside one gap.
@@ -231,11 +276,6 @@ def _stair_step_support_candidates(
             )
         )
     return candidates
-
-
-# True when a zone is a pinned long-wick support floor.
-def _is_persistent_wick_floor(zone: dict[str, Any]) -> bool:
-    return str(zone.get("origin")) == "persistent_wick_floor"
 
 
 def _make_support_zones_distinct(
@@ -321,6 +361,7 @@ def _zones_overlap(first: dict[str, Any], second: dict[str, Any]) -> bool:
     return max(float(first["low"]), float(second["low"])) <= min(float(first["high"]), float(second["high"]))
 
 
+# Prefer the zone that splits the gap most evenly, then higher score/touches.
 def _stair_step_gap_rank(
     zone: dict[str, Any],
     lower_zone: dict[str, Any],
@@ -330,7 +371,7 @@ def _stair_step_gap_rank(
     upper_gap = float(upper_zone["low"]) - float(zone["high"])
     midpoint = (float(lower_zone["high"]) + float(upper_zone["low"])) / 2.0
     return (
-        max(lower_gap, upper_gap),
+        abs(lower_gap - upper_gap),
         -float(zone.get("score", 0.0)),
         -int(zone["touches"]),
         abs(float(zone["mid"]) - midpoint),

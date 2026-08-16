@@ -155,7 +155,7 @@ def detect_support_resistance_zones_structure_v1(
     zones = _make_support_zones_distinct(zones, current_price=float(current_price), buffer_pct=buffer_pct)
     # Persistent first, then daily/structural/local by score, touches, width.
     zones = _enforce_support_zone_spacing(zones)
-    # Recover structural shelves inside wide gaps created by the pinned-floor overlay.
+    # Recover reclaimed-high stairs in wide gaps on the final spaced ladder.
     zones = _fill_persistent_wick_floor_gaps(
         zones=zones,
         raw_external_pivots=raw_external_pivots,
