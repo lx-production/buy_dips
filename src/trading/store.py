@@ -15,7 +15,7 @@ def has_setup_buy(
     dip_origin_open_time: int,
     trigger_open_time: int,
 ) -> bool:
-    """Return True when a prior BUY already used this zone fingerprint + dip origin.
+    """Return True when a prior BUY already used this zone lineage + dip origin.
 
     The current trigger candle is excluded so an idempotent rerun of the same
     hour can still persist BUY instead of flipping to SETUP_ALREADY_BOUGHT.
@@ -41,12 +41,12 @@ def has_recent_zone_buy(
     *,
     cooldown_hours: int = 24,
 ) -> bool:
-    """Return True when the same zone already has a BUY inside the cooldown window.
+    """Return True when the same zone lineage already has a BUY inside the cooldown window.
 
     The window is (`trigger - cooldown`, `trigger`): the original BUY at exactly
     `cooldown_hours` earlier does not block. The current trigger candle is
     excluded so an idempotent rerun of the same hour can still persist BUY.
-    A BUY at a different fingerprint does not count, so a deeper zone may still
+    A BUY at a different lineage does not count, so a deeper zone may still
     BUY within 24h of a shallower zone.
     """
     if isinstance(cooldown_hours, bool) or not isinstance(cooldown_hours, int) or cooldown_hours <= 0:

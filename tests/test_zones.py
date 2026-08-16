@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+import src.zones.detector as detector_module
+
 from src.zones import (
     StructurePivot,
     SupportCandidate,
@@ -23,8 +25,8 @@ from src.zones import (
     aggregate_ohlc_to_daily,
     detect_support_resistance_zones_structure_v1,
 )
-from src.zones.build import _build_support_zones
 from src.zones.postprocess import _fill_persistent_wick_floor_gaps
+from src.zones.build import _build_support_zones, _suppress_nearby_support_zones
 
 
 def test_empty_or_insufficient_data_returns_empty_zones() -> None:
@@ -998,6 +1000,62 @@ def test_enforce_support_zone_spacing_persistent_outranks_nearby_swing() -> None
     ]
 
 
+def test_early_cross_family_suppress_would_drop_structural_64k() -> None:
+    # Score-only midpoint suppress is why the detector must not mix families early:
+    # local 63.3k (score 15) sits $937 from structural 64k (score 13).
+    _persistent, local, structural = _jul9_conflict_zones()
+
+    kept = _suppress_nearby_support_zones([structural, local])
+
+    assert [(zone["low"], zone["high"], zone["origin"]) for zone in kept] == [
+        (63294.72, 63405.99, "local_reaction_support"),
+    ]
+
+
+def test_detector_keeps_structural_after_persistent_drops_nearby_local(monkeypatch) -> None:
+    # Jul 9 16:00 UTC chain: floor 62.5k outranks local 63.3k, structural 64k stays
+    # because it does not share a ladder slot with the floor.
+    persistent, local, structural = _jul9_conflict_zones()
+    df = _ohlc_from_closes(
+        [67000, 66500, 66000, 66800, 67500, 66900, 66400, 66380, 67000, 67600],
+        wick=25,
+    )
+    monkeypatch.setattr(detector_module, "_build_support_zones", lambda *_args, **_kwargs: [dict(structural)])
+    monkeypatch.setattr(detector_module, "_build_local_reaction_zones", lambda *_args, **_kwargs: [dict(local)])
+    monkeypatch.setattr(
+        detector_module,
+        "_build_persistent_wick_floor_zones",
+        lambda *_args, **_kwargs: [dict(persistent)],
+    )
+    monkeypatch.setattr(detector_module, "_build_split_rejection_zone_pairs", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(detector_module, "_build_daily_body_support_zones", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        detector_module,
+        "_fill_support_staircase_gaps",
+        lambda *_args, **kwargs: list(kwargs.get("zones") or _args[0]),
+    )
+    monkeypatch.setattr(
+        detector_module,
+        "_fill_persistent_wick_floor_gaps",
+        lambda *_args, **kwargs: list(kwargs.get("zones") or _args[0]),
+    )
+
+    result = detect_support_resistance_zones_structure_v1(
+        df,
+        external_swing_order=2,
+        atr_period=3,
+        external_min_swing_atr_mult=0.0,
+        external_min_swing_pct=0.0,
+        min_touches=2,
+        current_price=68000,
+    )
+
+    assert [(zone["low"], zone["high"], zone["origin"]) for zone in result["support"]] == [
+        (62260.0, 62760.0, "persistent_wick_floor"),
+        (64038.0, 64538.0, "flipped_resistance"),
+    ]
+
+
 def test_enforce_support_zone_spacing_keeps_far_apart_zones() -> None:
     # Gap $1495 and midpoint gap $1995 are outside both spacing windows, so both stay.
     older = _support_zone(low=59005.0, high=59505.0, source_closes=[59005.0], score=2.0)
@@ -1181,6 +1239,22 @@ def _four_hour_day(
             }
         )
     return candles
+
+
+# Persistent 62.5k, local 63.3k, and structural 64k from the Jul 9 snapshot.
+def _jul9_conflict_zones() -> tuple[dict, dict, dict]:
+    persistent = _support_zone(low=62260.0, high=62760.0, source_closes=[62260.0], score=2.0)
+    persistent["origin"] = "persistent_wick_floor"
+    persistent["bounds_style"] = "support_floor"
+    persistent["source_indexes"] = [1]
+    local = _support_zone(low=63294.72, high=63405.99, source_closes=[63294.72, 63405.99], score=15.0)
+    local["origin"] = "local_reaction_support"
+    local["bounds_style"] = "local_reaction"
+    structural = _support_zone(low=64038.0, high=64538.0, source_closes=[64038.0, 64538.0], score=13.0)
+    structural["origin"] = "flipped_resistance"
+    structural["bounds_style"] = "body"
+    structural["touches"] = 6
+    return persistent, local, structural
 
 
 def _support_zone(low: float, high: float, source_closes: list[float], score: float) -> dict:

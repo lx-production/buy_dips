@@ -139,29 +139,12 @@ curl -sS -X POST 'https://prana.triethocduongpho.net/api/swap/quote' \
 - `live` = same signal + risk + quote + sign/broadcast when all gates pass.
 
 ## Zone identity and fingerprint (`zf1`)
-- **Yes, fingerprints are persisted in SQLite.** A fingerprint is computed once for every zone immediately after zone finding/source-time resolution, before the zone set is persisted or used by `signal.py`. Loaded zone sets reuse the stored value; the hourly signal path must never silently recompute it.
-- `zone_identity.py` owns one canonical `zf1` algorithm. Build this canonical payload:
-
-```json
-{
-  "fingerprint_version": "zf1",
-  "exchange": "binance",
-  "symbol": "BTCUSDT",
-  "detector_version": "support_structure_v1",
-  "source_timeframe": "4h",
-  "low": "60000.00000000",
-  "high": "60100.00000000",
-  "source_open_times": [1728000000000, 1728057600000]
-}
-```
-
-  - Use the zone's actual `source_timeframe` (`"1d"` for daily overlay, otherwise `"4h"`).
-  - Resolve source indexes first; canonicalize `source_open_times` as sorted, unique integer Unix milliseconds.
-  - Canonicalize `low` / `high` with `Decimal(str(value)).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_EVEN)` and fixed eight-decimal string formatting. Do not hash binary-float representations.
-  - Serialize with `json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)`, hash UTF-8 bytes with SHA-256, and store `fingerprint = "zf1:" + hexdigest`.
-  - `zone_source_time = max(source_open_times)` is persisted next to the fingerprint but is not duplicated in the hash payload because it is derived from that list.
-  - Do **not** include `origin`, `bounds_style`, or `touches` in the hash payload. Those labels/counts can change across rebuilds even when the zone is still the same price band and source candles; keep them as persisted metadata only (for audit/debug), not identity.
-- Identity is **price band + source candle times** (plus exchange/symbol/detector/source_timeframe). Reordering identical source times or loading a longer candle dataframe leaves the fingerprint unchanged. Adding/removing a source touch, changing canonical low/high, source timeframe, or detector version creates a new fingerprint. Changing only `origin` / `bounds_style` / `touches` must **not** change the fingerprint. This avoids fuzzy/price-distance identity matching while keeping cooldown stable when detector metadata churns.
+- **Yes, fingerprints are persisted in SQLite.** Identities are computed once for every zone immediately after zone finding/source-time resolution, before the zone set is persisted or used by `signal.py`. Loaded zone sets reuse the stored values; the hourly signal path must never silently recompute them.
+- `zone_identity.py` owns two `zf1:` SHA-256 hashes from the same canonicalize/serialize path:
+  - `zone_lineage_id`: stable shelf identity from `low`, `high`, `source_timeframe`, and `bounds_style` (plus exchange/symbol/detector). Stored as `fingerprint` for cooldown, setup id, and chart segment merge.
+  - `revision_fingerprint`: same band plus canonical `source_open_times`, for audit/cache when evidence is added.
+  - `zone_source_time = max(source_open_times)` is persisted next to both hashes but is not duplicated in either payload.
+- Adding a later touch must **not** change `zone_lineage_id` / `fingerprint`. It must change `revision_fingerprint`. Changing canonical low/high, source timeframe, bounds style, or detector version creates a new lineage. Changing only `origin` / `touches` must not change lineage.
 - Fail closed: empty/unresolvable/out-of-range source indexes, missing source candles, unsupported source timeframe, or missing fingerprint input abort the zone refresh. Do not persist a partial zone set, advance the watermark, or evaluate a decision.
 - Setup lookup for live/`observe`/`dry_run` is an indexed query for a prior `BUY` with the exact `selected_zone_fingerprint` and `dip_origin_open_time`. The 24h same-zone cooldown is a separate indexed query on `selected_zone_fingerprint` + `candle_open_time` (no `dip_origin` join). Backtest stores `trigger_open_time` + fingerprint + dip origin in its isolated in-memory BUY list. No fallback to `low`/`high`, nearest-price matching, or raw `source_indexes`.
 
@@ -212,7 +195,7 @@ zone_rebuild_watermark:binance:BTCUSDT:4h:support_structure_v1
    - `source_indexes` are dataframe row positions created during zone finding (`pivots` / `factory`), not timestamps. They are only valid against the dataframe that produced them:
      - normal 4H zones → map against the closed 4H dataframe used for detection;
      - daily overlay zones (`source_timeframe="1d"`) → map against the derived daily dataframe aggregated from those same 4H candles (see [src/zones/daily.py](src/zones/daily.py)), never against the 4H frame;
-   - for each zone: `source_open_times = sorted(set(int(source_df.iloc[i]["open_time"]) for i in source_indexes))`; `zone_source_time = max(source_open_times)`; create the deterministic `zf1` fingerprint using the locked canonical algorithm above; persist `source_open_times`, `zone_source_time`, fingerprint/version, and `zone_set_as_of` with the zone set;
+   - for each zone: `source_open_times = sorted(set(int(source_df.iloc[i]["open_time"]) for i in source_indexes))`; `zone_source_time = max(source_open_times)`; create `zone_lineage_id` and `revision_fingerprint`; persist `source_open_times`, `zone_source_time`, lineage as `fingerprint`, and `zone_set_as_of` with the zone set;
    - `zone_set_as_of` is the newly completed 4H bucket `open_time` used for that detector rebuild/watermark. Every zone produced by one rebuild carries the same value;
    - persist the complete fingerprinted zone set and advance the watermark in one transaction only after every zone validates; if source-time resolution, fingerprint generation, or persistence fails for any zone, roll back and leave both the prior zone set and watermark unchanged;
    - do **not** re-resolve indexes later in `signal.py`: hourly cycles may load a previously persisted zone set whose indexes would be wrong against a longer/shorter candle frame;
@@ -264,7 +247,7 @@ zone_rebuild_watermark:binance:BTCUSDT:4h:support_structure_v1
   - `aggregate_4h.py`: derive closed Binance-aligned 4H bars from closed 1h candles; reject incomplete buckets. Distinguish “bucket still forming” (ok to keep prior zones) from “bucket overdue and incomplete” (runner must abort).
   - `state_store.py`: typed `bot_state` watermark key construction, strict read/validation, and connection-scoped upsert helpers; no internal commits.
   - `zone_refresh.py`: bootstrap when the scoped watermark is absent; compare derived/latest closed 4h `open_time` against a validated watermark; rebuild zones only when newer; immediately resolve `source_indexes` → `source_open_times` / `zone_source_time` (4H frame vs daily frame for `source_timeframe="1d"`); atomically persist the fingerprinted zone snapshot + watermark; expose `detector_result["support"]` (full support list, not `active` / not `price_state`-filtered) for the signal. Pure rebuild helper `build_fingerprinted_support_zones` is shared with offline backtest so detector/source-time/`zf1` logic is not duplicated.
-  - `zone_identity.py`: pure helpers to resolve source indexes against the correct dataframe, canonicalize source times/prices, compute `zone_source_time = max(source_open_times)`, build the locked `zf1:` SHA-256 fingerprint, and validate required inputs. Called from `zone_refresh` at rebuild time only—not from the detector and not from the hourly signal path.
+  - `zone_identity.py`: pure helpers to resolve source indexes against the correct dataframe, canonicalize source times/prices, compute `zone_source_time = max(source_open_times)`, build a stable `zone_lineage_id` (band + timeframe + bounds style) plus a source-aware `revision_fingerprint`, store the lineage as `fingerprint` for cooldown/setup/chart merge, and validate required inputs. Called from `zone_refresh` at rebuild time only—not from the detector and not from the hourly signal path.
   - `signal.py`: the sole unified dip-to-support decision engine (red trigger candle, then inside-zone 0–100% or below-zone 50–100% entry region). Reads already-persisted fingerprints / `zone_source_time`; keep nearest-support selection, the 48h backward scan for the nearest qualifying close, last-outside approach direction, midpoint calculation, below-zone pct helper, per-zone 24h cooldown lookup, and same-setup prior-BUY lookup (`fingerprint` + `dip_origin_open_time`) here as small pure helpers; replace [src/signals.py](src/signals.py) and do not leave a parallel scorer. Pure engine also accepts `mode="backtest"` (not a `decisions.mode` schema value).
   - `wallet.py`: encrypted-keystore creation/loading, password resolution (env → systemd credential file → optional prompt), address verification, permissions checks, and signing only after all other gates pass.
   - `prana_swap.py`: a thin HTTP adapter for `POST {quote_base_url}/api/swap/quote` plus strict response/transaction/`deadline` validation. Never send an `Origin` header. Do not add protocol-specific route selection; the configured quote host owns routing (prod local route server; dev public PRANA host).

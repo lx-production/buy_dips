@@ -48,7 +48,7 @@ def build_fingerprinted_support_zones(
     detector_version: str = DETECTOR_VERSION,
     detector: Detector = detect_support_resistance_zones,
 ) -> list[dict[str, Any]]:
-    """Run the detector and attach source times + zf1 fingerprints for one closed 4h snapshot.
+    """Run the detector and attach source times plus lineage/revision hashes.
 
     Shared by live `refresh_zones` persistence and the offline backtest in-memory rebuild so
     source-time resolution and fingerprinting stay one implementation.

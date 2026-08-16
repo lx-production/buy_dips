@@ -153,8 +153,8 @@ Backtest chart (1h candles, BUY markers, zones only while each snapshot was vali
 
 ```bash
 python3 scripts/serve_backtest_chart.py \
-  --start 2026-06-01T00:00:00+00:00 \
-  --end 2026-07-01T00:00:00+00:00
+  --start 2026-07-01T00:00:00+00:00 \
+  --end 2026-08-01T00:00:00+00:00
 ```
 
 Then open `http://127.0.0.1:8001`. The server prints the replay range, runs the offline replay once, and only then binds the port; bad/missing data prevents startup. The page uses TradingView Lightweight Charts: scroll to zoom time, drag the plot to pan, and use the price axis to scale price. Reset viewport fits the full window. Hover a candle for its UTC+7 time and OHLC; hover a BUY marker or a support band to append those details under the candle values. Axis labels, HUD, and hover times are shown in UTC+7; replay math and the API stay on UTC milliseconds. There is no HOLD marker or HOLD table. For readability the chart only draws support zones with `low > 57000` and `high < 75000`; the replay and API still include every zone. The chart script is loaded from a CDN, so the browser needs network the first time the page opens.
@@ -247,14 +247,14 @@ High level:
 - External swings are filtered into prominent pivots with ATR/percent thresholds.
 - Support evidence includes swing lows, reclaimed resistance, wick-floor retests, derived 1D body-support overlays, and **persistent wick floors**.
 - A closed 4H local swing low whose wick hangs at least `2%` of the wick price below the body pins `low = wick`, `high = wick + 500` (`origin=persistent_wick_floor`, one touch). Band height stays `$500`; the `2%` filter is independent so ordinary `$500` wicks are not pinned. Rebuilds re-emit that frozen band from the original source candle so a later deeper low cannot merge or daily-overlay it away.
-- After that overlay, zones closer than a `$650` gap or a `$1000` midpoint are collapsed to one ladder step. Persistent floors outrank swing/daily bands; overlapping or nearby persistent floors keep the oldest.
+- Structural and local families stay side by side until daily, rejection, and persistent overlays finish. A later `$650` gap / `$1000` midpoint pass then keeps one zone per ladder step: persistent floors win first (oldest floor wins among themselves); daily, structural, and local bands compete by score, then touches, then narrower width. Early cross-family suppress is skipped so a short-lived local band cannot erase a farther structural shelf that does not conflict with the floor.
 - When adjacent persistent floors remain more than `$4000` apart by midpoint, the detector restores the best confirmed reclaimed-high cluster between them as one staircase zone. This recovery also applies above current price because the support ladder is historical structure, not just levels below the latest candle.
 - Other candidates group into fixed-width (~$500) bands; those swing zones need at least `min_touches` touches.
 - Detector returns `support` / `resistance` / `active` / `all`; `resistance` and `active` stay empty. Hourly trading uses the full `support` list (including zones currently above price) so below-zone entries still work.
 
 Default prominent-pivot filter: reversal of at least `max(4.0 * ATR, 2.5% of price)`. Set `external_min_swing_atr_mult: 0.0` and `external_min_swing_pct: 0.0` to use raw local extrema. The chart does not overlay external pivots; optional internal debug markers stay hidden unless `show_internal_pivots: true`.
 
-After each rebuild, `zone_refresh` resolves `source_indexes` → `source_open_times` / `zone_source_time`, computes deterministic `zf1` fingerprints, and persists them with a `zone_sets` manifest. The hourly signal path never recomputes fingerprints from raw indexes.
+After each rebuild, `zone_refresh` resolves `source_indexes` → `source_open_times` / `zone_source_time` and attaches two identities: `zone_lineage_id` (stable band + `source_timeframe` + `bounds_style`) and `revision_fingerprint` (includes `source_open_times` for audit/cache). The persisted `fingerprint` used by cooldown, setup identity, and chart segment merge is the lineage, so adding a later touch does not reset the 24h window or split the chart band. The hourly signal path never recomputes these hashes from raw indexes.
 
 ## Safety
 

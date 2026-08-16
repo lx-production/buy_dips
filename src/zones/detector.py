@@ -4,7 +4,7 @@ from typing import Any
 
 import pandas as pd
 
-from .build import _build_support_zones, _suppress_nearby_support_zones
+from .build import _build_support_zones
 from .candidates import _support_candidates
 from .daily import _build_daily_body_support_zones, _overlay_daily_support_zones
 from .ohlc import _average_true_range, _coerce_ohlc
@@ -16,6 +16,7 @@ from .rejections import _build_split_rejection_zone_pairs, _overlay_split_reject
 from .types import STRUCTURE_ZONE_WIDTH
 
 
+# Public detector entry: run the current support_structure_v1 pipeline.
 def detect_support_resistance_zones(
     df: pd.DataFrame,
     min_touches: int = 2,
@@ -40,6 +41,7 @@ def detect_support_resistance_zones(
     )
 
 
+# Build the support ladder from closed OHLC, then resolve nearby conflicts last.
 def detect_support_resistance_zones_structure_v1(
     df: pd.DataFrame,
     external_swing_order: int = 5,
@@ -103,7 +105,10 @@ def detect_support_resistance_zones_structure_v1(
         current_price=float(current_price),
         buffer_pct=buffer_pct,
     )
-    zones = _suppress_nearby_support_zones(zones + local_reaction_zones)
+    # Keep structural and local families side by side. Each builder already
+    # dedupes internally; an early cross-family suppress can drop a structural
+    # shelf that later survives once a nearby local loses to a persistent floor.
+    zones = [*zones, *local_reaction_zones]
     zones = _make_support_zones_distinct(zones, current_price=float(current_price), buffer_pct=buffer_pct)
     zones = _fill_support_staircase_gaps(
         zones=zones,
@@ -146,8 +151,9 @@ def detect_support_resistance_zones_structure_v1(
         buffer_pct=buffer_pct,
     )
     zones = _overlay_persistent_wick_floors(zones, persistent_floors)
-    # Overlay skips gap/midpoint spacing; collapse near neighbors so the ladder stays one zone per step.
+    # Overlaps only here; nearby-slot conflicts wait for the unified resolver.
     zones = _make_support_zones_distinct(zones, current_price=float(current_price), buffer_pct=buffer_pct)
+    # Persistent first, then daily/structural/local by score, touches, width.
     zones = _enforce_support_zone_spacing(zones)
     # Recover structural shelves inside wide gaps created by the pinned-floor overlay.
     zones = _fill_persistent_wick_floor_gaps(
@@ -161,6 +167,7 @@ def detect_support_resistance_zones_structure_v1(
         buffer_pct=buffer_pct,
         internal_pivots=internal_pivots,
     )
+    # Same resolver after gap-fill so inserted stairs cannot sit on top of a neighbor.
     zones = _enforce_support_zone_spacing(zones)
 
     support = sorted(zones, key=lambda zone: float(zone["low"]))

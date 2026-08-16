@@ -13,7 +13,7 @@ from src.trading.state_store import (
     zone_rebuild_watermark_key,
 )
 from src.trading.runner import run_trade_once
-from src.trading.zone_identity import fingerprint_zone, make_zone_fingerprint
+from src.trading.zone_identity import fingerprint_zone, make_zone_fingerprint, make_zone_lineage_id
 from src.trading.zone_refresh import refresh_zones
 from src.zones.timeframes import aggregate_ohlc_to_daily
 
@@ -90,6 +90,27 @@ def test_zf1_is_deterministic_and_ignores_detector_labels() -> None:
     assert first.startswith("zf1:")
 
 
+def test_lineage_stays_put_when_revision_gains_a_touch() -> None:
+    four_hour = _four_hour_history(12)
+    daily = aggregate_ohlc_to_daily(four_hour, min_bars_per_day=6)
+    base = {
+        "low": 90,
+        "high": 100,
+        "source_timeframe": "4h",
+        "bounds_style": "body",
+        "origin": "test",
+    }
+
+    first = fingerprint_zone({**base, "source_indexes": [2]}, four_hour_df=four_hour, daily_df=daily)
+    second = fingerprint_zone({**base, "source_indexes": [2, 3]}, four_hour_df=four_hour, daily_df=daily)
+    other_style = make_zone_lineage_id(low=90, high=100, source_timeframe="4h", bounds_style="local_reaction")
+
+    assert first["fingerprint"] == first["zone_lineage_id"] == second["zone_lineage_id"]
+    assert first["revision_fingerprint"] != second["revision_fingerprint"]
+    assert first["fingerprint"] != first["revision_fingerprint"]
+    assert other_style != first["zone_lineage_id"]
+
+
 def test_daily_zone_sources_resolve_against_daily_frame() -> None:
     four_hour = _four_hour_history(12)
     daily = aggregate_ohlc_to_daily(four_hour, min_bars_per_day=6)
@@ -105,6 +126,8 @@ def test_daily_zone_sources_resolve_against_daily_frame() -> None:
 
     assert result["source_open_times"] == [86_400_000]
     assert result["zone_source_time"] == 86_400_000
+    assert result["fingerprint"] == result["zone_lineage_id"]
+    assert result["revision_fingerprint"].startswith("zf1:")
 
 
 def test_zone_snapshot_and_watermark_commit_together(tmp_path) -> None:
@@ -137,6 +160,8 @@ def test_zone_snapshot_and_watermark_commit_together(tmp_path) -> None:
     assert second.rebuilt is False
     assert calls == 1
     assert first.zones[0]["fingerprint"].startswith("zf1:")
+    assert first.zones[0]["fingerprint"] == first.zones[0]["zone_lineage_id"]
+    assert first.zones[0]["revision_fingerprint"].startswith("zf1:")
     with connect(db_path) as conn:
         key = zone_rebuild_watermark_key()
         assert get_zone_rebuild_watermark(conn, key) == int(four_hour.iloc[-1]["open_time"])

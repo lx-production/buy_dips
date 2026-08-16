@@ -26,9 +26,9 @@ REASON_CODES = frozenset(
     }
 )
 
-# fingerprint + dip_origin_open_time → True when that exact dip setup already has a BUY.
+# lineage fingerprint + dip_origin_open_time → True when that exact dip setup already has a BUY.
 SetupBuyLookup = Callable[[str, int], bool]
-# fingerprint → True when the same zone already has a BUY inside the cooldown window.
+# lineage fingerprint → True when the same zone already has a BUY inside the cooldown window.
 RecentZoneBuyLookup = Callable[[str], bool]
 
 
@@ -262,7 +262,7 @@ def nearest_close_outside_zone(
 
 
 def build_setup_id(selected_zone_fingerprint: str, dip_origin_open_time: int) -> str:
-    """Build the dip-setup identity from zone fingerprint plus dip-origin open time.
+    """Build the dip-setup identity from zone lineage plus dip-origin open time.
 
     The same zone may be bought again only after a newer qualifying close above
     the internal-range midpoint creates a new dip origin, and therefore a new id.

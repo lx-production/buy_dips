@@ -14,7 +14,7 @@ from src.config import AppConfig, ZoneConfig
 from src.db import connect, init_db, upsert_candles
 from src.backtest_chart_server import load_backtest_chart_payload
 from src.trading.constants import FOUR_HOURS_MS, ONE_HOUR_MS
-from src.trading.backtest import BUY_CSV_COLUMNS, BacktestError, live_table_counts, parse_backtest_bound, run_backtest, write_buy_csv
+from src.trading.backtest import BUY_CSV_COLUMNS, BacktestError, ZoneSnapshot, build_zone_segments, live_table_counts, parse_backtest_bound, run_backtest, write_buy_csv
 
 
 HOUR = ONE_HOUR_MS
@@ -556,9 +556,61 @@ def test_chart_payload_excludes_hold_and_segments_stop_at_end(tmp_path: Path) ->
     for segment in payload["zone_segments"]:
         assert segment["valid_to"] <= end
         assert segment["valid_from"] < segment["valid_to"]
-        assert {"fingerprint", "low", "mid", "high", "touches", "source_timeframe", "valid_from", "valid_to"} <= set(
-            segment
-        )
+        assert {
+            "fingerprint",
+            "zone_lineage_id",
+            "low",
+            "mid",
+            "high",
+            "touches",
+            "source_timeframe",
+            "valid_from",
+            "valid_to",
+        } <= set(segment)
+
+
+def test_zone_segments_merge_when_lineage_stays_and_sources_change() -> None:
+    lineage = "zf1:lineage"
+    first = ZoneSnapshot(
+        zone_set_as_of=0,
+        valid_from=0,
+        zones=[
+            {
+                "fingerprint": lineage,
+                "zone_lineage_id": lineage,
+                "revision_fingerprint": "zf1:rev1",
+                "low": 90.0,
+                "mid": 95.0,
+                "high": 100.0,
+                "touches": 2,
+                "source_timeframe": "4h",
+            }
+        ],
+    )
+    second = ZoneSnapshot(
+        zone_set_as_of=FOUR,
+        valid_from=FOUR,
+        zones=[
+            {
+                "fingerprint": lineage,
+                "zone_lineage_id": lineage,
+                "revision_fingerprint": "zf1:rev2",
+                "low": 90.0,
+                "mid": 95.0,
+                "high": 100.0,
+                "touches": 3,
+                "source_timeframe": "4h",
+            }
+        ],
+    )
+
+    segments = build_zone_segments([first, second], end_ms=2 * FOUR)
+
+    assert len(segments) == 1
+    assert segments[0]["valid_from"] == 0
+    assert segments[0]["valid_to"] == 2 * FOUR
+    assert segments[0]["touches"] == 3
+    assert segments[0]["zone_lineage_id"] == lineage
 
 
 def test_cli_backtest_parser_defaults() -> None:

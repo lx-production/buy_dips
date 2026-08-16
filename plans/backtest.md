@@ -30,7 +30,7 @@
   - Khởi tạo zone snapshot tại cây trigger đầu tiên, sau đó rebuild trong memory đúng lúc một 4h mới hoàn tất.
   - Helper thuần dùng chung với live zone refresh: `build_fingerprinted_support_zones`.
   - Gọi `evaluate_support_close_v1(..., mode="backtest")`; mode này có trong pure engine nhưng không thêm vào schema `decisions`.
-  - Setup đã BUY là danh sách in-memory theo `fingerprint + dip_origin_open_time` (và `trigger_open_time` cho cooldown 24h), bắt đầu rỗng tại `start`; không persist kết quả. Trong 24h cùng zone bị chặn dù có dip origin mới. Sau 24h zone chỉ reset khi có dip origin mới (close trên `internal_range_midpoint`).
+  - Setup đã BUY là danh sách in-memory theo `zone_lineage_id` (`fingerprint`) + `dip_origin_open_time` (và `trigger_open_time` cho cooldown 24h), bắt đầu rỗng tại `start`; không persist kết quả. Lineage không đổi khi zone thêm touch, nên cooldown/chart không reset chỉ vì evidence mới. Trong 24h cùng zone bị chặn dù có dip origin mới. Sau 24h zone chỉ reset khi có dip origin mới (close trên `internal_range_midpoint`).
   - Trả về `BacktestResult` gồm nến trong khoảng hiển thị, danh sách BUY, zone snapshot/segment và thống kê `evaluated_candles`, `zone_snapshot_count`, `zone_cache_hit_count`, `zone_rebuild_count`, `buy_count`.
 
 - CLI / CSV / visual server: như mô tả ở README.

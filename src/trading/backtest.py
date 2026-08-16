@@ -335,7 +335,11 @@ def write_buy_csv(path: str | Path, buys: list[dict[str, Any]]) -> Path:
 
 
 def build_zone_segments(snapshots: list[ZoneSnapshot], *, end_ms: int) -> list[dict[str, Any]]:
-    """Expand snapshots into per-zone validity segments and merge identical consecutive bands."""
+    """Expand snapshots into per-zone validity segments and merge identical consecutive bands.
+
+    Consecutive snapshots of the same `zone_lineage_id` and price band are
+    joined even when a later revision added source candles.
+    """
     raw: list[dict[str, Any]] = []
     ordered = [snap for snap in snapshots if snap.valid_from is not None]
     for index, snap in enumerate(ordered):
@@ -347,9 +351,11 @@ def build_zone_segments(snapshots: list[ZoneSnapshot], *, end_ms: int) -> list[d
         if valid_to <= valid_from:
             continue
         for zone in snap.zones:
+            fingerprint = str(zone["fingerprint"])
             raw.append(
                 {
-                    "fingerprint": zone["fingerprint"],
+                    "fingerprint": fingerprint,
+                    "zone_lineage_id": str(zone.get("zone_lineage_id") or fingerprint),
                     "low": float(zone["low"]),
                     "mid": float(zone["mid"]),
                     "high": float(zone["high"]),
@@ -360,15 +366,16 @@ def build_zone_segments(snapshots: list[ZoneSnapshot], *, end_ms: int) -> list[d
                     "zone_set_as_of": int(snap.zone_set_as_of),
                 }
             )
-    raw.sort(key=lambda item: (item["fingerprint"], item["low"], item["high"], item["valid_from"]))
+    raw.sort(key=lambda item: (item["zone_lineage_id"], item["low"], item["high"], item["valid_from"]))
     merged: list[dict[str, Any]] = []
     for segment in raw:
         if not merged:
             merged.append(dict(segment))
             continue
         previous = merged[-1]
+        # Lineage stays put when a later snapshot only adds source evidence.
         same_band = (
-            previous["fingerprint"] == segment["fingerprint"]
+            previous["zone_lineage_id"] == segment["zone_lineage_id"]
             and previous["low"] == segment["low"]
             and previous["mid"] == segment["mid"]
             and previous["high"] == segment["high"]

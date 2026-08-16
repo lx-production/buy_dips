@@ -260,13 +260,13 @@ def _make_support_zones_distinct(
     return distinct
 
 
-# Keep one zone per nearby ladder slot after persistent overlay.
+# Keep one zone per nearby ladder slot after overlays finish.
 def _enforce_support_zone_spacing(zones: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Drop neighbors that sit inside the $650 gap or $1000 midpoint window.
+    """Resolve nearby-slot conflicts with one priority order.
 
-    Overlay only removes true overlaps, so a 59005 floor and a 59800 swing band
-    both survived. This pass uses the same spacing as swing suppress, but pinned
-    wick floors outrank swing/daily bands and older persistent floors win.
+    A $650 edge gap or $1000 midpoint counts as the same ladder step. Persistent
+    floors win first (older floor wins among themselves). Daily, structural, and
+    local bands then compete by score, touch count, and narrower width.
     """
     kept: list[dict[str, Any]] = []
     for zone in sorted(zones, key=_spaced_support_zone_rank, reverse=True):
@@ -285,7 +285,7 @@ def _support_zones_share_ladder_slot(first: dict[str, Any], second: dict[str, An
     return gap < STRUCTURE_ADJACENT_ZONE_MIN_GAP or midpoint_gap < STRUCTURE_IMPORTANT_ZONE_SPACING
 
 
-# Persistent floors first, then older source candle, then score/touches/width.
+# Persistent floors first, then score, touches, and narrower width.
 def _spaced_support_zone_rank(zone: dict[str, Any]) -> tuple[int, int, float, int, float]:
     persistent = 1 if str(zone.get("origin")) == "persistent_wick_floor" else 0
     persistent_age = -_persistent_source_index(zone) if persistent else 0
