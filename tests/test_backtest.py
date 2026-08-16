@@ -375,26 +375,24 @@ def test_gap_in_1h_series_aborts(tmp_path: Path) -> None:
         run_backtest(config, db_path, start_ms=start, end_ms=start + 4 * HOUR, detector=_fake_detector)
 
 
-def test_cooldown_same_zone_blocks_second_buy_other_zone_allowed(tmp_path: Path) -> None:
+def test_same_setup_blocks_second_buy_other_zone_allowed(tmp_path: Path) -> None:
     db_path = tmp_path / "bot.sqlite"
     start = 60 * FOUR
     lookback = start - 48 * HOUR
     rows = _hourly_rows(lookback, 48 + 30, base_close=106.0)
-    # Force two inside-zone BUYs on the selected band, then a deeper-band BUY.
-    # Trigger A: inside 90-100 (full 0%–100% zone span), with prior close above internal midpoint 105.
+    # Trigger A: inside 90-100, with prior close above internal midpoint 105.
     rows[48]["close"] = 92.0
     rows[48]["open"] = 93.0
     rows[48]["high"] = 93.0
     rows[48]["low"] = 91.0
-    # Keep dip-origin above midpoint in the hour before first trigger.
     rows[47]["close"] = 106.0
-    # Second same-zone attempt a few hours later still inside cooldown.
+    # Stay inside the band so the dip origin does not reset before the second attempt.
     rows[50]["close"] = 91.0
     rows[50]["open"] = 92.0
     rows[50]["high"] = 92.0
     rows[50]["low"] = 90.5
-    rows[49]["close"] = 106.0
-    # Deeper zone B: inside 80-85 (not the same selected fingerprint as A).
+    rows[49]["close"] = 91.0
+    # Deeper zone B: inside 80-85 (different fingerprint, so a different setup).
     rows[52]["close"] = 82.0
     rows[52]["open"] = 83.0
     rows[52]["high"] = 83.0
@@ -423,7 +421,7 @@ def test_cooldown_same_zone_blocks_second_buy_other_zone_allowed(tmp_path: Path)
 
     buy_times = [buy["trigger_open_time"] for buy in first.buys]
     assert start in buy_times
-    assert start + 2 * HOUR not in buy_times  # same-zone cooldown
+    assert start + 2 * HOUR not in buy_times  # same setup_id, no midpoint reset
     assert start + 4 * HOUR in buy_times  # deeper zone still allowed
     assert [buy["trigger_open_time"] for buy in second.buys] == buy_times
 

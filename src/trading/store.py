@@ -2,25 +2,33 @@ from __future__ import annotations
 
 import json
 import sqlite3
+
 from typing import Any
 
 from ..utils import utc_seconds
 
 
-def has_recent_buy(
+def has_setup_buy(
     conn: sqlite3.Connection,
     selected_zone_fingerprint: str,
-    window_start_open_time: int,
+    dip_origin_open_time: int,
     trigger_open_time: int,
 ) -> bool:
+    """Return True when a prior BUY already used this zone fingerprint + dip origin.
+
+    The current trigger candle is excluded so an idempotent rerun of the same
+    hour can still persist BUY instead of flipping to SETUP_ALREADY_BOUGHT.
+    """
     row = conn.execute(
         """
         SELECT 1 FROM decisions
-        WHERE decision='BUY' AND selected_zone_fingerprint=?
-          AND candle_open_time >= ? AND candle_open_time < ?
+        WHERE decision='BUY'
+          AND selected_zone_fingerprint=?
+          AND dip_origin_open_time=?
+          AND candle_open_time < ?
         LIMIT 1
         """,
-        (selected_zone_fingerprint, int(window_start_open_time), int(trigger_open_time)),
+        (selected_zone_fingerprint, int(dip_origin_open_time), int(trigger_open_time)),
     ).fetchone()
     return row is not None
 

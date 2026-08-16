@@ -110,27 +110,29 @@ def test_below_zone_below_50_percent_is_hold() -> None:
     assert decision["below_zone_pct"] == 0.4
 
 
-def test_cooldown_is_for_selected_zone_only() -> None:
+def test_same_setup_is_bought_once_other_zone_allowed() -> None:
+    # setup_id is fingerprint + dip origin; a different zone is a different setup.
     trigger_time = 100 * HOUR
     candles = _hourly(trigger_time, [(trigger_time - HOUR, 106)], 92)
     zones = [_zone(90, 100, "selected"), _zone(110, 120, "higher")]
 
-    same_zone = evaluate_support_close_v1(
+    same_setup = evaluate_support_close_v1(
         candles.iloc[-1].to_dict(),
         candles,
         zones,
         zone_set_as_of=96 * HOUR,
-        prior_buy_exists=lambda fingerprint, _start, _end: fingerprint == "zf1:selected",
+        setup_already_bought=lambda fingerprint, _origin: fingerprint == "zf1:selected",
     )
     other_zone = evaluate_support_close_v1(
         candles.iloc[-1].to_dict(),
         candles,
         zones,
         zone_set_as_of=96 * HOUR,
-        prior_buy_exists=lambda fingerprint, _start, _end: fingerprint == "zf1:other",
+        setup_already_bought=lambda fingerprint, _origin: fingerprint == "zf1:other",
     )
 
-    assert same_zone["reason_code"] == "RECENT_BUY_IN_24H"
+    assert same_setup["reason_code"] == "SETUP_ALREADY_BOUGHT"
+    assert same_setup["setup_id"] == f"zf1:selected:{trigger_time - HOUR}"
     assert other_zone["decision"] == "BUY"
 
 
@@ -292,15 +294,15 @@ def test_dip_lookback_hours_limits_origin_scan() -> None:
     assert decision["lookback_start_time"] == trigger_time - HOUR
 
 
-def test_cooldown_hours_sets_prior_buy_window() -> None:
-    # The engine must pass YAML cooldown_hours into the prior-BUY lookup, not a hard-coded 24h.
+def test_setup_lookup_uses_fingerprint_and_dip_origin() -> None:
+    # The engine must ask "was this exact setup bought?" not "was this zone bought in 24h?".
     trigger_time = 100 * HOUR
     candles = _hourly(trigger_time, [(trigger_time - HOUR, 106)], 92)
     zones = [_zone(90, 100, "selected"), _zone(110, 120, "higher")]
-    seen: list[tuple[int, int]] = []
+    seen: list[tuple[str, int]] = []
 
-    def capture(_fingerprint: str, start: int, end: int) -> bool:
-        seen.append((start, end))
+    def capture(fingerprint: str, dip_origin_open_time: int) -> bool:
+        seen.append((fingerprint, dip_origin_open_time))
         return False
 
     decision = evaluate_support_close_v1(
@@ -308,9 +310,81 @@ def test_cooldown_hours_sets_prior_buy_window() -> None:
         candles,
         zones,
         zone_set_as_of=96 * HOUR,
-        prior_buy_exists=capture,
-        cooldown_hours=6,
+        setup_already_bought=capture,
     )
 
     assert decision["decision"] == "BUY"
-    assert seen == [(trigger_time - 6 * HOUR, trigger_time)]
+    assert seen == [("zf1:selected", trigger_time - HOUR)]
+
+
+def test_approach_from_below_holds_even_with_valid_dip_origin() -> None:
+    # Last outside close is below the band (21:00-style), so this is not a dip from above.
+    trigger_time = 100 * HOUR
+    candles = _hourly(
+        trigger_time,
+        [
+            (trigger_time - 3 * HOUR, 106),
+            (trigger_time - 2 * HOUR, 85),
+            (trigger_time - HOUR, 88),
+        ],
+        89,
+    )
+    zones = [_zone(80, 85, "lower"), _zone(90, 100, "selected"), _zone(110, 120, "higher")]
+
+    decision = evaluate_support_close_v1(
+        candles.iloc[-1].to_dict(), candles, zones, zone_set_as_of=96 * HOUR
+    )
+
+    assert decision["decision"] == "HOLD"
+    assert decision["reason_code"] == "ZONE_APPROACHED_FROM_BELOW"
+    assert decision["entry_region"] == "below_zone_band"
+    assert decision["last_outside_open_time"] == trigger_time - HOUR
+    assert decision["last_outside_close"] == 88
+    assert decision["gate_results"]["approach_from_above"] is False
+
+
+def test_inside_candles_are_skipped_when_finding_last_outside() -> None:
+    # 95 sits inside 90–100, so the approach candle is the earlier close above the band.
+    trigger_time = 100 * HOUR
+    candles = _hourly(
+        trigger_time,
+        [(trigger_time - 2 * HOUR, 106), (trigger_time - HOUR, 95)],
+        92,
+    )
+    zones = [_zone(90, 100, "selected"), _zone(110, 120, "higher")]
+
+    decision = evaluate_support_close_v1(
+        candles.iloc[-1].to_dict(), candles, zones, zone_set_as_of=96 * HOUR
+    )
+
+    assert decision["decision"] == "BUY"
+    assert decision["last_outside_open_time"] == trigger_time - 2 * HOUR
+    assert decision["last_outside_close"] == 106
+    assert decision["gate_results"]["approach_from_above"] is True
+
+
+def test_new_dip_origin_allows_same_zone_again() -> None:
+    # A later close above the midpoint is a new setup, so the old origin must not block it.
+    trigger_time = 100 * HOUR
+    old_origin = trigger_time - 3 * HOUR
+    new_origin = trigger_time - HOUR
+    candles = _hourly(
+        trigger_time,
+        [(old_origin, 106), (trigger_time - 2 * HOUR, 104), (new_origin, 106)],
+        92,
+    )
+    zones = [_zone(90, 100, "selected"), _zone(110, 120, "higher")]
+
+    decision = evaluate_support_close_v1(
+        candles.iloc[-1].to_dict(),
+        candles,
+        zones,
+        zone_set_as_of=96 * HOUR,
+        setup_already_bought=lambda fingerprint, origin: (
+            fingerprint == "zf1:selected" and origin == old_origin
+        ),
+    )
+
+    assert decision["decision"] == "BUY"
+    assert decision["dip_origin_open_time"] == new_origin
+    assert decision["setup_id"] == f"zf1:selected:{new_origin}"

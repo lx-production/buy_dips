@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+
 from typing import Any, Callable, Iterable, Mapping
 
 import pandas as pd
@@ -18,12 +19,15 @@ REASON_CODES = frozenset(
         "NO_RECENT_CLOSE_ABOVE_INTERNAL_MID",
         "NO_LOWER_ZONE",
         "BELOW_ZONE_OUT_OF_BAND",
+        "ZONE_APPROACHED_FROM_BELOW",
+        "SETUP_ALREADY_BOUGHT",
         "RECENT_BUY_IN_24H",
         "BUY_GATES_PASSED",
     }
 )
 
-PriorBuyLookup = Callable[[str, int, int], bool]
+# fingerprint + dip_origin_open_time → True when that exact dip setup already has a BUY.
+SetupBuyLookup = Callable[[str, int], bool]
 
 
 class DecisionInputError(ValueError):
@@ -36,13 +40,12 @@ def evaluate_support_close_v1(
     zones: Iterable[Mapping[str, Any]],
     *,
     zone_set_as_of: int,
-    prior_buy_exists: PriorBuyLookup | None = None,
+    setup_already_bought: SetupBuyLookup | None = None,
     zones_rebuilt: bool = False,
     mode: str = "observe",
     strategy_version: str = STRATEGY_VERSION,
     config_version: str = "1",
     dip_lookback_hours: int = 48,
-    cooldown_hours: int = 24,
     below_zone_min_pct: float = 0.50,
     inside_zone_max_pct: float = 1.0,
 ) -> dict[str, Any]:
@@ -50,13 +53,13 @@ def evaluate_support_close_v1(
 
     The first gate requires a red trigger candle (`close < open`) so a green
     reclaim into a higher zone cannot BUY. Later gates then select the nearest
-    support and apply the YAML inside-zone / below-zone-band entry regions.
+    support, require an approach from above the band, and allow each dip setup
+    to BUY only once until a new dip origin forms.
     """
     # backtest is allowed in the pure engine only; decisions.mode schema stays observe/dry_run/live.
     if mode not in {"observe", "dry_run", "live", "backtest"}:
         raise DecisionInputError(f"Unsupported decision mode: {mode}")
     lookback_ms = _hours_to_ms(dip_lookback_hours, "dip_lookback_hours")
-    cooldown_ms = _hours_to_ms(cooldown_hours, "cooldown_hours")
     below_min = _fraction(below_zone_min_pct, "below_zone_min_pct")
     inside_max = _fraction(inside_zone_max_pct, "inside_zone_max_pct")
     trigger_open_time = _required_int(trigger_candle, "open_time")
@@ -94,13 +97,18 @@ def evaluate_support_close_v1(
         "lookback_end_time": trigger_open_time,
         "dip_origin_open_time": None,
         "dip_origin_close": None,
+        "setup_id": None,
+        "last_outside_open_time": None,
+        "last_outside_close": None,
+        "setup_already_bought": False,
         "recent_buy_in_24h": False,
         "gate_results": {
             "red_candle": False,
             "entry_region": False,
             "higher_zone": False,
             "dip_origin": False,
-            "per_zone_cooldown": False,
+            "approach_from_above": False,
+            "setup_available": False,
         },
         "zones_rebuilt": bool(zones_rebuilt),
         "mode": mode,
@@ -174,15 +182,79 @@ def evaluate_support_close_v1(
     payload["dip_origin_open_time"] = int(dip_origin["open_time"])
     payload["dip_origin_close"] = float(dip_origin["close"])
     payload["gate_results"]["dip_origin"] = True
-
     fingerprint = str(selected["fingerprint"])
-    cooldown_start = trigger_open_time - cooldown_ms
-    recent_buy = bool(prior_buy_exists(fingerprint, cooldown_start, trigger_open_time)) if prior_buy_exists else False
-    payload["recent_buy_in_24h"] = recent_buy
-    payload["gate_results"]["per_zone_cooldown"] = not recent_buy
-    if recent_buy:
-        return _finish(payload, HOLD, "RECENT_BUY_IN_24H")
+    payload["setup_id"] = build_setup_id(fingerprint, int(dip_origin["open_time"]))
+
+    # Nearest prior close strictly outside the band decides approach direction.
+    last_outside = nearest_close_outside_zone(
+        hourly_candles,
+        zone_low=_low(selected),
+        zone_high=_high(selected),
+        trigger_open_time=trigger_open_time,
+    )
+    if last_outside is not None:
+        payload["last_outside_open_time"] = int(last_outside["open_time"])
+        payload["last_outside_close"] = float(last_outside["close"])
+    last_outside_close = (
+        _decimal(last_outside["close"], "last outside close") if last_outside is not None else None
+    )
+    # BUY only when the last outside close is strictly above the band.
+    if last_outside_close is None or last_outside_close <= _high(selected):
+        return _finish(payload, HOLD, "ZONE_APPROACHED_FROM_BELOW")
+    payload["gate_results"]["approach_from_above"] = True
+
+    already_bought = (
+        bool(setup_already_bought(fingerprint, int(dip_origin["open_time"])))
+        if setup_already_bought
+        else False
+    )
+    payload["setup_already_bought"] = already_bought
+    payload["gate_results"]["setup_available"] = not already_bought
+    if already_bought:
+        return _finish(payload, HOLD, "SETUP_ALREADY_BOUGHT")
     return _finish(payload, BUY, "BUY_GATES_PASSED")
+
+
+def nearest_close_outside_zone(
+    hourly_candles: pd.DataFrame,
+    *,
+    zone_low: Decimal | float,
+    zone_high: Decimal | float,
+    trigger_open_time: int,
+) -> dict[str, Any] | None:
+    """Find the nearest earlier closed 1h candle whose close is strictly outside the zone.
+
+    Walk backward from the candle immediately before the trigger. Closes inside
+    `[zone.low, zone.high]` are skipped. The first close above `zone.high` or
+    below `zone.low` is the approach candle used by the direction gate.
+    """
+    if hourly_candles is None or hourly_candles.empty:
+        return None
+    required = {"open_time", "close"}
+    if not required.issubset(hourly_candles.columns):
+        return None
+    candidates = hourly_candles.copy()
+    if "is_closed" in candidates.columns:
+        candidates = candidates[candidates["is_closed"].astype(int) == 1]
+    candidates = candidates[candidates["open_time"].astype("int64") < int(trigger_open_time)].sort_values(
+        "open_time", ascending=False
+    )
+    low = _decimal(zone_low, "zone low")
+    high = _decimal(zone_high, "zone high")
+    for _, row in candidates.iterrows():
+        candidate_close = _decimal(row["close"], "hourly close")
+        if candidate_close > high or candidate_close < low:
+            return {"open_time": int(row["open_time"]), "close": float(candidate_close)}
+    return None
+
+
+def build_setup_id(selected_zone_fingerprint: str, dip_origin_open_time: int) -> str:
+    """Build the dip-setup identity from zone fingerprint plus dip-origin open time.
+
+    The same zone may be bought again only after a newer qualifying close above
+    the internal-range midpoint creates a new dip origin, and therefore a new id.
+    """
+    return f"{selected_zone_fingerprint}:{int(dip_origin_open_time)}"
 
 
 def nearest_close_above_midpoint(

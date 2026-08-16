@@ -125,6 +125,8 @@ CREATE TABLE IF NOT EXISTS decisions (
     'NO_RECENT_CLOSE_ABOVE_INTERNAL_MID',
     'NO_LOWER_ZONE',
     'BELOW_ZONE_OUT_OF_BAND',
+    'ZONE_APPROACHED_FROM_BELOW',
+    'SETUP_ALREADY_BOUGHT',
     'RECENT_BUY_IN_24H',
     'BUY_GATES_PASSED'
   )),
@@ -138,6 +140,9 @@ CREATE TABLE IF NOT EXISTS decisions (
 
 CREATE INDEX IF NOT EXISTS decisions_buy_zone_time
 ON decisions(decision, selected_zone_fingerprint, candle_open_time);
+
+CREATE INDEX IF NOT EXISTS decisions_buy_setup
+ON decisions(decision, selected_zone_fingerprint, dip_origin_open_time);
 
 CREATE TABLE IF NOT EXISTS bot_state (
   key TEXT PRIMARY KEY,
@@ -234,11 +239,11 @@ def init_db(database_path: str | Path) -> None:
 
 
 def _upgrade_decisions_reason_codes(conn: sqlite3.Connection) -> None:
-    """Rebuild `decisions` when its CHECK constraint is missing CLOSE_NOT_BELOW_OPEN.
+    """Rebuild `decisions` when its CHECK constraint is missing a current reason code.
 
     SQLite cannot ALTER a CHECK list in place. Existing databases keep the old
     table after `CREATE TABLE IF NOT EXISTS`, so copy rows into a new table
-    that accepts the red-candle reason code, then drop the old one.
+    that accepts the current reason set, then drop the old one.
     """
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='decisions'"
@@ -246,20 +251,26 @@ def _upgrade_decisions_reason_codes(conn: sqlite3.Connection) -> None:
     if row is None:
         return
     sql = row["sql"] if isinstance(row, sqlite3.Row) else row[0]
-    if sql is None or "CLOSE_NOT_BELOW_OPEN" in sql:
+    required_codes = (
+        "CLOSE_NOT_BELOW_OPEN",
+        "ZONE_APPROACHED_FROM_BELOW",
+        "SETUP_ALREADY_BOUGHT",
+    )
+    if sql is None or all(code in sql for code in required_codes):
         return
     conn.execute("DROP VIEW IF EXISTS decisions_readable")
     conn.execute("DROP INDEX IF EXISTS decisions_buy_zone_time")
-    conn.execute("ALTER TABLE decisions RENAME TO decisions_pre_red_candle")
+    conn.execute("DROP INDEX IF EXISTS decisions_buy_setup")
+    conn.execute("ALTER TABLE decisions RENAME TO decisions_pre_reason_upgrade")
     conn.executescript(SCHEMA)
-    old_columns = [item["name"] for item in conn.execute("PRAGMA table_info(decisions_pre_red_candle)")]
+    old_columns = [item["name"] for item in conn.execute("PRAGMA table_info(decisions_pre_reason_upgrade)")]
     new_columns = [item["name"] for item in conn.execute("PRAGMA table_info(decisions)")]
     shared = [column for column in old_columns if column in set(new_columns)]
     column_sql = ",".join(shared)
     conn.execute(
-        f"INSERT INTO decisions ({column_sql}) SELECT {column_sql} FROM decisions_pre_red_candle"
+        f"INSERT INTO decisions ({column_sql}) SELECT {column_sql} FROM decisions_pre_reason_upgrade"
     )
-    conn.execute("DROP TABLE decisions_pre_red_candle")
+    conn.execute("DROP TABLE decisions_pre_reason_upgrade")
 
 
 def _drop_disposable_phase1_tables(conn: sqlite3.Connection) -> None:

@@ -234,6 +234,8 @@ def test_init_db_upgrades_decisions_reason_code_check(tmp_path) -> None:
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='decisions'"
         ).fetchone()[0]
         assert "CLOSE_NOT_BELOW_OPEN" in sql
+        assert "ZONE_APPROACHED_FROM_BELOW" in sql
+        assert "SETUP_ALREADY_BOUGHT" in sql
         assert conn.execute("SELECT COUNT(*) AS count FROM decisions").fetchone()["count"] == 1
         conn.execute(
             """
@@ -251,6 +253,77 @@ def test_init_db_upgrades_decisions_reason_code_check(tmp_path) -> None:
         conn.commit()
         codes = [row["reason_code"] for row in conn.execute("SELECT reason_code FROM decisions ORDER BY id")]
         assert codes == ["CLOSE_OUTSIDE_ENTRY_REGION", "CLOSE_NOT_BELOW_OPEN"]
+
+
+def test_init_db_upgrades_decisions_for_approach_and_setup_reasons(tmp_path) -> None:
+    """Existing databases that already have CLOSE_NOT_BELOW_OPEN still gain the new HOLD codes."""
+    db_path = tmp_path / "bot.sqlite"
+    init_db(db_path)
+    with connect(db_path) as conn:
+        sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='decisions'"
+        ).fetchone()[0]
+        old_sql = sql.replace("'ZONE_APPROACHED_FROM_BELOW',\n    ", "")
+        old_sql = old_sql.replace("'SETUP_ALREADY_BOUGHT',\n    ", "")
+        assert "ZONE_APPROACHED_FROM_BELOW" not in old_sql
+        assert "SETUP_ALREADY_BOUGHT" not in old_sql
+        conn.execute("DROP VIEW IF EXISTS decisions_readable")
+        conn.execute("DROP INDEX IF EXISTS decisions_buy_zone_time")
+        conn.execute("DROP INDEX IF EXISTS decisions_buy_setup")
+        conn.execute("DROP TABLE decisions")
+        conn.execute(old_sql)
+        conn.execute(
+            """
+            INSERT INTO decisions(
+              created_at, exchange, symbol, timeframe, candle_open_time, candle_close_time,
+              reference_close, zone_set_as_of, fingerprint_version, gate_results_json,
+              zones_rebuilt, decision, reason_code, mode, strategy_version, config_version
+            ) VALUES (
+              1, 'binance', 'BTCUSDT', '1h', 1000, 1000,
+              1, 1000, 'zf1', '{}',
+              0, 'HOLD', 'CLOSE_NOT_BELOW_OPEN', 'observe', 'strategy-v1', 'config-v1'
+            )
+            """
+        )
+        conn.commit()
+
+    init_db(db_path)
+
+    with connect(db_path) as conn:
+        sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='decisions'"
+        ).fetchone()[0]
+        assert "ZONE_APPROACHED_FROM_BELOW" in sql
+        assert "SETUP_ALREADY_BOUGHT" in sql
+        conn.execute(
+            """
+            INSERT INTO decisions(
+              created_at, exchange, symbol, timeframe, candle_open_time, candle_close_time,
+              reference_close, zone_set_as_of, fingerprint_version, gate_results_json,
+              zones_rebuilt, decision, reason_code, mode, strategy_version, config_version
+            ) VALUES (
+              2, 'binance', 'BTCUSDT', '1h', 2000, 2000,
+              1, 1000, 'zf1', '{}',
+              0, 'HOLD', 'ZONE_APPROACHED_FROM_BELOW', 'observe', 'strategy-v1', 'config-v1'
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO decisions(
+              created_at, exchange, symbol, timeframe, candle_open_time, candle_close_time,
+              reference_close, zone_set_as_of, fingerprint_version, gate_results_json,
+              zones_rebuilt, decision, reason_code, mode, strategy_version, config_version
+            ) VALUES (
+              3, 'binance', 'BTCUSDT', '1h', 3000, 3000,
+              1, 1000, 'zf1', '{}',
+              0, 'HOLD', 'SETUP_ALREADY_BOUGHT', 'observe', 'strategy-v1', 'config-v1'
+            )
+            """
+        )
+        conn.commit()
+        codes = [row["reason_code"] for row in conn.execute("SELECT reason_code FROM decisions ORDER BY id")]
+        assert codes == ["CLOSE_NOT_BELOW_OPEN", "ZONE_APPROACHED_FROM_BELOW", "SETUP_ALREADY_BOUGHT"]
 
 
 def test_readable_views_are_added_to_an_existing_database(tmp_path) -> None:

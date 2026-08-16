@@ -103,7 +103,7 @@ Backtest also needs enough older **4h** history in SQLite for detector warm-up b
 
 ## Offline Backtest
 
-Replay `support_close_v1` on stored closed 1h candles. The engine is the same as observe; cooldown uses an in-memory prior-BUY list for that run only (never reads/writes `decisions`, `zones`, `zone_sets`, or `bot_state`).
+Replay `support_close_v1` on stored closed 1h candles. The engine is the same as observe; already-bought setups use an in-memory prior-BUY list for that run only (never reads/writes `decisions`, `zones`, `zone_sets`, or `bot_state`).
 
 - `--start` is inclusive, `--end` is exclusive. Both must be ISO-8601 with timezone on any UTC hour boundary; 4h alignment is not required.
 - `--end` defaults to after the latest closed 1h candle.
@@ -219,7 +219,8 @@ Shared setup gates:
 
 - The trigger 1h candle is **red**: `close < open`.
 - In the prior **`dip_lookback_hours`** (default 48; floored by the selected zone’s `zone_source_time`), there is a nearest earlier closed 1h candle whose `close` is **strictly above** the internal-range midpoint (midpoint between the selected zone high and the next higher zone low).
-- No prior `BUY` for the **same selected zone fingerprint** in the prior **`cooldown_hours`** (default 24). Cooldown is per-zone: a deeper zone may still `BUY` within that window of a shallower-zone `BUY`.
+- The nearest earlier closed 1h candle whose `close` is strictly outside the selected zone must have closed **above** `zone.high` (approach from above). A last-outside close below `zone.low` is `ZONE_APPROACHED_FROM_BELOW`.
+- Each dip setup (`selected_zone_fingerprint` + `dip_origin_open_time`) may `BUY` only once. The same zone can be bought again only after a later close above the internal-range midpoint creates a new dip origin. A deeper zone may still `BUY` (different fingerprint). Elapsing `cooldown_hours` does not reset a setup.
 
 Reason codes:
 
@@ -229,7 +230,8 @@ Reason codes:
 - `NO_RECENT_CLOSE_ABOVE_INTERNAL_MID`
 - `NO_LOWER_ZONE`
 - `BELOW_ZONE_OUT_OF_BAND`
-- `RECENT_BUY_IN_24H`
+- `ZONE_APPROACHED_FROM_BELOW`
+- `SETUP_ALREADY_BOUGHT`
 - `BUY_GATES_PASSED` → `BUY`
 
 Fetch failures, zone-build failures, and an overdue incomplete 4h bucket abort the runner **before** a decision row is written.

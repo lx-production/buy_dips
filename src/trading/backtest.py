@@ -49,6 +49,7 @@ class BacktestError(RuntimeError):
 class PriorBuy:
     trigger_open_time: int
     zone_fingerprint: str
+    dip_origin_open_time: int
 
 
 @dataclass
@@ -260,21 +261,26 @@ def run_backtest(
             hourly,
             current_zones,
             zone_set_as_of=watermark,
-            prior_buy_exists=lambda fingerprint, start, end: _prior_buy_exists(
-                prior_buys, fingerprint, start, end
+            setup_already_bought=lambda fingerprint, dip_origin: _setup_already_bought(
+                prior_buys, fingerprint, dip_origin
             ),
             zones_rebuilt=rebuilt,
             mode="backtest",
             strategy_version=config.strategy.version or STRATEGY_VERSION,
             config_version=config.strategy.config_version,
             dip_lookback_hours=config.strategy.dip_lookback_hours,
-            cooldown_hours=config.strategy.cooldown_hours,
             below_zone_min_pct=config.strategy.below_zone_min_pct,
             inside_zone_max_pct=config.strategy.inside_zone_max_pct,
         )
         if decision["decision"] == BUY:
             fingerprint = str(decision["selected_zone_fingerprint"])
-            prior_buys.append(PriorBuy(trigger_open_time=trigger_open, zone_fingerprint=fingerprint))
+            prior_buys.append(
+                PriorBuy(
+                    trigger_open_time=trigger_open,
+                    zone_fingerprint=fingerprint,
+                    dip_origin_open_time=int(decision["dip_origin_open_time"]),
+                )
+            )
             buys.append(_buy_row(decision))
 
     # Close the final snapshot validity window at the exclusive end bound.
@@ -451,11 +457,10 @@ def _buy_row(decision: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _prior_buy_exists(prior_buys: list[PriorBuy], fingerprint: str, start_ms: int, end_ms: int) -> bool:
+def _setup_already_bought(prior_buys: list[PriorBuy], fingerprint: str, dip_origin_open_time: int) -> bool:
+    """Return True when this replay already bought the same zone + dip-origin setup."""
     for prior in prior_buys:
-        if prior.zone_fingerprint != fingerprint:
-            continue
-        if start_ms <= prior.trigger_open_time < end_ms:
+        if prior.zone_fingerprint == fingerprint and prior.dip_origin_open_time == int(dip_origin_open_time):
             return True
     return False
 
