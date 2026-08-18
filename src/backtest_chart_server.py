@@ -48,7 +48,8 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"Range {ms_to_iso(result.start_ms)} -> {ms_to_iso(result.end_ms)} | "
         f"BUY={result.buy_count} zones={result.zone_snapshot_count} "
-        f"cache_hits={result.zone_cache_hit_count} builds={result.zone_rebuild_count}"
+        f"cache_hits={result.zone_cache_hit_count} builds={result.zone_rebuild_count} "
+        f"ingested={result.zone_state_ingested_candles} scans={result.zone_full_history_scans}"
     )
     print("Press Ctrl+C to stop.")
     try:

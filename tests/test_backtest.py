@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import pytest
 
 import src.trading.backtest as backtest_module
+import src.trading.backtest_zone_cache as cache_module
 
 from src.cli import build_parser
 from src.config import AppConfig, ZoneConfig
@@ -15,6 +16,8 @@ from src.db import connect, init_db, upsert_candles
 from src.backtest_chart_server import load_backtest_chart_payload
 from src.trading.constants import FOUR_HOURS_MS, ONE_HOUR_MS
 from src.trading.backtest import BUY_CSV_COLUMNS, BacktestError, ZoneSnapshot, build_zone_segments, live_table_counts, parse_backtest_bound, run_backtest, write_buy_csv
+from src.zones.detector import detect_support_resistance_zones
+from tests.test_incremental_zone_detector import canonicalize_zone_snapshot
 
 
 HOUR = ONE_HOUR_MS
@@ -179,6 +182,8 @@ def test_rebuild_only_after_full_four_1h_and_no_future_4h(tmp_path: Path) -> Non
     assert start in rebuild_targets
     assert all(target <= start for target in rebuild_targets) or start in rebuild_targets
     assert result.zone_rebuild_count >= 2
+    assert result.zone_full_history_scans == 0
+    assert result.zone_state_ingested_candles == 0
 
 
 def test_backtest_aggregates_each_four_hour_bucket_once(tmp_path: Path, monkeypatch) -> None:
@@ -230,12 +235,12 @@ def test_zone_cache_reuses_snapshots_and_only_builds_extended_range(tmp_path: Pa
     real_builder = backtest_module.build_fingerprinted_support_zones
     build_targets: list[int] = []
 
-    def cached_test_builder(four_hour_df, **kwargs):
+    def cached_test_builder(evidence, four_hour_df, **kwargs):
         # Record real detector builds while preserving production enrichment and fingerprints.
         build_targets.append(int(kwargs["zone_set_as_of"]))
         return real_builder(four_hour_df, detector=_fake_detector, **kwargs)
 
-    monkeypatch.setattr(backtest_module, "build_fingerprinted_support_zones", cached_test_builder)
+    monkeypatch.setattr(backtest_module, "build_fingerprinted_support_zones_from_evidence", cached_test_builder)
 
     cold = run_backtest(config, db_path, start_ms=start, end_ms=start + 4 * HOUR)
     warm = run_backtest(config, db_path, start_ms=start, end_ms=start + 4 * HOUR)
@@ -243,12 +248,18 @@ def test_zone_cache_reuses_snapshots_and_only_builds_extended_range(tmp_path: Pa
 
     assert cold.zone_rebuild_count == cold.zone_snapshot_count
     assert cold.zone_cache_hit_count == 0
+    assert cold.zone_full_history_scans == 1
+    assert cold.zone_state_ingested_candles >= cold.zone_snapshot_count
     assert warm.zone_rebuild_count == 0
     assert warm.zone_cache_hit_count == warm.zone_snapshot_count == cold.zone_snapshot_count
+    assert warm.zone_full_history_scans == 0
+    assert warm.zone_state_ingested_candles == 0
     assert warm.buys == cold.buys
     assert warm.zone_segments == cold.zone_segments
     assert extended.zone_cache_hit_count == cold.zone_snapshot_count
     assert extended.zone_rebuild_count == extended.zone_snapshot_count - cold.zone_snapshot_count
+    assert extended.zone_full_history_scans == 1
+    assert extended.zone_state_ingested_candles >= extended.zone_snapshot_count
     assert len(build_targets) == cold.zone_rebuild_count + extended.zone_rebuild_count
     with connect(db_path) as conn:
         cache_count = int(conn.execute("SELECT COUNT(*) FROM backtest_zone_cache").fetchone()[0])
@@ -263,11 +274,11 @@ def test_zone_cache_invalidates_changed_config_and_candle_data(tmp_path: Path, m
     _seed_db(db_path, hourly_start=lookback, hourly_count=48 + 4, warm_up_4h=16)
     real_builder = backtest_module.build_fingerprinted_support_zones
 
-    def cached_test_builder(four_hour_df, **kwargs):
+    def cached_test_builder(evidence, four_hour_df, **kwargs):
         # Keep generated zones deterministic while allowing cache identity inputs to change.
         return real_builder(four_hour_df, detector=_fake_detector, **kwargs)
 
-    monkeypatch.setattr(backtest_module, "build_fingerprinted_support_zones", cached_test_builder)
+    monkeypatch.setattr(backtest_module, "build_fingerprinted_support_zones_from_evidence", cached_test_builder)
     first_config = AppConfig(database_path=str(db_path), zones=ZoneConfig(external_swing_order=2))
     changed_config = AppConfig(database_path=str(db_path), zones=ZoneConfig(external_swing_order=3))
 
@@ -295,11 +306,11 @@ def test_zone_cache_rebuilds_corrupt_snapshot_without_touching_live_tables(tmp_p
     config = AppConfig(database_path=str(db_path), zones=ZoneConfig(external_swing_order=2))
     real_builder = backtest_module.build_fingerprinted_support_zones
 
-    def cached_test_builder(four_hour_df, **kwargs):
+    def cached_test_builder(evidence, four_hour_df, **kwargs):
         # Exercise the production zone enrichment while replacing only expensive detection.
         return real_builder(four_hour_df, detector=_fake_detector, **kwargs)
 
-    monkeypatch.setattr(backtest_module, "build_fingerprinted_support_zones", cached_test_builder)
+    monkeypatch.setattr(backtest_module, "build_fingerprinted_support_zones_from_evidence", cached_test_builder)
     live_before = live_table_counts(db_path)
     cold = run_backtest(config, db_path, start_ms=start, end_ms=start + 8 * HOUR)
     with connect(db_path) as conn:
@@ -314,6 +325,8 @@ def test_zone_cache_rebuilds_corrupt_snapshot_without_touching_live_tables(tmp_p
 
     assert repaired.zone_rebuild_count == 1
     assert repaired.zone_cache_hit_count == cold.zone_snapshot_count - 1
+    assert repaired.zone_full_history_scans == 1
+    assert repaired.zone_state_ingested_candles >= repaired.zone_snapshot_count
     assert repaired.buys == cold.buys
     assert repaired.zone_segments == cold.zone_segments
     assert live_table_counts(db_path) == live_before
@@ -328,13 +341,13 @@ def test_zone_cache_reuses_empty_snapshots(tmp_path: Path, monkeypatch) -> None:
     config = AppConfig(database_path=str(db_path), zones=ZoneConfig(external_swing_order=2))
     build_count = 0
 
-    def empty_builder(_four_hour_df, **_kwargs):
+    def empty_builder(_evidence, _four_hour_df, **_kwargs):
         # Return the valid no-zone outcome while tracking whether cache reuse skips this call.
         nonlocal build_count
         build_count += 1
         return []
 
-    monkeypatch.setattr(backtest_module, "build_fingerprinted_support_zones", empty_builder)
+    monkeypatch.setattr(backtest_module, "build_fingerprinted_support_zones_from_evidence", empty_builder)
 
     cold = run_backtest(config, db_path, start_ms=start, end_ms=start + 4 * HOUR)
     warm = run_backtest(config, db_path, start_ms=start, end_ms=start + 4 * HOUR)
@@ -342,6 +355,76 @@ def test_zone_cache_reuses_empty_snapshots(tmp_path: Path, monkeypatch) -> None:
     assert build_count == cold.zone_snapshot_count
     assert warm.zone_cache_hit_count == warm.zone_snapshot_count
     assert warm.zone_rebuild_count == 0
+
+
+def test_zone_cache_warm_path_bulk_loads_on_one_connection(tmp_path: Path, monkeypatch) -> None:
+    # After a cold fill, warm replay should prune once and bulk-load hits on a single connection.
+    db_path = tmp_path / "bot.sqlite"
+    start = 125 * FOUR
+    lookback = start - 48 * HOUR
+    _seed_db(db_path, hourly_start=lookback, hourly_count=48 + 8, warm_up_4h=16)
+    config = AppConfig(database_path=str(db_path), zones=ZoneConfig(external_swing_order=2))
+    real_builder = backtest_module.build_fingerprinted_support_zones
+
+    def cached_test_builder(evidence, four_hour_df, **kwargs):
+        return real_builder(four_hour_df, detector=_fake_detector, **kwargs)
+
+    monkeypatch.setattr(backtest_module, "build_fingerprinted_support_zones_from_evidence", cached_test_builder)
+    run_backtest(config, db_path, start_ms=start, end_ms=start + 8 * HOUR)
+
+    real_connect = cache_module.connect
+    connection_count = {"n": 0}
+
+    def counting_connect(path):
+        connection_count["n"] += 1
+        return real_connect(path)
+
+    monkeypatch.setattr(cache_module, "connect", counting_connect)
+    warm = run_backtest(config, db_path, start_ms=start, end_ms=start + 8 * HOUR)
+
+    assert warm.zone_rebuild_count == 0
+    assert warm.zone_cache_hit_count == warm.zone_snapshot_count
+    assert warm.zone_full_history_scans == 0
+    assert connection_count["n"] == 2
+
+
+def test_incremental_backtest_matches_stateless_detector_snapshots(tmp_path: Path) -> None:
+    # Production incremental rebuilds must deep-equal injected full-frame detector snapshots.
+    db_path = tmp_path / "bot.sqlite"
+    start = 130 * FOUR
+    lookback = start - 48 * HOUR
+    _seed_db(db_path, hourly_start=lookback, hourly_count=48 + 8, warm_up_4h=16)
+    config = AppConfig(
+        database_path=str(db_path),
+        zones=ZoneConfig(
+            min_touches=1,
+            external_swing_order=2,
+            atr_period=3,
+            break_atr_mult=0.0,
+            external_min_swing_atr_mult=0.0,
+            external_min_swing_pct=0.0,
+        ),
+    )
+    end = start + 8 * HOUR
+    stateless = run_backtest(
+        config,
+        db_path,
+        start_ms=start,
+        end_ms=end,
+        detector=detect_support_resistance_zones,
+    )
+    incremental = run_backtest(config, db_path, start_ms=start, end_ms=end)
+
+    assert incremental.zone_full_history_scans == 1
+    assert incremental.zone_state_ingested_candles >= incremental.zone_snapshot_count
+    assert incremental.zone_snapshot_count == stateless.zone_snapshot_count
+    assert incremental.buys == stateless.buys
+    assert incremental.zone_segments == stateless.zone_segments
+    assert len(incremental.zone_snapshots) == len(stateless.zone_snapshots)
+    for left, right in zip(incremental.zone_snapshots, stateless.zone_snapshots):
+        assert left.zone_set_as_of == right.zone_set_as_of
+        assert left.valid_from == right.valid_from
+        assert canonicalize_zone_snapshot(left.zones) == canonicalize_zone_snapshot(right.zones)
 
 
 def test_missing_warmup_gap_and_bad_alignment_fail(tmp_path: Path) -> None:

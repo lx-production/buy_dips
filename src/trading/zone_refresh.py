@@ -11,7 +11,7 @@ import pandas as pd
 from ..config import ZoneConfig
 from ..db import connect, init_db
 from ..utils import json_default, utc_seconds
-from ..zones import aggregate_ohlc_to_daily, detect_support_resistance_zones
+from ..zones import ZoneDetectorEvidence, aggregate_ohlc_to_daily, detect_support_resistance_zones, materialize_support_zones
 from .constants import DETECTOR_VERSION, EXCHANGE, FOUR_HOURS_MS, SYMBOL, ZONE_TIMEFRAME
 from .state_store import (
     StateStoreError,
@@ -50,9 +50,87 @@ def build_fingerprinted_support_zones(
 ) -> list[dict[str, Any]]:
     """Run the detector and attach source times plus lineage/revision hashes.
 
-    Shared by live `refresh_zones` persistence and the offline backtest in-memory rebuild so
+    Shared by live `refresh_zones` persistence and injected-detector backtest rebuilds so
     source-time resolution and fingerprinting stay one implementation.
     """
+    eligible = _eligible_closed_four_hour_frame(
+        four_hour_df,
+        zone_config=zone_config,
+        zone_set_as_of=zone_set_as_of,
+    )
+    result = detector(
+        eligible,
+        min_touches=zone_config.min_touches,
+        current_price=float(eligible.iloc[-1]["close"]),
+        buffer_pct=zone_config.role_buffer_pct,
+        external_swing_order=zone_config.external_swing_order,
+        atr_period=zone_config.atr_period,
+        break_atr_mult=zone_config.break_atr_mult,
+        external_min_swing_atr_mult=zone_config.external_min_swing_atr_mult,
+        external_min_swing_pct=zone_config.external_min_swing_pct,
+    )
+    support = result.get("support")
+    if not isinstance(support, list):
+        raise ZoneRefreshError("Detector did not return a support zone list")
+    return _fingerprint_support_zones(
+        support,
+        eligible,
+        zone_set_as_of=int(zone_set_as_of),
+        exchange=exchange,
+        symbol=symbol,
+        detector_version=detector_version,
+    )
+
+
+def build_fingerprinted_support_zones_from_evidence(
+    evidence: ZoneDetectorEvidence | None,
+    four_hour_df: pd.DataFrame,
+    *,
+    zone_config: ZoneConfig,
+    zone_set_as_of: int,
+    exchange: str = EXCHANGE,
+    symbol: str = SYMBOL,
+    detector_version: str = DETECTOR_VERSION,
+) -> list[dict[str, Any]]:
+    """Materialize support from detector evidence and attach the same zf1 fingerprints.
+
+    `evidence is None` is the empty-zone outcome (no prominent pivots). Too-short history
+    still fail-closes via the shared 4h frame checks, matching the stateless rebuild path.
+    """
+    eligible = _eligible_closed_four_hour_frame(
+        four_hour_df,
+        zone_config=zone_config,
+        zone_set_as_of=zone_set_as_of,
+    )
+    if evidence is None:
+        support: list[dict[str, Any]] = []
+    else:
+        materialized = materialize_support_zones(
+            evidence,
+            min_touches=zone_config.min_touches,
+            buffer_pct=zone_config.role_buffer_pct,
+            break_atr_mult=zone_config.break_atr_mult,
+        )
+        support = materialized.get("support")
+        if not isinstance(support, list):
+            raise ZoneRefreshError("Detector did not return a support zone list")
+    return _fingerprint_support_zones(
+        support,
+        eligible,
+        zone_set_as_of=int(zone_set_as_of),
+        exchange=exchange,
+        symbol=symbol,
+        detector_version=detector_version,
+    )
+
+
+def _eligible_closed_four_hour_frame(
+    four_hour_df: pd.DataFrame,
+    *,
+    zone_config: ZoneConfig,
+    zone_set_as_of: int,
+) -> pd.DataFrame:
+    """Slice closed 4h history through the target watermark and fail closed if it is unusable."""
     if four_hour_df is None or four_hour_df.empty or "open_time" not in four_hour_df.columns:
         raise ZoneRefreshError("No completed closed 4h candles are available")
     closed = four_hour_df.copy()
@@ -69,22 +147,21 @@ def build_fingerprinted_support_zones(
         raise ZoneRefreshError("4h history does not include the target zone_set_as_of candle")
     if len(eligible) < max(1, int(zone_config.external_swing_order) * 2 + 1):
         raise ZoneRefreshError("Insufficient closed 4h history for support_structure_v1")
+    return eligible
 
-    result = detector(
-        eligible,
-        min_touches=zone_config.min_touches,
-        current_price=float(eligible.iloc[-1]["close"]),
-        buffer_pct=zone_config.role_buffer_pct,
-        external_swing_order=zone_config.external_swing_order,
-        atr_period=zone_config.atr_period,
-        break_atr_mult=zone_config.break_atr_mult,
-        external_min_swing_atr_mult=zone_config.external_min_swing_atr_mult,
-        external_min_swing_pct=zone_config.external_min_swing_pct,
-    )
-    support = result.get("support")
-    if not isinstance(support, list):
-        raise ZoneRefreshError("Detector did not return a support zone list")
+
+def _fingerprint_support_zones(
+    support: list[dict[str, Any]],
+    eligible: pd.DataFrame,
+    *,
+    zone_set_as_of: int,
+    exchange: str,
+    symbol: str,
+    detector_version: str,
+) -> list[dict[str, Any]]:
+    """Resolve source times on the eligible 4h/daily frames and attach lineage/revision hashes."""
     daily_df = aggregate_ohlc_to_daily(eligible, min_bars_per_day=6)
+    target = int(zone_set_as_of)
     return [
         {
             **fingerprint_zone(

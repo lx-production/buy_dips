@@ -157,6 +157,8 @@ def _cmd_backtest(
     print(f"Zone snapshots: {result.zone_snapshot_count}")
     print(f"Zone cache hits: {result.zone_cache_hit_count}")
     print(f"Zone detector builds: {result.zone_rebuild_count}")
+    print(f"Zone state ingested candles: {result.zone_state_ingested_candles}")
+    print(f"Zone full history scans: {result.zone_full_history_scans}")
     print(f"BUY count: {result.buy_count}")
     print(f"CSV: {output}")
     return 0

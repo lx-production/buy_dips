@@ -643,6 +643,9 @@ def test_benchmark_script_copies_source_db_and_leaves_its_cache_untouched(tmp_pa
     assert payload["cold"]["zone_cache_hit_count"] == 0
     assert payload["warm"]["zone_cache_hit_count"] == payload["zone_snapshot_count"]
     assert payload["warm"]["zone_rebuild_count"] == 0
+    assert payload["cold"]["zone_full_history_scans"] == 1
+    assert payload["warm"]["zone_full_history_scans"] == 0
+    assert payload["warm"]["zone_state_ingested_candles"] == 0
     assert "elapsed_seconds" in payload["cold"]
     assert completed.stdout
 

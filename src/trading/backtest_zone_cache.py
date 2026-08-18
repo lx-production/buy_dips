@@ -77,6 +77,57 @@ def prune_incompatible_zone_cache(
         conn.commit()
 
 
+def load_cached_zone_snapshots(
+    database_path: str | Path,
+    *,
+    exchange: str,
+    symbol: str,
+    watermarks: list[int],
+    input_hashes: dict[int, str],
+    identity: ZoneCacheIdentity,
+) -> dict[int, list[dict[str, Any]]]:
+    """Return validated hits for the requested watermarks from one SQLite connection.
+
+    Missing, stale, or corrupt rows are omitted so the caller treats them as misses.
+    """
+    hits: dict[int, list[dict[str, Any]]] = {}
+    requested: list[int] = []
+    seen: set[int] = set()
+    for raw in watermarks:
+        watermark = int(raw)
+        if watermark in seen:
+            continue
+        seen.add(watermark)
+        requested.append(watermark)
+    if not requested:
+        return hits
+    placeholders = ",".join("?" * len(requested))
+    with connect(database_path) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT * FROM backtest_zone_cache
+            WHERE exchange=? AND symbol=? AND timeframe=?
+              AND zone_set_as_of IN ({placeholders})
+            """,
+            (exchange, symbol, ZONE_TIMEFRAME, *requested),
+        ).fetchall()
+    by_watermark = {int(row["zone_set_as_of"]): row for row in rows}
+    for watermark in requested:
+        row = by_watermark.get(watermark)
+        input_hash = input_hashes.get(watermark)
+        if row is None or input_hash is None:
+            continue
+        zones = _validated_cached_zones(
+            row,
+            identity=identity,
+            input_hash=input_hash,
+            zone_set_as_of=watermark,
+        )
+        if zones is not None:
+            hits[watermark] = zones
+    return hits
+
+
 def load_cached_zone_snapshot(
     database_path: str | Path,
     *,
@@ -87,30 +138,15 @@ def load_cached_zone_snapshot(
     identity: ZoneCacheIdentity,
 ) -> list[dict[str, Any]] | None:
     """Return one validated cache hit, or None when the row is missing, stale, or corrupt."""
-    with connect(database_path) as conn:
-        row = conn.execute(
-            """
-            SELECT * FROM backtest_zone_cache
-            WHERE exchange=? AND symbol=? AND timeframe=? AND zone_set_as_of=?
-            """,
-            (exchange, symbol, ZONE_TIMEFRAME, int(zone_set_as_of)),
-        ).fetchone()
-    if row is None:
-        return None
-    if (
-        row["detector_version"] != identity.detector_version
-        or row["detector_signature"] != identity.detector_signature
-        or row["zone_config_hash"] != identity.zone_config_hash
-        or row["input_hash"] != input_hash
-    ):
-        return None
-    try:
-        zones = json.loads(row["zones_json"])
-    except (TypeError, json.JSONDecodeError):
-        return None
-    if not _is_valid_cached_snapshot(zones, int(row["zone_count"]), int(zone_set_as_of)):
-        return None
-    return zones
+    hits = load_cached_zone_snapshots(
+        database_path,
+        exchange=exchange,
+        symbol=symbol,
+        watermarks=[int(zone_set_as_of)],
+        input_hashes={int(zone_set_as_of): input_hash},
+        identity=identity,
+    )
+    return hits.get(int(zone_set_as_of))
 
 
 def store_cached_zone_snapshot(
@@ -192,6 +228,30 @@ def _canonical_four_hour_row(row: Any) -> dict[str, Any]:
         "volume": None if volume is None or pd.isna(volume) else float(volume),
         "is_closed": int(getattr(row, "is_closed", 1)),
     }
+
+
+def _validated_cached_zones(
+    row: Any,
+    *,
+    identity: ZoneCacheIdentity,
+    input_hash: str,
+    zone_set_as_of: int,
+) -> list[dict[str, Any]] | None:
+    """Return decoded zones when identity, prefix hash, and snapshot shape all match."""
+    if (
+        row["detector_version"] != identity.detector_version
+        or row["detector_signature"] != identity.detector_signature
+        or row["zone_config_hash"] != identity.zone_config_hash
+        or row["input_hash"] != input_hash
+    ):
+        return None
+    try:
+        zones = json.loads(row["zones_json"])
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not _is_valid_cached_snapshot(zones, int(row["zone_count"]), int(zone_set_as_of)):
+        return None
+    return zones
 
 
 def _is_valid_cached_snapshot(zones: Any, expected_count: int, zone_set_as_of: int) -> bool:

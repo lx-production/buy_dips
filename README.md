@@ -109,6 +109,7 @@ Replay `support_close_v1` on stored closed 1h candles. The engine is the same as
 - `--end` defaults to after the latest closed 1h candle.
 - Requires continuous 1h data from `start - dip_lookback_hours` (default 48h). Incomplete overdue 4h buckets abort the run.
 - Zone snapshots are cached in the separate `backtest_zone_cache` table. The first run builds them; later runs reuse matching snapshots and build only new or stale 4h watermarks.
+- Cold rebuilds ingest each closed 4h candle once into `IncrementalZoneDetectorState`, then materialize/fingerprint at each cache miss. A fully warm run never creates that state.
 - Cache validity includes zone config, detector source code, and a cumulative hash of the exact 4h candle input. Config/code edits and historical candle changes invalidate affected snapshots automatically.
 - Output is BUY-only: CLI summary + CSV. HOLD is computed for correct replay but not printed or exported.
 
@@ -119,7 +120,7 @@ python3 -m src.cli backtest \
   --csv data/backtest_buys.csv
 ```
 
-CLI prints the range, evaluated candle count, zone snapshot count, cache hits, detector builds, BUY count, and CSV path.
+CLI prints the range, evaluated candle count, zone snapshot count, cache hits, detector builds, incremental ingest/scan counts, BUY count, and CSV path.
 
 BUY CSV columns:
 
@@ -139,7 +140,7 @@ python3 scripts/benchmark_backtest.py \
   --json data/backtest_zone_benchmark.json
 ```
 
-Stdout prints elapsed time, snapshot count, detector builds, and cache hits as text plus JSON. `--config` is optional YAML for zone/strategy settings only.
+Stdout prints elapsed time, snapshot count, detector builds, cache hits, incremental ingest/scan counts, as text plus JSON. `--config` is optional YAML for zone/strategy settings only.
 
 Golden tests in `tests/test_incremental_zone_detector.py` lock current stateless detector snapshots at every 4h prefix (in memory, not committed). `IncrementalZoneDetectorState` must deep-equal that oracle after each `advance`. Extract-then-materialize stays the live-path reference.
 
@@ -256,7 +257,7 @@ Detector lives under `src/zones/` and stays support-oriented. Tune swing sensiti
 High level:
 
 - The public detector extracts features from closed 4h OHLC, then materializes the ladder from that evidence bag. Output and knobs are unchanged.
-- Offline incremental ingest (`IncrementalZoneDetectorState`) can emit that same evidence bag one closed 4h candle at a time. Live `refresh_zones` still uses the stateless full-frame path.
+- Offline incremental ingest (`IncrementalZoneDetectorState`) is used by cold backtest cache misses. Live `refresh_zones` still uses the stateless full-frame path.
 - High/low/body ranges detect internal and external swing points on closed 4h OHLC.
 - External swings are filtered into prominent pivots with ATR/percent thresholds.
 - Support evidence includes swing lows, reclaimed resistance, wick-floor retests, derived 1D body-support overlays, and **persistent wick floors**.
@@ -283,4 +284,4 @@ After each rebuild, `zone_refresh` resolves `source_indexes` → `source_open_ti
 pytest
 ```
 
-`tests/test_incremental_zone_detector.py` locks the current stateless detector as an in-memory prefix oracle and covers the zone-transition fixtures. Extract-then-materialize and `IncrementalZoneDetectorState.advance` must deep-equal that oracle at every golden prefix. Fail-closed tests cover out-of-order, duplicate, gapped, and unclosed 4h candles. `scripts/benchmark_backtest.py` measures cold/warm snapshot rebuilds on a temporary database copy.
+`tests/test_incremental_zone_detector.py` locks the current stateless detector as an in-memory prefix oracle and covers the zone-transition fixtures. Extract-then-materialize and `IncrementalZoneDetectorState.advance` must deep-equal that oracle at every golden prefix. Fail-closed tests cover out-of-order, duplicate, gapped, and unclosed 4h candles. Offline backtest uses that incremental state on cache misses. `scripts/benchmark_backtest.py` measures cold/warm snapshot rebuilds on a temporary database copy.

@@ -13,11 +13,13 @@ import pandas as pd
 from ..config import AppConfig
 from ..db import connect, load_candles_df
 from ..utils import ms_to_iso
+from ..zones import IncrementalZoneDetectorError
 from .aggregate_4h import OverdueIncompleteFourHourError, aggregate_four_hour_bucket
 from .constants import DETECTOR_VERSION, FOUR_HOURS_MS, HOURLY_TIMEFRAME, ONE_HOUR_MS, STRATEGY_VERSION, ZONE_TIMEFRAME
 from .signal import BUY, evaluate_support_close_v1
-from .backtest_zone_cache import ZoneCacheIdentity, build_four_hour_input_hashes, build_zone_cache_identity, load_cached_zone_snapshot, prune_incompatible_zone_cache, store_cached_zone_snapshot
-from .zone_refresh import ZoneRefreshError, build_fingerprinted_support_zones
+from .backtest_zone_cache import ZoneCacheIdentity, build_four_hour_input_hashes, build_zone_cache_identity, load_cached_zone_snapshots, prune_incompatible_zone_cache, store_cached_zone_snapshot
+from .backtest_zone_state import BacktestIncrementalZoneState
+from .zone_refresh import ZoneRefreshError, build_fingerprinted_support_zones, build_fingerprinted_support_zones_from_evidence
 
 
 BUY_CSV_COLUMNS = [
@@ -73,6 +75,8 @@ class BacktestResult:
     zone_cache_hit_count: int
     buy_count: int
     prior_buys: list[PriorBuy] = field(default_factory=list)
+    zone_state_ingested_candles: int = 0
+    zone_full_history_scans: int = 0
 
 
 def parse_backtest_bound(raw: str, *, label: str) -> int:
@@ -105,7 +109,11 @@ def run_backtest(
     end_ms: int | None = None,
     detector: Callable[..., dict[str, list[dict[str, Any]]]] | None = None,
 ) -> BacktestResult:
-    """Replay support_close_v1 over closed 1h candles without touching live tables."""
+    """Replay support_close_v1 over closed 1h candles without touching live tables.
+
+    Cache misses ingest 4h history once through incremental detector state. Injected
+    detectors keep the previous full-frame rebuild path so existing tests stay valid.
+    """
     _validate_bound_ms(start_ms, "start")
     if end_ms is not None:
         _validate_bound_ms(end_ms, "end")
@@ -158,6 +166,9 @@ def run_backtest(
     )
     cache_identity: ZoneCacheIdentity | None = None
     input_hashes: dict[int, str] = {}
+    cached_hits: dict[int, list[dict[str, Any]]] = {}
+    incremental_state: BacktestIncrementalZoneState | None = None
+    # Production path hashes prefixes once and bulk-loads cache hits. Injected detectors skip both.
     if detector is None:
         cache_identity = build_zone_cache_identity(config.zones)
         input_hashes = build_four_hour_input_hashes(four_hour_history)
@@ -165,6 +176,15 @@ def run_backtest(
             database_path,
             exchange=config.exchange,
             symbol=config.symbol,
+            identity=cache_identity,
+        )
+        requested_watermarks = _requested_zone_watermarks(display, four_hour_history)
+        cached_hits = load_cached_zone_snapshots(
+            database_path,
+            exchange=config.exchange,
+            symbol=config.symbol,
+            watermarks=requested_watermarks,
+            input_hashes=input_hashes,
             identity=cache_identity,
         )
 
@@ -197,23 +217,28 @@ def run_backtest(
                     f"Insufficient completed 4h history at trigger {ms_to_iso(trigger_open)}"
                 )
             input_hash = input_hashes.get(latest_completed)
-            cached_zones = None
-            if cache_identity is not None and input_hash is not None:
-                cached_zones = load_cached_zone_snapshot(
-                    database_path,
-                    exchange=config.exchange,
-                    symbol=config.symbol,
-                    zone_set_as_of=latest_completed,
-                    input_hash=input_hash,
-                    identity=cache_identity,
-                )
+            cached_zones = cached_hits.get(latest_completed)
             if cached_zones is not None:
+                # Hits skip materialization. If state already exists, keep ingesting so the
+                # next miss snapshots the correct watermark.
+                if incremental_state is not None:
+                    try:
+                        incremental_state.advance_to(latest_completed)
+                    except IncrementalZoneDetectorError as exc:
+                        raise BacktestError(str(exc)) from exc
                 zones = cached_zones
                 zone_cache_hit_count += 1
             else:
                 try:
                     if detector_fn is None:
-                        zones = build_fingerprinted_support_zones(
+                        if incremental_state is None:
+                            incremental_state = BacktestIncrementalZoneState(
+                                config.zones,
+                                four_hour_history,
+                            )
+                        incremental_state.advance_to(latest_completed)
+                        zones = build_fingerprinted_support_zones_from_evidence(
+                            incremental_state.snapshot_evidence(latest_completed),
                             derived_frame,
                             zone_config=config.zones,
                             zone_set_as_of=latest_completed,
@@ -231,7 +256,7 @@ def run_backtest(
                             detector_version=DETECTOR_VERSION,
                             detector=detector_fn,
                         )
-                except ZoneRefreshError as exc:
+                except (ZoneRefreshError, IncrementalZoneDetectorError) as exc:
                     raise BacktestError(str(exc)) from exc
                 zone_rebuild_count += 1
                 if cache_identity is not None and input_hash is not None:
@@ -319,6 +344,12 @@ def run_backtest(
         zone_cache_hit_count=zone_cache_hit_count,
         buy_count=len(buys),
         prior_buys=prior_buys,
+        zone_state_ingested_candles=(
+            0 if incremental_state is None else incremental_state.ingested_candles
+        ),
+        zone_full_history_scans=(
+            0 if incremental_state is None else incremental_state.full_history_scans
+        ),
     )
 
 
@@ -408,6 +439,8 @@ def backtest_api_payload(result: BacktestResult, *, config: AppConfig) -> dict[s
             "zone_snapshot_count": result.zone_snapshot_count,
             "zone_rebuild_count": result.zone_rebuild_count,
             "zone_cache_hit_count": result.zone_cache_hit_count,
+            "zone_state_ingested_candles": result.zone_state_ingested_candles,
+            "zone_full_history_scans": result.zone_full_history_scans,
             "buy_count": result.buy_count,
         },
         "candles": result.candles,
@@ -577,6 +610,23 @@ def _first_fully_covered_four_hour_bucket(hourly_start_ms: int) -> int:
     """Return the first 4h bucket whose four constituent hours are present in the 1h window."""
     start = int(hourly_start_ms)
     return ((start + FOUR_HOURS_MS - 1) // FOUR_HOURS_MS) * FOUR_HOURS_MS
+
+
+def _requested_zone_watermarks(display: pd.DataFrame, four_hour_history: pd.DataFrame) -> list[int]:
+    """Collect each 4h snapshot watermark the 1h replay will request, in order."""
+    watermarks: list[int] = []
+    replay_watermark: int | None = None
+    for open_time in display["open_time"].astype("int64").tolist():
+        now_ms = int(open_time) + ONE_HOUR_MS
+        latest_due = (now_ms // FOUR_HOURS_MS) * FOUR_HOURS_MS - FOUR_HOURS_MS
+        if replay_watermark is not None and latest_due <= replay_watermark:
+            continue
+        _, latest_completed = _four_hour_frame_as_of(four_hour_history, now_ms=now_ms)
+        if latest_completed is None:
+            break
+        watermarks.append(latest_completed)
+        replay_watermark = latest_completed
+    return watermarks
 
 
 def _four_hour_frame_as_of(

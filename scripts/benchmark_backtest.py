@@ -73,6 +73,8 @@ def run_timed_backtest(config: AppConfig, database_path: Path, start_ms: int, en
         "zone_snapshot_count": result.zone_snapshot_count,
         "zone_rebuild_count": result.zone_rebuild_count,
         "zone_cache_hit_count": result.zone_cache_hit_count,
+        "zone_state_ingested_candles": result.zone_state_ingested_candles,
+        "zone_full_history_scans": result.zone_full_history_scans,
         "buy_count": result.buy_count,
     }
 
@@ -97,6 +99,8 @@ def build_benchmark_report(
             "elapsed_seconds": cold["elapsed_seconds"],
             "zone_rebuild_count": cold["zone_rebuild_count"],
             "zone_cache_hit_count": cold["zone_cache_hit_count"],
+            "zone_state_ingested_candles": cold["zone_state_ingested_candles"],
+            "zone_full_history_scans": cold["zone_full_history_scans"],
         },
         "warm": None
         if warm is None
@@ -104,6 +108,8 @@ def build_benchmark_report(
             "elapsed_seconds": warm["elapsed_seconds"],
             "zone_rebuild_count": warm["zone_rebuild_count"],
             "zone_cache_hit_count": warm["zone_cache_hit_count"],
+            "zone_state_ingested_candles": warm["zone_state_ingested_candles"],
+            "zone_full_history_scans": warm["zone_full_history_scans"],
         },
     }
 
@@ -122,7 +128,9 @@ def format_benchmark_report(report: dict[str, Any]) -> str:
             "cold: "
             f"elapsed_seconds={report['cold']['elapsed_seconds']} "
             f"rebuilds={report['cold']['zone_rebuild_count']} "
-            f"hits={report['cold']['zone_cache_hit_count']}"
+            f"hits={report['cold']['zone_cache_hit_count']} "
+            f"ingested={report['cold']['zone_state_ingested_candles']} "
+            f"scans={report['cold']['zone_full_history_scans']}"
         ),
     ]
     if warm:
@@ -130,7 +138,9 @@ def format_benchmark_report(report: dict[str, Any]) -> str:
             "warm: "
             f"elapsed_seconds={warm['elapsed_seconds']} "
             f"rebuilds={warm['zone_rebuild_count']} "
-            f"hits={warm['zone_cache_hit_count']}"
+            f"hits={warm['zone_cache_hit_count']} "
+            f"ingested={warm['zone_state_ingested_candles']} "
+            f"scans={warm['zone_full_history_scans']}"
         )
     lines.append(json.dumps(report, indent=2, sort_keys=True))
     return "\n".join(lines) + "\n"

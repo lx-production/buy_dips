@@ -11,7 +11,7 @@
 ## Trạng thái: đã implement
 
 - Replay: [src/trading/backtest.py](../../src/trading/backtest.py)
-- Shared zone build: `build_fingerprinted_support_zones` trong [src/trading/zone_refresh.py](../../src/trading/zone_refresh.py)
+- Shared zone build: `build_fingerprinted_support_zones` / `build_fingerprinted_support_zones_from_evidence` trong [src/trading/zone_refresh.py](../../src/trading/zone_refresh.py)
 - CLI: `python3 -m src.cli backtest --start <ISO> [--end <ISO>] --csv <path>`
 - Chart: [scripts/serve_backtest_chart.py](../../scripts/serve_backtest_chart.py) → [src/backtest_chart_server.py](../../src/backtest_chart_server.py) (page: [src/backtest_chart.html](../../src/backtest_chart.html))
 - Tests: [tests/test_backtest.py](../../tests/test_backtest.py)
@@ -26,12 +26,13 @@
   - `start` có thể nằm trên bất kỳ biên giờ UTC; bucket 4h derive đầu tiên là bucket đầu tiên được phủ đủ bốn nến 1h.
   - Dùng 4h lịch sử trước vùng 1h làm detector warm-up; từ vùng có 1h trở đi luôn derive 4h từ bốn nến 1h và không dùng 4h tương lai.
   - Mỗi bucket 4h được aggregate đúng một lần cho cả replay, sau đó frame as-of chỉ được cắt lại khi watermark 4h tiến lên.
-  - Mỗi zone snapshot được cache theo watermark cùng hash config detector, source code và prefix dữ liệu 4h. Cache stale/hỏng tự rebuild và overwrite; range mở rộng chỉ build watermark mới.
+  - Cold cache miss ingest 4h history một lần vào `IncrementalZoneDetectorState`, rồi `snapshot_evidence` + full materialization tại từng watermark thiếu. Warm path (mọi snapshot đều hit) không khởi tạo state.
+  - Mỗi zone snapshot được cache theo watermark cùng hash config detector, source code và prefix dữ liệu 4h. Cache stale/hỏng tự rebuild và overwrite; range mở rộng chỉ build watermark mới. Replay bulk-load cache hits bằng một SQLite connection.
   - Khởi tạo zone snapshot tại cây trigger đầu tiên, sau đó rebuild trong memory đúng lúc một 4h mới hoàn tất.
-  - Helper thuần dùng chung với live zone refresh: `build_fingerprinted_support_zones`.
+  - Helper thuần dùng chung với live zone refresh: `build_fingerprinted_support_zones` (stateless / injected detector) và `build_fingerprinted_support_zones_from_evidence` (incremental backtest).
   - Gọi `evaluate_support_close_v1(..., mode="backtest")`; mode này có trong pure engine nhưng không thêm vào schema `decisions`.
   - Setup đã BUY là danh sách in-memory theo `zone_lineage_id` (`fingerprint`) + `dip_origin_open_time` (và `trigger_open_time` cho cooldown 24h), bắt đầu rỗng tại `start`; không persist kết quả. Lineage không đổi khi zone thêm touch, nên cooldown/chart không reset chỉ vì evidence mới. Trong 24h cùng zone bị chặn dù có dip origin mới. Sau 24h zone chỉ reset khi có dip origin mới (close trên `internal_range_midpoint`).
-  - Trả về `BacktestResult` gồm nến trong khoảng hiển thị, danh sách BUY, zone snapshot/segment và thống kê `evaluated_candles`, `zone_snapshot_count`, `zone_cache_hit_count`, `zone_rebuild_count`, `buy_count`.
+  - Trả về `BacktestResult` gồm nến trong khoảng hiển thị, danh sách BUY, zone snapshot/segment và thống kê `evaluated_candles`, `zone_snapshot_count`, `zone_cache_hit_count`, `zone_rebuild_count`, `zone_state_ingested_candles`, `zone_full_history_scans`, `buy_count`.
 
 - CLI / CSV / visual server: như mô tả ở README.
 

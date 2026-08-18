@@ -44,7 +44,9 @@ Public entry: `detect_support_resistance_zones()` is a thin alias for `detect_su
 1. `extract_zone_detector_evidence(df, ...)` — one pass over the frame: coerce OHLC, ATR, raw/prominent/internal pivots, daily pivots, and first reclaim indexes.
 2. `materialize_support_zones(evidence, ...)` — candidates, clustering, rejection, daily/persistent overlay, gap-fill, and spacing. This half does not re-scan the raw frame for pivots.
 
-Live path stays on that stateless extract-then-materialize sequence. `IncrementalZoneDetectorState` in `src/zones/incremental.py` ingests closed 4h candles one at a time (`advance` then `snapshot_evidence`) and must emit the same `ZoneDetectorEvidence` as `extract_zone_detector_evidence` on the matching prefix. `materialize_support_zones` is unchanged. Backtest is not wired to this state yet.
+There is a second way to build the same evidence bag: `IncrementalZoneDetectorState` in `src/zones/incremental.py`. It ingests closed 4H candles in order (`advance`), then `snapshot_evidence(zone_set_as_of)` copies confirmed state into `ZoneDetectorEvidence`. Materialization does not care which path built the bag.
+
+Live `refresh_zones` still uses the full-frame extract. Offline backtest cache misses use incremental ingest and must emit the same fingerprinted zones as the full-frame detector at that watermark.
 
 ## Input and output
 
@@ -98,19 +100,12 @@ The last cleanup is a **ladder**: one zone per step. Two bands count as the same
 
 ```mermaid
 flowchart TD
-    ohlc[Closed 4H OHLC] --> extract[extract_zone_detector_evidence]
-    extract --> atr[ATR]
-    extract --> dailyPivots[Daily pivots]
-    extract --> reclaim[First reclaim indexes]
-    atr --> rawExt[Raw external pivots order 5]
-    atr --> internal[Internal pivots order 1]
-    rawExt --> prominent[Prominent external filter]
-    evidence[ZoneDetectorEvidence] --> materialize[materialize_support_zones]
-    prominent --> evidence
-    rawExt --> evidence
-    internal --> evidence
-    dailyPivots --> evidence
-    reclaim --> evidence
+    ohlc[Closed 4H prefix] --> extract[extract_zone_detector_evidence]
+    stream[Closed 4H candles in time order] --> incremental[IncrementalZoneDetectorState.advance]
+    incremental --> snapshot[snapshot_evidence]
+    extract --> evidence[ZoneDetectorEvidence]
+    snapshot --> evidence
+    evidence --> materialize[materialize_support_zones]
     materialize --> candidates[Structural candidates]
     candidates --> structural[Build structural zones]
     evidence --> local[Build local reaction zones]
@@ -126,9 +121,36 @@ flowchart TD
     space2 --> support[support list sorted low to high]
 ```
 
+## Incremental evidence (same bag, bar by bar)
+
+`extract_zone_detector_evidence` re-scans the whole prefix on every call. `IncrementalZoneDetectorState` keeps arrays and confirmed pivots between bars so each new closed 4H candle is ingested once.
+
+It does **not** update the final zone list. Final zones have already dropped suppressed pivots, so they cannot reconstruct confirmation, reclaim, daily overlay, or local lookback. The incremental object only maintains **evidence**. Zones still come from `materialize_support_zones`.
+
+```python
+state = IncrementalZoneDetectorState(zone_config)
+state.advance(four_hour_candle)
+evidence = state.snapshot_evidence(zone_set_as_of)
+zones = materialize_support_zones(evidence, ...)
+```
+
+`zone_set_as_of` must be the last ingested 4H `open_time`. A mismatch fails closed. Snapshot copies lists so callers cannot mutate detector state. If the series is shorter than `2 * external_swing_order + 1` bars, or the prominent-external list is empty, snapshot returns `None` — same early-exit as the full-frame extract.
+
+**Per closed 4H candle `advance` does:**
+
+1. Require a closed bar, Binance UTC 4H alignment, strictly increasing `open_time`, no duplicates, and no missing 4H bucket. Anything else raises `IncrementalZoneDetectorError`.
+2. Append OHLC and update Wilder ATR from this bar plus the previous close. ATR at an index never uses a later candle.
+3. Confirm at most one new **internal** center (1 bar of right context) and one new **external** center (`external_swing_order` bars of right context). Pivots at the right edge stay unconfirmed until that window fills — no look-ahead.
+4. When a **high** pivot confirms, scan closes from that pivot through the current watermark. Reclaim can already have printed on the right-side bars that were required for confirmation. If not, the high stays pending.
+5. The new close can also reclaim older pending highs. The first reclaim index is frozen and never moved.
+6. Fold a new external pivot into the prominent reducer, including replace-last when the same kind prints a more extreme wick.
+7. Accumulate the current UTC day. A daily candle is finalized only after **six** closed 4H bars that day. Incomplete days never become daily OHLC. After a day is complete, extra 4H bars in that same UTC day fail closed. Daily external pivots then confirm with the same right-side rule on the daily series.
+
+Parity rule: after ingesting a prefix, `snapshot_evidence` plus materialize must deep-equal `extract_zone_detector_evidence` plus materialize on that same prefix. No field may use a candle after the watermark.
+
 ## Pipeline, step by step
 
-Extraction (`extract_zone_detector_evidence`) owns steps 1–3 plus daily pivot finding and first reclaim indexes. Materialization (`materialize_support_zones`) owns steps 4–end and reads only `ZoneDetectorEvidence`.
+Extraction owns steps 1–3 plus daily pivot finding and first reclaim indexes. The full-frame function is `extract_zone_detector_evidence`. Incremental `advance` / `snapshot_evidence` must produce the same `ZoneDetectorEvidence` at the same prefix. Materialization (`materialize_support_zones`) owns steps 4–end and reads only that bag.
 
 ### 1. Clean candles and compute ATR
 
@@ -394,7 +416,7 @@ Do not filter the trading candidate list by `price_state`. Below-zone entries ne
 
 ## After the detector: identity and rebuild
 
-The detector is stateless. Every rebuild sees the full closed-4H history through the target bar and emits a fresh list. Persistence and identity happen in `zone_refresh`, shared by live and backtest.
+The public detector is still a full-prefix extract: live rebuilds pass the whole closed-4H history through the target bar and emit a fresh list. Incremental state is only an equivalent way to fill `ZoneDetectorEvidence` as bars arrive; it does not persist zones. Persistence and identity happen in `zone_refresh`, shared by live and backtest.
 
 **When it rebuilds (live):**
 
@@ -431,8 +453,8 @@ If the finder returns no zones, the decision engine simply sees “close outside
 ## What this algo does not do
 
 - It does not emit resistance zones as a separate product. Overhead shelves stay in `support` with a `resistance` price_state label.
-- It does not use open 4H bars. No look-ahead pivots.
-- It does not fetch prices. Callers hand it a closed 4H frame.
+- It does not use open 4H bars. No look-ahead pivots. Incremental ingest rejects `is_closed != 1` and only confirms a center after the right-side window is filled.
+- It does not fetch prices. Callers hand it a closed 4H frame, or feed those same closed bars one at a time into `IncrementalZoneDetectorState`.
 - It does not persist anything. `zone_refresh` / backtest cache do that.
 - It does not score a BUY. No distance-to-zone heuristics live here anymore.
 - Most thresholds (`$500`, `$650`, `$1000`, `2%` wick, `$4000` early stairs, `$1800` final gap-fill) are code constants, not YAML.
@@ -451,4 +473,4 @@ python3 scripts/serve_chart.py
 
 Helper chart of the latest 4H zones. For readability it only draws a few bands near price; the detector itself is unchanged.
 
-Offline backtest rebuilds the same fingerprinted zones on each newly completed 4H bar via `build_fingerprinted_support_zones`.
+Offline backtest rebuilds fingerprinted zones on each newly completed 4H bar. Cache misses use incremental evidence plus `build_fingerprinted_support_zones_from_evidence`; injected-detector tests still use the stateless `build_fingerprinted_support_zones` path.
