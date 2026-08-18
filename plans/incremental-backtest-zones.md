@@ -247,6 +247,22 @@ Không đổi thuật toán. Chỉ đổi cách tra cứu trên cùng evidence:
 
 Acceptance: parity với stateless oracle; cold/warm benchmark cùng fixture. Target cold vẫn `<=20s`.
 
+#### Kết quả đo Bước 5b (2026-08-18, sau tối ưu lookup)
+
+Machine / fixture giống Bước 5: macOS 26.5.2 arm64, Python 3.11.14, source DB copy only, `2026-06-01T00:00:00Z` → `2026-08-13T06:00:00Z`, config mặc định.
+
+Official cold + warm (một temp copy, cache cleared trước cold):
+
+- 1.758 nến 1h, 440 snapshots, 32 BUY.
+- Cold: `14,596s`, 440 rebuilds, 0 hits, 5.899 candles ingested, 1 full-history scan.
+  Baseline cold `56,4s` → khoảng `3,9x`. Milestone 1 sau ingest `31,866s` → khoảng `2,2x`. Target `<=20s` **đạt**.
+- Warm: `2,331s`, 0 rebuilds, 440 hits, 0 ingested, 0 scans. Baseline warm `2,23s` → chậm `4,5%`, trong hạn `10%`.
+
+Quyết định:
+
+- **Ship Milestone 1** (incremental evidence + full materialize + lookup 5b) theo gate cold `<=20s` và warm `<=10%`.
+- **Không làm Milestone 2 lúc này.** Còn ~9s so với sàn 5s, không đủ để đổi lấy dirty-component complexity.
+
 ### Bước 6 — Milestone 2: dirty price-component materialization (optional)
 
 Chỉ bắt đầu sau decision gate ở Bước 5.
