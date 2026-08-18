@@ -18,7 +18,8 @@ The output is a list of support zones, sorted low → high. Zones currently **ab
 
 Detector pipeline (pure, no database):
 
-- `src/zones/detector.py` — orchestration only
+- `src/zones/detector.py` — orchestration only: extract evidence, then materialize zones
+- `src/zones/incremental.py` — stateful 4h ingest that snapshots the same `ZoneDetectorEvidence` bag
 - `src/zones/ohlc.py` — clean OHLC + ATR
 - `src/zones/pivots.py` — swing highs/lows + prominence filter
 - `src/zones/candidates.py` — turn pivots into support evidence
@@ -29,7 +30,7 @@ Detector pipeline (pure, no database):
 - `src/zones/daily.py` — 1D body-support overlay
 - `src/zones/persistent.py` — pinned long-wick floors
 - `src/zones/postprocess.py` — overlap collapse, spacing, staircase gap-fill
-- `src/zones/types.py` — constants and pivot/candidate types
+- `src/zones/types.py` — constants, pivot/candidate types, and `ZoneDetectorEvidence`
 - `src/zones/state.py` — `price_state` label only
 - `src/zones/timeframes.py` — 4H → daily aggregation
 
@@ -38,7 +39,12 @@ After detection (live + backtest, not inside the detector):
 - `src/trading/zone_refresh.py` — when to rebuild, persist snapshot
 - `src/trading/zone_identity.py` — map `source_indexes` → times + `zf1` hashes
 
-Public entry: `detect_support_resistance_zones()` is a thin alias for `detect_support_resistance_zones_structure_v1()`.
+Public entry: `detect_support_resistance_zones()` is a thin alias for `detect_support_resistance_zones_structure_v1()`. That public function still takes a full 4H frame and returns the same zone dicts. Internally it is two steps:
+
+1. `extract_zone_detector_evidence(df, ...)` — one pass over the frame: coerce OHLC, ATR, raw/prominent/internal pivots, daily pivots, and first reclaim indexes.
+2. `materialize_support_zones(evidence, ...)` — candidates, clustering, rejection, daily/persistent overlay, gap-fill, and spacing. This half does not re-scan the raw frame for pivots.
+
+Live path stays on that stateless extract-then-materialize sequence. `IncrementalZoneDetectorState` in `src/zones/incremental.py` ingests closed 4h candles one at a time (`advance` then `snapshot_evidence`) and must emit the same `ZoneDetectorEvidence` as `extract_zone_detector_evidence` on the matching prefix. `materialize_support_zones` is unchanged. Backtest is not wired to this state yet.
 
 ## Input and output
 
@@ -92,14 +98,22 @@ The last cleanup is a **ladder**: one zone per step. Two bands count as the same
 
 ```mermaid
 flowchart TD
-    ohlc[Closed 4H OHLC] --> atr[ATR]
+    ohlc[Closed 4H OHLC] --> extract[extract_zone_detector_evidence]
+    extract --> atr[ATR]
+    extract --> dailyPivots[Daily pivots]
+    extract --> reclaim[First reclaim indexes]
     atr --> rawExt[Raw external pivots order 5]
     atr --> internal[Internal pivots order 1]
     rawExt --> prominent[Prominent external filter]
-    prominent --> candidates[Structural candidates]
-    rawExt --> candidates
+    evidence[ZoneDetectorEvidence] --> materialize[materialize_support_zones]
+    prominent --> evidence
+    rawExt --> evidence
+    internal --> evidence
+    dailyPivots --> evidence
+    reclaim --> evidence
+    materialize --> candidates[Structural candidates]
     candidates --> structural[Build structural zones]
-    internal --> local[Build local reaction zones]
+    evidence --> local[Build local reaction zones]
     structural --> concat[Concat structural + local]
     local --> concat
     concat --> stairs[Fill wide staircase gaps]
@@ -113,6 +127,8 @@ flowchart TD
 ```
 
 ## Pipeline, step by step
+
+Extraction (`extract_zone_detector_evidence`) owns steps 1–3 plus daily pivot finding and first reclaim indexes. Materialization (`materialize_support_zones`) owns steps 4–end and reads only `ZoneDetectorEvidence`.
 
 ### 1. Clean candles and compute ATR
 

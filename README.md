@@ -141,7 +141,7 @@ python3 scripts/benchmark_backtest.py \
 
 Stdout prints elapsed time, snapshot count, detector builds, and cache hits as text plus JSON. `--config` is optional YAML for zone/strategy settings only.
 
-Golden tests in `tests/test_incremental_zone_detector.py` lock current stateless detector snapshots at every 4h prefix (in memory, not committed). They are the oracle for a later incremental detector.
+Golden tests in `tests/test_incremental_zone_detector.py` lock current stateless detector snapshots at every 4h prefix (in memory, not committed). `IncrementalZoneDetectorState` must deep-equal that oracle after each `advance`. Extract-then-materialize stays the live-path reference.
 
 ## Print Zones
 
@@ -255,6 +255,8 @@ Detector lives under `src/zones/` and stays support-oriented. Tune swing sensiti
 
 High level:
 
+- The public detector extracts features from closed 4h OHLC, then materializes the ladder from that evidence bag. Output and knobs are unchanged.
+- Offline incremental ingest (`IncrementalZoneDetectorState`) can emit that same evidence bag one closed 4h candle at a time. Live `refresh_zones` still uses the stateless full-frame path.
 - High/low/body ranges detect internal and external swing points on closed 4h OHLC.
 - External swings are filtered into prominent pivots with ATR/percent thresholds.
 - Support evidence includes swing lows, reclaimed resistance, wick-floor retests, derived 1D body-support overlays, and **persistent wick floors**.
@@ -281,4 +283,4 @@ After each rebuild, `zone_refresh` resolves `source_indexes` → `source_open_ti
 pytest
 ```
 
-`tests/test_incremental_zone_detector.py` locks the current stateless detector as an in-memory prefix oracle and covers the zone-transition fixtures for a later incremental rebuild. `scripts/benchmark_backtest.py` measures cold/warm snapshot rebuilds on a temporary database copy.
+`tests/test_incremental_zone_detector.py` locks the current stateless detector as an in-memory prefix oracle and covers the zone-transition fixtures. Extract-then-materialize and `IncrementalZoneDetectorState.advance` must deep-equal that oracle at every golden prefix. Fail-closed tests cover out-of-order, duplicate, gapped, and unclosed 4h candles. `scripts/benchmark_backtest.py` measures cold/warm snapshot rebuilds on a temporary database copy.

@@ -10,9 +10,11 @@ from datetime import datetime, timezone
 
 from typing import Any
 
+import pytest
 import numpy as np
 import pandas as pd
 
+from src.config import ZoneConfig
 from src.db import connect, init_db, upsert_candles
 from src.zones.daily import DAILY_ZONE_MIN_BARS_PER_DAY
 from src.zones.timeframes import aggregate_ohlc_to_daily
@@ -21,7 +23,8 @@ from src.trading.constants import FOUR_HOURS_MS, ONE_HOUR_MS
 from src.zones.ohlc import _average_true_range, _coerce_ohlc
 from src.zones.types import STRUCTURE_LOCAL_REACTION_LOOKBACK_BARS
 from src.zones.rejections import _build_split_rejection_zone_pairs
-from src.zones.detector import detect_support_resistance_zones_structure_v1
+from src.zones.detector import detect_support_resistance_zones_structure_v1, extract_zone_detector_evidence, materialize_support_zones
+from src.zones.incremental import IncrementalZoneDetectorError, IncrementalZoneDetectorState
 from src.zones.candidates import _first_reclaim_index, _high_is_confirmed_reclaimed
 from src.zones.pivots import _filter_prominent_structure_pivots, _find_structure_pivots
 
@@ -87,6 +90,30 @@ def canonicalize_zone_snapshot(zones: list[dict[str, Any]] | None) -> list[dict[
 # Run the current stateless detector and return a canonical support snapshot.
 def detect_canonical_support_snapshot(df: pd.DataFrame, **detector_kwargs: Any) -> list[dict[str, Any]]:
     result = detect_support_resistance_zones_structure_v1(df, **detector_kwargs)
+    return canonicalize_zone_snapshot(result.get("support") or [])
+
+
+# Same snapshot via the split extract/materialize path used by the public detector.
+def detect_canonical_support_snapshot_from_evidence(df: pd.DataFrame, **detector_kwargs: Any) -> list[dict[str, Any]]:
+    extract_keys = (
+        "current_price",
+        "external_swing_order",
+        "atr_period",
+        "break_atr_mult",
+        "external_min_swing_atr_mult",
+        "external_min_swing_pct",
+    )
+    materialize_keys = ("min_touches", "buffer_pct", "break_atr_mult")
+    evidence = extract_zone_detector_evidence(
+        df,
+        **{key: detector_kwargs[key] for key in extract_keys if key in detector_kwargs},
+    )
+    if evidence is None:
+        return []
+    result = materialize_support_zones(
+        evidence,
+        **{key: detector_kwargs[key] for key in materialize_keys if key in detector_kwargs},
+    )
     return canonicalize_zone_snapshot(result.get("support") or [])
 
 
@@ -375,6 +402,208 @@ def test_daily_overlay_and_gap_fill_winner_can_change_on_a_new_prefix() -> None:
     winners_before = {(zone["low"], zone["high"], zone["origin"]) for zone in oracle[first_daily].zones}
     winners_after = {(zone["low"], zone["high"], zone["origin"]) for zone in changed[-1].zones}
     assert winners_before != winners_after
+
+
+# After the extract/materialize split, every golden prefix must still match the stateless detector.
+def test_extract_then_materialize_matches_stateless_oracle_on_golden_prefixes() -> None:
+    for df, kwargs in _golden_prefix_frames():
+        oracle = lock_stateless_prefix_oracle(df, **kwargs)
+        for snapshot in oracle:
+            prefix = df.iloc[: snapshot.prefix_len].reset_index(drop=True)
+            assert detect_canonical_support_snapshot_from_evidence(prefix, **kwargs) == snapshot.zones
+
+
+# After each advance, incremental evidence + materialize must match the stateless prefix oracle.
+def test_incremental_advance_matches_stateless_oracle_on_golden_prefixes() -> None:
+    for df, kwargs in _golden_prefix_frames():
+        oracle = lock_stateless_prefix_oracle(df, **kwargs)
+        state = IncrementalZoneDetectorState(_zone_config_from_kwargs(kwargs))
+        for snapshot in oracle:
+            row = df.iloc[snapshot.prefix_len - 1]
+            state.advance(row)
+            prefix = df.iloc[: snapshot.prefix_len].reset_index(drop=True)
+            evidence = state.snapshot_evidence(int(row["open_time"]))
+            _assert_evidence_matches(evidence, extract_zone_detector_evidence(prefix, **_extract_kwargs(kwargs)))
+            assert _canonical_zones_from_evidence(evidence, kwargs) == snapshot.zones
+
+
+# Out-of-order, duplicate, gapped, unclosed, and unaligned candles must fail closed.
+def test_incremental_rejects_out_of_order_duplicate_gap_and_unclosed_candles() -> None:
+    df = _ohlc_from_rows(
+        [
+            (67000, 67100, 66900, 67000),
+            (66900, 67000, 66800, 66900),
+            (66800, 66900, 66700, 66800),
+        ]
+    )
+    state = IncrementalZoneDetectorState(ZoneConfig())
+    first = df.iloc[0].to_dict()
+    second = df.iloc[1].to_dict()
+    third = df.iloc[2].to_dict()
+    state.advance(first)
+
+    duplicate = dict(second)
+    duplicate["open_time"] = int(first["open_time"])
+    with pytest.raises(IncrementalZoneDetectorError, match="duplicate"):
+        state.advance(duplicate)
+
+    out_of_order = dict(second)
+    out_of_order["open_time"] = int(first["open_time"]) - FOUR_HOUR_MS
+    with pytest.raises(IncrementalZoneDetectorError, match="out-of-order"):
+        state.advance(out_of_order)
+
+    with pytest.raises(IncrementalZoneDetectorError, match="gap"):
+        state.advance(third)
+
+    unclosed = dict(second)
+    unclosed["is_closed"] = 0
+    with pytest.raises(IncrementalZoneDetectorError, match="not closed"):
+        state.advance(unclosed)
+
+    unaligned = dict(second)
+    unaligned["open_time"] = int(second["open_time"]) + 1
+    with pytest.raises(IncrementalZoneDetectorError, match="aligned"):
+        state.advance(unaligned)
+
+    with pytest.raises(IncrementalZoneDetectorError, match="zone_set_as_of"):
+        state.snapshot_evidence(int(second["open_time"]))
+
+    state.advance(second)
+    assert state.snapshot_evidence(int(second["open_time"])) is None
+
+
+# Fixture set covering the step-1 transitions, reused by extract and incremental parity tests.
+def _golden_prefix_frames() -> list[tuple[pd.DataFrame, dict[str, Any]]]:
+    frames: list[tuple[pd.DataFrame, dict[str, Any]]] = [
+        (
+            _ohlc_from_rows(
+                [
+                    (67000, 67100, 66900, 67000),
+                    (66900, 67000, 66800, 66900),
+                    (66000, 66100, 65900, 66000),
+                    (66100, 66200, 66000, 66100),
+                    (66200, 66300, 66100, 66200),
+                    (66300, 66400, 66200, 66300),
+                ]
+            ),
+            dict(RELAXED_DETECTOR),
+        ),
+        (
+            _ohlc_from_rows(
+                [
+                    (67000, 67150, 66900, 67050),
+                    (67050, 67200, 66950, 67100),
+                    (66000, 66100, 65800, 65950),
+                    (66100, 66250, 66050, 66200),
+                    (66200, 66400, 66150, 66350),
+                    (66350, 66500, 66250, 66450),
+                ]
+            ),
+            dict(RELAXED_DETECTOR),
+        ),
+        (_local_lookback_expiry_frame(), dict(RELAXED_DETECTOR)),
+        (
+            _ohlc_from_rows(
+                [
+                    (65000, 65100, 64800, 64950),
+                    (64950, 67000, 64900, 66800),
+                    (66800, 66900, 66400, 66500),
+                    (66500, 66600, 66300, 66400),
+                    (66400, 66500, 66200, 66300),
+                    (67600, 67700, 67500, 67650),
+                ]
+            ),
+            {**RELAXED_DETECTOR, "external_swing_order": 1},
+        ),
+        (_ohlc_from_rows(_delayed_high_reclaim_rows()), {**RELAXED_DETECTOR, "external_swing_order": 5}),
+        (_ohlc_from_rows(_prominent_replace_rows()), {**RELAXED_DETECTOR, "external_min_swing_pct": 2.5, "external_min_swing_atr_mult": 0.0}),
+        (
+            _ohlc_from_rows(
+                [
+                    (63000, 63200, 62800, 63100),
+                    (63100, 64000, 62900, 63800),
+                    (61410.98, 62000.0, 59005.0, 61500.0),
+                    (61500, 63000, 61000, 62800),
+                    (62800, 63500, 62000, 63200),
+                    (60300.24, 61000.0, 59130.91, 60500.0),
+                    (60500, 62000, 60000, 61800),
+                    (61800, 62500, 61200, 62200),
+                ]
+            ),
+            {**RELAXED_DETECTOR, "external_swing_order": 1},
+        ),
+        (_split_rejection_frame(), {**RELAXED_DETECTOR, "external_swing_order": 1}),
+    ]
+    daily_candles: list[dict[str, float | int]] = []
+    daily_candles.extend(_four_hour_day(0, 65000.0, 66000.0, 63000.0, 64000.0))
+    daily_candles.extend(_four_hour_day(1, 64000.0, 65000.0, 61000.0, 62000.0))
+    daily_candles.extend(_four_hour_day(2, 60672.01, 60841.63, 56552.82, 58364.97))
+    daily_candles.extend(_four_hour_day(3, 58364.97, 62000.0, 59000.0, 61000.0))
+    daily_candles.extend(_four_hour_day(4, 61000.0, 65000.0, 62000.0, 64000.0))
+    daily_candles.extend(_four_hour_day(5, 64000.0, 68000.0, 63000.0, 67000.0))
+    frames.append((pd.DataFrame(daily_candles), {**RELAXED_DETECTOR, "external_swing_order": 1}))
+    return frames
+
+
+# Map detector kwargs onto ZoneConfig fields used by incremental ingest.
+def _zone_config_from_kwargs(kwargs: dict[str, Any]) -> ZoneConfig:
+    fields: dict[str, Any] = {}
+    if "min_touches" in kwargs:
+        fields["min_touches"] = kwargs["min_touches"]
+    if "buffer_pct" in kwargs:
+        fields["role_buffer_pct"] = kwargs["buffer_pct"]
+    if "external_swing_order" in kwargs:
+        fields["external_swing_order"] = kwargs["external_swing_order"]
+    if "atr_period" in kwargs:
+        fields["atr_period"] = kwargs["atr_period"]
+    if "break_atr_mult" in kwargs:
+        fields["break_atr_mult"] = kwargs["break_atr_mult"]
+    if "external_min_swing_atr_mult" in kwargs:
+        fields["external_min_swing_atr_mult"] = kwargs["external_min_swing_atr_mult"]
+    if "external_min_swing_pct" in kwargs:
+        fields["external_min_swing_pct"] = kwargs["external_min_swing_pct"]
+    return ZoneConfig(**fields)
+
+
+# Extract-only knobs from a detector kwargs dict, ignoring materialize-only keys.
+def _extract_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    keys = (
+        "current_price",
+        "external_swing_order",
+        "atr_period",
+        "break_atr_mult",
+        "external_min_swing_atr_mult",
+        "external_min_swing_pct",
+    )
+    return {key: kwargs[key] for key in keys if key in kwargs}
+
+
+# Materialize incremental or stateless evidence with the same detector knobs as the oracle.
+def _canonical_zones_from_evidence(evidence: Any, kwargs: dict[str, Any]) -> list[dict[str, Any]]:
+    if evidence is None:
+        return []
+    materialize_keys = ("min_touches", "buffer_pct", "break_atr_mult")
+    result = materialize_support_zones(
+        evidence,
+        **{key: kwargs[key] for key in materialize_keys if key in kwargs},
+    )
+    return canonicalize_zone_snapshot(result.get("support") or [])
+
+
+# Compare incremental vs stateless evidence field-by-field, including pivot roles and reclaim indexes.
+def _assert_evidence_matches(incremental: Any, stateless: Any) -> None:
+    if incremental is None or stateless is None:
+        assert incremental is None and stateless is None
+        return
+    pd.testing.assert_frame_equal(incremental.ohlc.reset_index(drop=True), stateless.ohlc.reset_index(drop=True), check_dtype=False)
+    np.testing.assert_allclose(incremental.closes, stateless.closes)
+    assert incremental.current_price == pytest.approx(stateless.current_price)
+    assert incremental.raw_external_pivots == stateless.raw_external_pivots
+    assert incremental.external_pivots == stateless.external_pivots
+    assert incremental.internal_pivots == stateless.internal_pivots
+    assert incremental.daily_pivots == stateless.daily_pivots
+    assert incremental.first_reclaim_indexes == stateless.first_reclaim_indexes
+
 
 
 # The benchmark must copy SQLite, write cache only on the copy, and emit stable JSON keys.

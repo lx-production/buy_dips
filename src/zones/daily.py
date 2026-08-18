@@ -3,28 +3,25 @@ from __future__ import annotations
 from typing import Any
 
 from .factory import Zone, _make_support_zone
-from .ohlc import _average_true_range, _coerce_ohlc
-from .pivots import _filter_prominent_structure_pivots, _find_structure_pivots, _label_structure_pivots
 from .timeframes import aggregate_ohlc_to_daily
-from .types import STRUCTURE_ADJACENT_ZONE_MIN_GAP
+from .ohlc import _average_true_range, _coerce_ohlc
+from .types import STRUCTURE_ADJACENT_ZONE_MIN_GAP, StructurePivot
+from .pivots import _filter_prominent_structure_pivots, _find_structure_pivots, _label_structure_pivots
 
 
 DAILY_ZONE_MIN_BARS_PER_DAY = 6
 DAILY_ZONE_SCORE_BONUS = 100.0
 
 
-# Build body-style support zones from daily swing lows after aggregating intraday OHLC.
-def _build_daily_body_support_zones(
+# Find prominent daily swing pivots from completed UTC days. Zone dicts are built later.
+def _extract_daily_structure_pivots(
     df: Any,
     *,
-    zone_width: float,
-    current_price: float,
-    buffer_pct: float,
     external_swing_order: int,
     atr_period: int,
     external_min_swing_atr_mult: float,
     external_min_swing_pct: float,
-) -> list[Zone]:
+) -> list[StructurePivot]:
     daily_df = aggregate_ohlc_to_daily(df, min_bars_per_day=DAILY_ZONE_MIN_BARS_PER_DAY)
     ohlc = _coerce_ohlc(daily_df)
     if ohlc is None:
@@ -45,7 +42,17 @@ def _build_daily_body_support_zones(
         min_swing_pct=external_min_swing_pct,
     )
     _label_structure_pivots(daily_pivots)
+    return daily_pivots
 
+
+# Turn extracted daily low pivots into fixed-width body-support zones.
+def _daily_body_support_zones_from_pivots(
+    daily_pivots: list[StructurePivot],
+    *,
+    zone_width: float,
+    current_price: float,
+    buffer_pct: float,
+) -> list[Zone]:
     zones: list[Zone] = []
     for pivot in daily_pivots:
         if pivot.kind != "low":
@@ -73,6 +80,33 @@ def _build_daily_body_support_zones(
         zones.append(zone)
 
     return zones
+
+
+# Build body-style support zones from daily swing lows after aggregating intraday OHLC.
+def _build_daily_body_support_zones(
+    df: Any,
+    *,
+    zone_width: float,
+    current_price: float,
+    buffer_pct: float,
+    external_swing_order: int,
+    atr_period: int,
+    external_min_swing_atr_mult: float,
+    external_min_swing_pct: float,
+) -> list[Zone]:
+    daily_pivots = _extract_daily_structure_pivots(
+        df,
+        external_swing_order=external_swing_order,
+        atr_period=atr_period,
+        external_min_swing_atr_mult=external_min_swing_atr_mult,
+        external_min_swing_pct=external_min_swing_pct,
+    )
+    return _daily_body_support_zones_from_pivots(
+        daily_pivots,
+        zone_width=zone_width,
+        current_price=current_price,
+        buffer_pct=buffer_pct,
+    )
 
 
 # Merge daily zones into the main list, replacing overlapping zones that daily can supersede

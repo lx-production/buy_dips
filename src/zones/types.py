@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+
 from typing import Literal
+
+import numpy as np
+import pandas as pd
 
 
 PivotKind = Literal["high", "low"]
@@ -44,3 +48,16 @@ class SupportCandidate:
     structure_role: str
     bounds_style: BoundsStyle = "body"
     broken_index: int | None = None
+
+
+# Snapshot of detector features at one watermark. Materialization reads only this bag.
+@dataclass(eq=False)
+class ZoneDetectorEvidence:
+    ohlc: pd.DataFrame # canonical numeric OHLC view used by rejection overlays
+    closes: np.ndarray # close series aligned with ohlc row indexes
+    current_price: float # last close, or the caller override captured at extract time
+    raw_external_pivots: list[StructurePivot]
+    external_pivots: list[StructurePivot] # prominent external subset
+    internal_pivots: list[StructurePivot]
+    daily_pivots: list[StructurePivot] # prominent daily swings, already structure-labeled
+    first_reclaim_indexes: dict[tuple[SwingTerm, int], int] # (term, pivot index) -> first close-through bar

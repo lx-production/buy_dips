@@ -7,6 +7,7 @@ import src.zones.detector as detector_module
 from src.zones import (
     StructurePivot,
     SupportCandidate,
+    ZoneDetectorEvidence,
     _average_true_range,
     _build_daily_body_support_zones,
     _build_local_reaction_zones,
@@ -24,6 +25,8 @@ from src.zones import (
     _support_floor_candidates,
     aggregate_ohlc_to_daily,
     detect_support_resistance_zones_structure_v1,
+    extract_zone_detector_evidence,
+    materialize_support_zones,
 )
 from src.zones.postprocess import _fill_persistent_wick_floor_gaps
 from src.zones.build import _build_support_zones, _suppress_nearby_support_zones
@@ -38,6 +41,74 @@ def test_empty_or_insufficient_data_returns_empty_zones() -> None:
     }
     result = detect_support_resistance_zones_structure_v1(_ohlc_from_closes([1, 2, 1], wick=0.1), external_swing_order=2)
     assert result == {"support": [], "resistance": [], "active": [], "all": []}
+    assert extract_zone_detector_evidence(pd.DataFrame()) is None
+    assert extract_zone_detector_evidence(_ohlc_from_closes([1, 2, 1], wick=0.1), external_swing_order=2) is None
+
+
+# Public detector is only extract-then-materialize; both halves must stay in lockstep.
+def test_extract_then_materialize_matches_public_detector() -> None:
+    df = _ohlc_from_closes(
+        [67000, 66500, 66000, 66800, 67500, 66900, 66400, 66380, 67000, 67600],
+        wick=25,
+    )
+    kwargs = {
+        "external_swing_order": 2,
+        "atr_period": 3,
+        "external_min_swing_atr_mult": 0.0,
+        "external_min_swing_pct": 0.0,
+        "min_touches": 2,
+        "break_atr_mult": 0.0,
+        "current_price": 67600.0,
+        "buffer_pct": 0.0015,
+    }
+
+    expected = detect_support_resistance_zones_structure_v1(df, **kwargs)
+    evidence = extract_zone_detector_evidence(
+        df,
+        current_price=kwargs["current_price"],
+        external_swing_order=kwargs["external_swing_order"],
+        atr_period=kwargs["atr_period"],
+        break_atr_mult=kwargs["break_atr_mult"],
+        external_min_swing_atr_mult=kwargs["external_min_swing_atr_mult"],
+        external_min_swing_pct=kwargs["external_min_swing_pct"],
+    )
+
+    assert evidence is not None
+    assert isinstance(evidence, ZoneDetectorEvidence)
+    assert evidence.raw_external_pivots
+    assert evidence.external_pivots
+    assert materialize_support_zones(
+        evidence,
+        min_touches=kwargs["min_touches"],
+        buffer_pct=kwargs["buffer_pct"],
+        break_atr_mult=kwargs["break_atr_mult"],
+    ) == expected
+
+
+# A later close through a high is frozen on evidence as that bar's index.
+def test_extract_records_first_reclaim_index_for_reclaimed_highs() -> None:
+    df = pd.DataFrame(
+        {
+            "open": [66000, 66900, 66500, 67200, 66800],
+            "high": [66100, 67000, 66600, 67400, 66900],
+            "low": [65900, 66800, 66400, 67100, 66700],
+            "close": [66000, 66950, 66500, 67300, 66800],
+        }
+    )
+
+    evidence = extract_zone_detector_evidence(
+        df,
+        current_price=65000,
+        external_swing_order=1,
+        break_atr_mult=0.0,
+        external_min_swing_atr_mult=0.0,
+        external_min_swing_pct=0.0,
+    )
+
+    assert evidence is not None
+    assert evidence.first_reclaim_indexes[("external", 1)] == 3
+    high_pivots = [pivot for pivot in evidence.external_pivots if pivot.kind == "high"]
+    assert any(pivot.index == 1 for pivot in high_pivots)
 
 
 def test_structure_v1_clusters_external_swing_lows_with_fixed_500_dollar_width() -> None:
@@ -1113,7 +1184,7 @@ def test_detector_keeps_structural_after_persistent_drops_nearby_local(monkeypat
         lambda *_args, **_kwargs: [dict(persistent)],
     )
     monkeypatch.setattr(detector_module, "_build_split_rejection_zone_pairs", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(detector_module, "_build_daily_body_support_zones", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(detector_module, "_daily_body_support_zones_from_pivots", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(
         detector_module,
         "_fill_support_staircase_gaps",

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .types import STRUCTURE_SUPPORT_FLOOR_RETEST_WIDTH_MULT, StructurePivot, SupportCandidate
+from .types import STRUCTURE_SUPPORT_FLOOR_RETEST_WIDTH_MULT, StructurePivot, SupportCandidate, SwingTerm
 
 # builds candidates from three sources, then sorts them by price
 def _support_candidates(
@@ -90,6 +90,23 @@ def _high_is_confirmed_reclaimed(
     break_atr_mult: float,
 ) -> bool:
     return _first_reclaim_index(pivot, closes, break_atr_mult) is not None
+
+# Map every reclaimed high pivot to the first close that cleared its wick threshold.
+def _first_reclaim_indexes_for_pivots(
+    pivots: list[StructurePivot],
+    closes: np.ndarray,
+    break_atr_mult: float,
+) -> dict[tuple[SwingTerm, int], int]:
+    indexes: dict[tuple[SwingTerm, int], int] = {}
+    for pivot in pivots:
+        if pivot.kind != "high":
+            continue
+        reclaim_index = _first_reclaim_index(pivot, closes, break_atr_mult)
+        if reclaim_index is None:
+            continue
+        indexes[(pivot.term, int(pivot.index))] = reclaim_index
+    return indexes
+
 
 # find the first close above the pivot high plus an ATR-based threshold
 def _first_reclaim_index(

@@ -16,17 +16,52 @@ def _coerce_ohlc(df: pd.DataFrame | None) -> pd.DataFrame | None:
         return None
     return ohlc
 
-# period is defaulted to 14
+# Wilder true range for one bar. The first bar has no previous close, so it is just high-low.
+def _true_range(high: float, low: float, previous_close: float | None) -> float:
+    if previous_close is None:
+        return float(high) - float(low)
+    return max(
+        float(high) - float(low),
+        abs(float(high) - float(previous_close)),
+        abs(float(low) - float(previous_close)),
+    )
+
+
+# Rolling ATR mean of the last `period` true ranges, same as min_periods=1 pandas rolling.
+def _rolling_atr(true_ranges: list[float], period: int) -> float:
+    window = max(1, int(period))
+    return float(np.mean(true_ranges[-window:]))
+
+
+# Append one bar's true range and ATR so incremental state matches full-prefix `_average_true_range`.
+def _append_average_true_range(
+    true_ranges: list[float],
+    atr_values: list[float],
+    *,
+    high: float,
+    low: float,
+    previous_close: float | None,
+    period: int,
+) -> None:
+    true_ranges.append(_true_range(high, low, previous_close))
+    atr_values.append(_rolling_atr(true_ranges, period))
+
+
+# Full-prefix ATR via the same rolling true-range mean incremental state appends one bar at a time.
 def _average_true_range(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period: int) -> np.ndarray:
     if len(closes) == 0:
         return np.array([], dtype=float)
-    true_ranges = np.empty(len(closes), dtype=float)
-    true_ranges[0] = highs[0] - lows[0]
-    for idx in range(1, len(closes)):
-        # the usual standard Wilder True Range formula, it isn't BTC-4H-only.
-        true_ranges[idx] = max(
-            highs[idx] - lows[idx],
-            abs(highs[idx] - closes[idx - 1]),
-            abs(lows[idx] - closes[idx - 1]),
+    true_ranges: list[float] = []
+    atr_values: list[float] = []
+    previous_close: float | None = None
+    for idx in range(len(closes)):
+        _append_average_true_range(
+            true_ranges,
+            atr_values,
+            high=float(highs[idx]),
+            low=float(lows[idx]),
+            previous_close=previous_close,
+            period=period,
         )
-    return pd.Series(true_ranges).rolling(window=max(1, int(period)), min_periods=1).mean().to_numpy(dtype=float)
+        previous_close = float(closes[idx])
+    return np.asarray(atr_values, dtype=float)
