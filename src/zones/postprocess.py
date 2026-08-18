@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
+from dataclasses import dataclass
+
 from typing import Any
 
 import numpy as np
 
 from .state import _classify_price_state
 from .factory import _zone_from_support_cluster
-from .candidates import _first_reclaim_index, _high_is_confirmed_reclaimed
+from .candidates import _reclaim_index_for_pivot
 from .build import _cluster_support_candidates, _has_minimum_unique_touches
-from .types import STRUCTURE_ADJACENT_ZONE_MIN_GAP, STRUCTURE_IMPORTANT_ZONE_SPACING, STRUCTURE_STAIR_STEP_MAX_INSERTIONS, STRUCTURE_STAIR_STEP_MAX_SUPPORT_GAP, StructurePivot, SupportCandidate
+from .types import STRUCTURE_ADJACENT_ZONE_MIN_GAP, STRUCTURE_IMPORTANT_ZONE_SPACING, STRUCTURE_STAIR_STEP_MAX_INSERTIONS, STRUCTURE_STAIR_STEP_MAX_SUPPORT_GAP, StructurePivot, SupportCandidate, SwingTerm
 
 
+# Insert reclaimed-high stairs into wide support gaps, using a price-sorted index per pivot set.
 def _fill_support_staircase_gaps(
     zones: list[dict[str, Any]],
     raw_external_pivots: list[StructurePivot],
@@ -21,20 +25,23 @@ def _fill_support_staircase_gaps(
     current_price: float,
     buffer_pct: float,
     internal_pivots: list[StructurePivot] | None = None,
+    first_reclaim_indexes: dict[tuple[SwingTerm, int], int] | None = None,
 ) -> list[dict[str, Any]]:
     filled_zones = [dict(zone) for zone in zones]
     pivot_sets = [raw_external_pivots]
     if internal_pivots is not None:
         pivot_sets.append(internal_pivots)
+    priced_sets = [
+        _index_reclaimed_high_candidates(pivots, closes, break_atr_mult, first_reclaim_indexes)
+        for pivots in pivot_sets
+    ]
 
     insertion_count = 0
-    for staircase_pivots in pivot_sets:
+    for priced in priced_sets:
         while insertion_count < STRUCTURE_STAIR_STEP_MAX_INSERTIONS:
             gap_fill = _best_support_staircase_gap_fill(
                 zones=filled_zones,
-                staircase_pivots=staircase_pivots,
-                closes=closes,
-                break_atr_mult=break_atr_mult,
+                priced=priced,
                 zone_width=zone_width,
                 min_touches=min_touches,
                 current_price=current_price,
@@ -59,6 +66,7 @@ def _fill_persistent_wick_floor_gaps(
     current_price: float,
     buffer_pct: float,
     internal_pivots: list[StructurePivot] | None = None,
+    first_reclaim_indexes: dict[tuple[SwingTerm, int], int] | None = None,
 ) -> list[dict[str, Any]]:
     """Recover one evidence-backed stair inside each wide adjacent gap.
 
@@ -75,6 +83,10 @@ def _fill_persistent_wick_floor_gaps(
     pivot_sets = [raw_external_pivots]
     if internal_pivots is not None:
         pivot_sets.append(internal_pivots)
+    priced_sets = [
+        _index_reclaimed_high_candidates(pivots, closes, break_atr_mult, first_reclaim_indexes)
+        for pivots in pivot_sets
+    ]
     min_fillable_gap = _min_fillable_support_gap(zone_width)
 
     gap_fills: list[dict[str, Any]] = []
@@ -84,12 +96,10 @@ def _fill_persistent_wick_floor_gaps(
             continue
 
         candidate_zones: list[dict[str, Any]] = []
-        for staircase_pivots in pivot_sets:
+        for priced in priced_sets:
             candidate_zones.extend(
                 _cluster_reclaimed_high_gap_zones(
-                    staircase_pivots=staircase_pivots,
-                    closes=closes,
-                    break_atr_mult=break_atr_mult,
+                    priced=priced,
                     zone_width=zone_width,
                     min_touches=min_touches,
                     lower_zone=lower_zone,
@@ -124,9 +134,7 @@ def _min_fillable_support_gap(zone_width: float) -> float:
 # Choose the best reclaimed-high zone across all regular support gaps.
 def _best_support_staircase_gap_fill(
     zones: list[dict[str, Any]],
-    staircase_pivots: list[StructurePivot],
-    closes: np.ndarray,
-    break_atr_mult: float,
+    priced: _PricedReclaimedHighs,
     zone_width: float,
     min_touches: int,
     current_price: float,
@@ -143,9 +151,7 @@ def _best_support_staircase_gap_fill(
         if gap <= STRUCTURE_STAIR_STEP_MAX_SUPPORT_GAP:
             continue
         candidate_zones = _stair_step_candidate_zones(
-            staircase_pivots=staircase_pivots,
-            closes=closes,
-            break_atr_mult=break_atr_mult,
+            priced=priced,
             zone_width=zone_width,
             min_touches=min_touches,
             lower_zone=lower_zone,
@@ -165,9 +171,7 @@ def _best_support_staircase_gap_fill(
 
 # Cluster reclaimed highs inside one gap without macro-merge or nearby collapse.
 def _cluster_reclaimed_high_gap_zones(
-    staircase_pivots: list[StructurePivot],
-    closes: np.ndarray,
-    break_atr_mult: float,
+    priced: _PricedReclaimedHighs,
     zone_width: float,
     min_touches: int,
     lower_zone: dict[str, Any],
@@ -175,10 +179,8 @@ def _cluster_reclaimed_high_gap_zones(
     current_price: float,
     buffer_pct: float,
 ) -> list[dict[str, Any]]:
-    candidates = _stair_step_support_candidates(
-        pivots=staircase_pivots,
-        closes=closes,
-        break_atr_mult=break_atr_mult,
+    candidates = _stair_step_support_candidates_in_gap(
+        priced=priced,
         zone_width=zone_width,
         lower_zone=lower_zone,
         upper_zone=upper_zone,
@@ -202,9 +204,7 @@ def _cluster_reclaimed_high_gap_zones(
 
 # Build all confirmed reclaimed-high zones that fit strictly inside one gap.
 def _stair_step_candidate_zones(
-    staircase_pivots: list[StructurePivot],
-    closes: np.ndarray,
-    break_atr_mult: float,
+    priced: _PricedReclaimedHighs,
     zone_width: float,
     min_touches: int,
     lower_zone: dict[str, Any],
@@ -215,10 +215,8 @@ def _stair_step_candidate_zones(
 ) -> list[dict[str, Any]]:
     from .build import _build_support_zones
 
-    candidates = _stair_step_support_candidates(
-        pivots=staircase_pivots,
-        closes=closes,
-        break_atr_mult=break_atr_mult,
+    candidates = _stair_step_support_candidates_in_gap(
+        priced=priced,
         zone_width=zone_width,
         lower_zone=lower_zone,
         upper_zone=upper_zone,
@@ -240,6 +238,62 @@ def _stair_step_candidate_zones(
     ]
 
 
+# Reclaimed-high stair candidates sorted by body price so each gap can bisect instead of scanning.
+@dataclass(frozen=True)
+class _PricedReclaimedHighs:
+    candidates: list[SupportCandidate]
+    prices: list[float]
+
+
+# Build every confirmed reclaimed high once; gap filters happen later by price.
+def _index_reclaimed_high_candidates(
+    pivots: list[StructurePivot],
+    closes: np.ndarray,
+    break_atr_mult: float,
+    first_reclaim_indexes: dict[tuple[SwingTerm, int], int] | None = None,
+) -> _PricedReclaimedHighs:
+    candidates: list[SupportCandidate] = []
+    for pivot in pivots:
+        if pivot.kind != "high":
+            continue
+        reclaim_index = _reclaim_index_for_pivot(pivot, closes, break_atr_mult, first_reclaim_indexes)
+        if reclaim_index is None:
+            continue
+        candidates.append(
+            SupportCandidate(
+                price=float(pivot.body_price),
+                index=int(pivot.index),
+                origin="stair_step_flipped_resistance",
+                structure_role=pivot.structure_role or "H",
+                broken_index=reclaim_index,
+            )
+        )
+    candidates.sort(key=lambda item: item.price)
+    return _PricedReclaimedHighs(candidates=candidates, prices=[float(item.price) for item in candidates])
+
+
+# Collect confirmed reclaimed highs whose body price can anchor a zone inside one gap.
+def _stair_step_support_candidates_in_gap(
+    priced: _PricedReclaimedHighs,
+    zone_width: float,
+    lower_zone: dict[str, Any],
+    upper_zone: dict[str, Any],
+    current_price: float,
+    buffer_pct: float,
+    include_above_price: bool = False,
+) -> list[SupportCandidate]:
+    lower_high = float(lower_zone["high"])
+    upper_low = float(upper_zone["low"])
+    # Same exclusive bounds as the old scan: price - zone_width > lower_high and price < upper_low.
+    min_price = lower_high + float(zone_width)
+    max_price = upper_low
+    if not include_above_price:
+        max_price = min(max_price, float(current_price) * (1.0 - float(buffer_pct)))
+    start = bisect_right(priced.prices, min_price)
+    end = bisect_left(priced.prices, max_price)
+    return list(priced.candidates[start:end])
+
+
 # Collect confirmed reclaimed highs that can anchor a zone inside one gap.
 def _stair_step_support_candidates(
     pivots: list[StructurePivot],
@@ -251,31 +305,17 @@ def _stair_step_support_candidates(
     current_price: float,
     buffer_pct: float,
     include_above_price: bool = False,
+    first_reclaim_indexes: dict[tuple[SwingTerm, int], int] | None = None,
 ) -> list[SupportCandidate]:
-    lower_high = float(lower_zone["high"])
-    upper_low = float(upper_zone["low"])
-    support_ceiling = None if include_above_price else float(current_price) * (1.0 - float(buffer_pct))
-    candidates: list[SupportCandidate] = []
-    for pivot in pivots:
-        if pivot.kind != "high":
-            continue
-        price = float(pivot.body_price)
-        if price - float(zone_width) <= lower_high or price >= upper_low:
-            continue
-        if support_ceiling is not None and price >= support_ceiling:
-            continue
-        if not _high_is_confirmed_reclaimed(pivot, closes, break_atr_mult):
-            continue
-        candidates.append(
-            SupportCandidate(
-                price=price,
-                index=int(pivot.index),
-                origin="stair_step_flipped_resistance",
-                structure_role=pivot.structure_role or "H",
-                broken_index=_first_reclaim_index(pivot, closes, break_atr_mult),
-            )
-        )
-    return candidates
+    return _stair_step_support_candidates_in_gap(
+        priced=_index_reclaimed_high_candidates(pivots, closes, break_atr_mult, first_reclaim_indexes),
+        zone_width=zone_width,
+        lower_zone=lower_zone,
+        upper_zone=upper_zone,
+        current_price=current_price,
+        buffer_pct=buffer_pct,
+        include_above_price=include_above_price,
+    )
 
 
 def _make_support_zones_distinct(

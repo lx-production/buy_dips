@@ -14,7 +14,7 @@ from .candidates import _first_reclaim_index
 from .ohlc import _append_average_true_range
 from .daily import DAILY_ZONE_MIN_BARS_PER_DAY
 from .types import STRUCTURE_LOCAL_REACTION_LOOKBACK_BARS, StructurePivot, SwingTerm, ZoneDetectorEvidence
-from .pivots import _append_prominent_structure_pivot, _copy_structure_pivot, _label_structure_pivots, _structure_pivots_at_center
+from .pivots import _append_labeled_structure_pivot, _append_prominent_structure_pivot, _structure_pivots_at_center
 
 
 FOUR_HOURS_MS = 14_400_000
@@ -31,8 +31,8 @@ class IncrementalZoneDetectorState:
 
     Confirmed pivots, reclaim indexes, prominent swings, and completed UTC daily bars are
     updated as soon as the new bar supplies enough right-side context. Unconfirmed right-edge
-    centers stay in the OHLC arrays until that later confirmation. Snapshot copies are labeled
-    so callers cannot mutate this state.
+    centers stay in the OHLC arrays until that later confirmation. Snapshot shallow-copies
+    already-labeled lists so callers cannot mutate this state.
     """
 
     # Capture detector knobs and start with empty 4h / daily evidence.
@@ -112,18 +112,9 @@ class IncrementalZoneDetectorState:
             raise IncrementalZoneDetectorError("zone_set_as_of is not aligned to a Binance UTC 4h bucket")
         if len(self._closes) < (self._external_bars * 2 + 1):
             return None
-
-        prominent = [_copy_structure_pivot(pivot) for pivot in self._prominent_external]
-        if not prominent:
+        if not self._prominent_external:
             return None
 
-        raw_external = [_copy_structure_pivot(pivot) for pivot in self._raw_external_pivots]
-        internal = [_copy_structure_pivot(pivot) for pivot in self._internal_pivots]
-        daily = [_copy_structure_pivot(pivot) for pivot in self._daily_prominent]
-        _label_structure_pivots(raw_external)
-        _label_structure_pivots(prominent)
-        _label_structure_pivots(internal)
-        _label_structure_pivots(daily)
         closes = np.asarray(self._closes, dtype=float)
         ohlc = pd.DataFrame(
             {
@@ -137,11 +128,13 @@ class IncrementalZoneDetectorState:
             ohlc=ohlc,
             closes=closes,
             current_price=float(closes[-1]),
-            raw_external_pivots=raw_external,
-            external_pivots=prominent,
-            internal_pivots=internal,
-            daily_pivots=daily,
+            raw_external_pivots=list(self._raw_external_pivots),
+            external_pivots=list(self._prominent_external),
+            internal_pivots=list(self._internal_pivots),
+            daily_pivots=list(self._daily_prominent),
             first_reclaim_indexes=dict(self._first_reclaim_indexes),
+            four_hour_open_times=np.asarray(self._open_times, dtype=np.int64),
+            daily_open_times=np.asarray(self._daily_open_times, dtype=np.int64),
         )
 
     # Reject duplicates, backward time, and missing 4h buckets so state never skips or looks ahead.
@@ -173,7 +166,7 @@ class IncrementalZoneDetectorState:
     # Store a newly confirmed 4h pivot, fold it into prominence, and freeze reclaim if it already happened.
     def _record_confirmed_4h_pivot(self, pivot: StructurePivot) -> None:
         if pivot.term == "external":
-            self._raw_external_pivots.append(pivot)
+            _append_labeled_structure_pivot(self._raw_external_pivots, pivot)
             _append_prominent_structure_pivot(
                 self._prominent_external,
                 pivot,
@@ -181,8 +174,8 @@ class IncrementalZoneDetectorState:
                 min_swing_pct=self._min_swing_pct,
             )
         else:
-            self._internal_pivots.append(pivot)
-            self._recent_internal_pivots.append(pivot)
+            labeled = _append_labeled_structure_pivot(self._internal_pivots, pivot)
+            self._recent_internal_pivots.append(labeled)
         if pivot.kind != "high":
             return
         # Right-side bars already exist, so reclaim may have printed before confirmation.

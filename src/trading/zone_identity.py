@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-import hashlib
 import json
+import hashlib
+
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
+
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from .constants import DETECTOR_VERSION, EXCHANGE, FINGERPRINT_VERSION, SYMBOL
@@ -17,6 +21,14 @@ SUPPORTED_BOUNDS_STYLES = frozenset({"body", "support_floor", "local_reaction"})
 
 class ZoneIdentityError(ValueError):
     pass
+
+
+@dataclass
+class ZoneFingerprintCache:
+    """Reuse source-time resolution and zf1 hashes when a zone revision does not change."""
+
+    source_times: dict[tuple[str, tuple[int, ...]], list[int]] = field(default_factory=dict)
+    enrichments: dict[tuple[Any, ...], dict[str, Any]] = field(default_factory=dict)
 
 
 # Quantize a zone price so lineage and revision hashes stay deterministic.
@@ -48,14 +60,25 @@ def canonical_source_open_times(values: Any) -> list[int]:
     return sorted(times)
 
 
-# Map detector source_indexes onto open_time values from the matching OHLC frame.
-def resolve_source_open_times(zone: dict[str, Any], source_df: pd.DataFrame) -> list[int]:
-    indexes = zone.get("source_indexes")
+# Map detector source_indexes onto open_time values from the matching OHLC frame or array.
+def resolve_source_open_times(
+    zone: dict[str, Any],
+    source_df: pd.DataFrame | None = None,
+    *,
+    open_times: np.ndarray | None = None,
+) -> list[int]:
+    if open_times is None:
+        if source_df is None or source_df.empty or "open_time" not in source_df.columns:
+            raise ZoneIdentityError("source candle frame is missing open_time data")
+        open_times = np.asarray(source_df["open_time"].to_numpy())
+    return _resolve_source_open_times_from_array(zone.get("source_indexes"), open_times)
+
+
+# Direct integer lookup of source open times; used by the fingerprint hot path.
+def _resolve_source_open_times_from_array(indexes: Any, open_times: np.ndarray) -> list[int]:
     if not isinstance(indexes, (list, tuple)) or not indexes:
         raise ZoneIdentityError("zone source_indexes must be non-empty")
-    if source_df is None or source_df.empty or "open_time" not in source_df.columns:
-        raise ZoneIdentityError("source candle frame is missing open_time data")
-
+    count = len(open_times)
     resolved: list[int] = []
     for raw_index in indexes:
         if isinstance(raw_index, bool):
@@ -64,9 +87,9 @@ def resolve_source_open_times(zone: dict[str, Any], source_df: pd.DataFrame) -> 
             index = int(raw_index)
         except (TypeError, ValueError) as exc:
             raise ZoneIdentityError(f"Invalid source index: {raw_index!r}") from exc
-        if str(raw_index).strip() != str(index) or index < 0 or index >= len(source_df):
+        if str(raw_index).strip() != str(index) or index < 0 or index >= count:
             raise ZoneIdentityError(f"Source index is out of range: {raw_index!r}")
-        value = source_df.iloc[index]["open_time"]
+        value = open_times[index]
         if pd.isna(value):
             raise ZoneIdentityError(f"Source candle {index} has no open_time")
         resolved.append(int(value))
@@ -147,8 +170,11 @@ def make_zone_fingerprint(
 def fingerprint_zone(
     zone: dict[str, Any],
     *,
-    four_hour_df: pd.DataFrame,
-    daily_df: pd.DataFrame,
+    four_hour_df: pd.DataFrame | None = None,
+    daily_df: pd.DataFrame | None = None,
+    four_hour_open_times: np.ndarray | None = None,
+    daily_open_times: np.ndarray | None = None,
+    cache: ZoneFingerprintCache | None = None,
     exchange: str = EXCHANGE,
     symbol: str = SYMBOL,
     detector_version: str = DETECTOR_VERSION,
@@ -161,9 +187,32 @@ def fingerprint_zone(
     source_timeframe = str(zone.get("source_timeframe", "4h"))
     if source_timeframe not in SUPPORTED_SOURCE_TIMEFRAMES:
         raise ZoneIdentityError(f"Unsupported zone source timeframe: {source_timeframe}")
-    source_df = daily_df if source_timeframe == "1d" else four_hour_df
-    source_open_times = resolve_source_open_times(zone, source_df)
+    source_open_times = _cached_source_open_times(
+        zone,
+        source_timeframe=source_timeframe,
+        four_hour_df=four_hour_df,
+        daily_df=daily_df,
+        four_hour_open_times=four_hour_open_times,
+        daily_open_times=daily_open_times,
+        cache=cache,
+    )
     bounds_style = canonical_bounds_style(zone.get("bounds_style", "body"))
+    enrichment_key = (
+        source_timeframe,
+        bounds_style,
+        canonical_price(zone.get("low")),
+        canonical_price(zone.get("high")),
+        tuple(source_open_times),
+        exchange,
+        symbol,
+        detector_version,
+    )
+    if cache is not None:
+        cached = cache.enrichments.get(enrichment_key)
+        if cached is not None:
+            enriched = dict(zone)
+            enriched.update(cached)
+            return enriched
     lineage_id = make_zone_lineage_id(
         low=zone.get("low"),
         high=zone.get("high"),
@@ -182,17 +231,51 @@ def fingerprint_zone(
         symbol=symbol,
         detector_version=detector_version,
     )
+    identity_fields = {
+        "bounds_style": bounds_style,
+        "source_timeframe": source_timeframe,
+        "source_open_times": source_open_times,
+        "zone_source_time": max(source_open_times),
+        "fingerprint_version": FINGERPRINT_VERSION,
+        "zone_lineage_id": lineage_id,
+        "revision_fingerprint": revision,
+        "fingerprint": lineage_id,
+    }
+    if cache is not None:
+        cache.enrichments[enrichment_key] = identity_fields
     enriched = dict(zone)
-    enriched["bounds_style"] = bounds_style
-    enriched["source_timeframe"] = source_timeframe
-    enriched["source_open_times"] = source_open_times
-    enriched["zone_source_time"] = max(source_open_times)
-    enriched["fingerprint_version"] = FINGERPRINT_VERSION
-    enriched["zone_lineage_id"] = lineage_id
-    enriched["revision_fingerprint"] = revision
-    # Decision, cooldown, and chart merge keys use the stable lineage.
-    enriched["fingerprint"] = lineage_id
+    enriched.update(identity_fields)
     return enriched
+
+
+# Resolve source times from arrays when possible, and cache by timeframe plus source indexes.
+def _cached_source_open_times(
+    zone: dict[str, Any],
+    *,
+    source_timeframe: str,
+    four_hour_df: pd.DataFrame | None,
+    daily_df: pd.DataFrame | None,
+    four_hour_open_times: np.ndarray | None,
+    daily_open_times: np.ndarray | None,
+    cache: ZoneFingerprintCache | None,
+) -> list[int]:
+    indexes = zone.get("source_indexes")
+    cache_key: tuple[str, tuple[int, ...]] | None = None
+    if isinstance(indexes, (list, tuple)) and indexes:
+        try:
+            cache_key = (source_timeframe, tuple(int(value) for value in indexes))
+        except (TypeError, ValueError):
+            cache_key = None
+    if cache is not None and cache_key is not None:
+        cached_times = cache.source_times.get(cache_key)
+        if cached_times is not None:
+            return cached_times
+    open_times = daily_open_times if source_timeframe == "1d" else four_hour_open_times
+    source_df = daily_df if source_timeframe == "1d" else four_hour_df
+    source_open_times = resolve_source_open_times(zone, source_df, open_times=open_times)
+    if cache is not None and cache_key is not None:
+        cache.source_times[cache_key] = source_open_times
+    return source_open_times
 
 
 def _hash_identity(payload: dict[str, Any]) -> str:

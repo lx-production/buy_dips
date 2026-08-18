@@ -26,7 +26,7 @@
   - `start` có thể nằm trên bất kỳ biên giờ UTC; bucket 4h derive đầu tiên là bucket đầu tiên được phủ đủ bốn nến 1h.
   - Dùng 4h lịch sử trước vùng 1h làm detector warm-up; từ vùng có 1h trở đi luôn derive 4h từ bốn nến 1h và không dùng 4h tương lai.
   - Mỗi bucket 4h được aggregate đúng một lần cho cả replay, sau đó frame as-of chỉ được cắt lại khi watermark 4h tiến lên.
-  - Cold cache miss ingest 4h history một lần vào `IncrementalZoneDetectorState`, rồi `snapshot_evidence` + full materialization tại từng watermark thiếu. Warm path (mọi snapshot đều hit) không khởi tạo state.
+  - Cold cache miss ingest 4h history một lần vào `IncrementalZoneDetectorState`, rồi `snapshot_evidence` + full materialization tại từng watermark thiếu. Fingerprint reuse revision không đổi (chỉ cập nhật `zone_set_as_of`). Warm path (mọi snapshot đều hit) không khởi tạo state.
   - Mỗi zone snapshot được cache theo watermark cùng hash config detector, source code và prefix dữ liệu 4h. Cache stale/hỏng tự rebuild và overwrite; range mở rộng chỉ build watermark mới. Replay bulk-load cache hits bằng một SQLite connection.
   - Khởi tạo zone snapshot tại cây trigger đầu tiên, sau đó rebuild trong memory đúng lúc một 4h mới hoàn tất.
   - Helper thuần dùng chung với live zone refresh: `build_fingerprinted_support_zones` (stateless / injected detector) và `build_fingerprinted_support_zones_from_evidence` (incremental backtest).

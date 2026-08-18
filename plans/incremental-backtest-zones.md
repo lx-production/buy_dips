@@ -235,6 +235,18 @@ Quyết định:
 - **Không ship Milestone 1** theo gate `cold <=20s`.
 - **Chưa làm Milestone 2.** Materialization đúng là bottleneck, nhưng gate yêu cầu tối ưu hotspot đo được trên full materialization trước (split-rejection retest, stair-step gap-fill, snapshot copy), rồi mới cân nhắc dirty materialization.
 
+### Bước 5b — tối ưu full materialization (trước Milestone 2)
+
+Không đổi thuật toán. Chỉ đổi cách tra cứu trên cùng evidence:
+
+1. Split-rejection: sort internal-low một lần, bisect cửa sổ `(pivot.index, pivot.index + 4]`.
+2. Reclaim: materialization đọc `first_reclaim_indexes[(term, index)]` thay vì scan lại close history.
+3. Gap-fill: index reclaimed-high theo `body_price` một lần mỗi snapshot, bisect từng gap, vẫn cluster riêng trong gap.
+4. Snapshot: gán `structure_role` lúc pivot vào state; raw/prominent là object riêng; snapshot chỉ shallow-copy list.
+5. Fingerprint: resolve `source_indexes` bằng array integer index; cache theo `(timeframe, source_indexes)`; reuse enrichment khi revision không đổi, chỉ cập nhật `zone_set_as_of`. Evidence mang `four_hour_open_times` / `daily_open_times` để cold path không aggregate daily lại mỗi watermark.
+
+Acceptance: parity với stateless oracle; cold/warm benchmark cùng fixture. Target cold vẫn `<=20s`.
+
 ### Bước 6 — Milestone 2: dirty price-component materialization (optional)
 
 Chỉ bắt đầu sau decision gate ở Bước 5.

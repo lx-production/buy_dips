@@ -2,10 +2,18 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 
 ONE_DAY_MS = 86_400_000
+
+
+# Integer open_time column for direct source-index lookup, or empty when the frame has none.
+def ohlc_open_times(df: Any) -> np.ndarray:
+    if df is None or getattr(df, "empty", True) or "open_time" not in getattr(df, "columns", []):
+        return np.array([], dtype=np.int64)
+    return np.asarray(df["open_time"].to_numpy(), dtype=np.int64)
 
 
 def aggregate_ohlc_to_daily(df: Any, min_bars_per_day: int = 1) -> Any:

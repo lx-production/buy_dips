@@ -4,6 +4,7 @@ import numpy as np
 
 from .types import STRUCTURE_SUPPORT_FLOOR_RETEST_WIDTH_MULT, StructurePivot, SupportCandidate, SwingTerm
 
+
 # builds candidates from three sources, then sorts them by price
 def _support_candidates(
     raw_external_pivots: list[StructurePivot], # all pivots, including noisy ones
@@ -11,19 +12,28 @@ def _support_candidates(
     closes: np.ndarray,
     break_atr_mult: float,
     zone_width: float,
+    first_reclaim_indexes: dict[tuple[SwingTerm, int], int] | None = None,
 ) -> list[SupportCandidate]:
     candidates: list[SupportCandidate] = []
     for pivot in external_pivots:
         if pivot.kind == "low":
             candidates.append(_candidate_from_pivot(pivot, origin="structure_swing_low"))
-        elif _high_is_confirmed_reclaimed(pivot, closes, break_atr_mult):
-            candidates.append(
-                _candidate_from_pivot(
-                    pivot,
-                    origin="flipped_resistance",
-                    broken_index=_first_reclaim_index(pivot, closes, break_atr_mult),
-                )
+            continue
+        reclaim_index = _reclaim_index_for_pivot(
+            pivot,
+            closes,
+            break_atr_mult,
+            first_reclaim_indexes,
+        )
+        if reclaim_index is None:
+            continue
+        candidates.append(
+            _candidate_from_pivot(
+                pivot,
+                origin="flipped_resistance",
+                broken_index=reclaim_index,
             )
+        )
 
     candidates.extend(_support_floor_candidates(raw_external_pivots, external_pivots, zone_width))
     return sorted(candidates, key=lambda item: (item.price, item.index, item.origin))
@@ -88,8 +98,22 @@ def _high_is_confirmed_reclaimed(
     pivot: StructurePivot,
     closes: np.ndarray,
     break_atr_mult: float,
+    first_reclaim_indexes: dict[tuple[SwingTerm, int], int] | None = None,
 ) -> bool:
-    return _first_reclaim_index(pivot, closes, break_atr_mult) is not None
+    return _reclaim_index_for_pivot(pivot, closes, break_atr_mult, first_reclaim_indexes) is not None
+
+
+# Look up a frozen first-reclaim bar, or scan closes when the evidence map is absent.
+def _reclaim_index_for_pivot(
+    pivot: StructurePivot,
+    closes: np.ndarray,
+    break_atr_mult: float,
+    first_reclaim_indexes: dict[tuple[SwingTerm, int], int] | None = None,
+) -> int | None:
+    if first_reclaim_indexes is not None:
+        return first_reclaim_indexes.get((pivot.term, int(pivot.index)))
+    return _first_reclaim_index(pivot, closes, break_atr_mult)
+
 
 # Map every reclaimed high pivot to the first close that cleared its wick threshold.
 def _first_reclaim_indexes_for_pivots(

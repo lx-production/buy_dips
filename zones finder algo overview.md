@@ -44,7 +44,7 @@ Public entry: `detect_support_resistance_zones()` is a thin alias for `detect_su
 1. `extract_zone_detector_evidence(df, ...)` — one pass over the frame: coerce OHLC, ATR, raw/prominent/internal pivots, daily pivots, and first reclaim indexes.
 2. `materialize_support_zones(evidence, ...)` — candidates, clustering, rejection, daily/persistent overlay, gap-fill, and spacing. This half does not re-scan the raw frame for pivots.
 
-There is a second way to build the same evidence bag: `IncrementalZoneDetectorState` in `src/zones/incremental.py`. It ingests closed 4H candles in order (`advance`), then `snapshot_evidence(zone_set_as_of)` copies confirmed state into `ZoneDetectorEvidence`. Materialization does not care which path built the bag.
+There is a second way to build the same evidence bag: `IncrementalZoneDetectorState` in `src/zones/incremental.py`. It ingests closed 4H candles in order (`advance`), then `snapshot_evidence(zone_set_as_of)` shallow-copies already-labeled pivot lists and reclaim/open-time arrays into `ZoneDetectorEvidence`. Materialization does not care which path built the bag.
 
 Live `refresh_zones` still uses the full-frame extract. Offline backtest cache misses use incremental ingest and must emit the same fingerprinted zones as the full-frame detector at that watermark.
 
@@ -134,7 +134,7 @@ evidence = state.snapshot_evidence(zone_set_as_of)
 zones = materialize_support_zones(evidence, ...)
 ```
 
-`zone_set_as_of` must be the last ingested 4H `open_time`. A mismatch fails closed. Snapshot copies lists so callers cannot mutate detector state. If the series is shorter than `2 * external_swing_order + 1` bars, or the prominent-external list is empty, snapshot returns `None` — same early-exit as the full-frame extract.
+`zone_set_as_of` must be the last ingested 4H `open_time`. A mismatch fails closed. Structure roles are assigned when a pivot is appended (raw and prominent lists are separate objects, so their H/HH/L labels can differ). Snapshot shallow-copies those lists so callers cannot mutate detector state. If the series is shorter than `2 * external_swing_order + 1` bars, or the prominent-external list is empty, snapshot returns `None` — same early-exit as the full-frame extract.
 
 **Per closed 4H candle `advance` does:**
 
@@ -198,7 +198,7 @@ Three evidence types, then sort by price:
 
 **Swing lows.** Every prominent low becomes a `structure_swing_low` candidate. Anchor price is the **body**, `bounds_style = "body"`.
 
-**Flipped resistance.** A prominent high becomes `flipped_resistance` only if a later close goes strictly above `wick + 0.2 × ATR`. That first reclaim bar is `broken_index`. Same body-style bounds.
+**Flipped resistance.** A prominent high becomes `flipped_resistance` only if a later close goes strictly above `wick + 0.2 × ATR`. That first reclaim bar is `broken_index`. Materialization reads it from `first_reclaim_indexes[(term, index)]` when the evidence bag already has the map; otherwise it scans closes. Same body-style bounds.
 
 **Wick floors (not yet the persistent overlay).** If a prominent low’s wick hangs at least `$500` below its body:
 
@@ -432,7 +432,7 @@ While a 4H bucket is still forming, the runner keeps the last snapshot. If the b
 
 For each zone, immediately after detection:
 
-1. Pick the source frame: daily zones → derived 1D dataframe; everyone else → the 4H dataframe used for detection
+1. Pick the source frame: daily zones → derived 1D open times; everyone else → the 4H open times. Resolution is integer indexing into those arrays, not per-index `iloc`.
 2. `source_open_times = sorted unique open_time of those source_indexes`
 3. `zone_source_time = max(source_open_times)`
 4. `zone_lineage_id` / persisted `fingerprint` = SHA-256 of band + `source_timeframe` + `bounds_style` + exchange/symbol/detector. **Adding a later touch does not change this.**

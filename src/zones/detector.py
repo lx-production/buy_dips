@@ -13,6 +13,7 @@ from .rejections import _build_split_rejection_zone_pairs, _overlay_split_reject
 from .persistent import _build_persistent_wick_floor_zones, _overlay_persistent_wick_floors
 from .pivots import _filter_prominent_structure_pivots, _find_structure_pivots, _label_structure_pivots
 from .daily import _daily_body_support_zones_from_pivots, _extract_daily_structure_pivots, _overlay_daily_support_zones
+from .timeframes import ohlc_open_times
 from .postprocess import _enforce_support_zone_spacing, _fill_persistent_wick_floor_gaps, _fill_support_staircase_gaps, _make_support_zones_distinct
 
 
@@ -112,7 +113,7 @@ def extract_zone_detector_evidence(
     _label_structure_pivots(raw_external_pivots)
     _label_structure_pivots(external_pivots)
     _label_structure_pivots(internal_pivots)
-    daily_pivots = _extract_daily_structure_pivots(
+    daily_pivots, daily_open_times = _extract_daily_structure_pivots(
         df,
         external_swing_order=external_swing_order,
         atr_period=atr_period,
@@ -133,6 +134,8 @@ def extract_zone_detector_evidence(
         internal_pivots=internal_pivots,
         daily_pivots=daily_pivots,
         first_reclaim_indexes=first_reclaim_indexes,
+        four_hour_open_times=ohlc_open_times(df),
+        daily_open_times=daily_open_times,
     )
 
 
@@ -151,6 +154,7 @@ def materialize_support_zones(
         closes=evidence.closes,
         break_atr_mult=break_atr_mult,
         zone_width=STRUCTURE_ZONE_WIDTH,
+        first_reclaim_indexes=evidence.first_reclaim_indexes,
     )
     zones = _build_support_zones(
         candidates,
@@ -167,6 +171,7 @@ def materialize_support_zones(
         min_touches=min_touches,
         current_price=current_price,
         buffer_pct=buffer_pct,
+        first_reclaim_indexes=evidence.first_reclaim_indexes,
     )
     # Keep structural and local families side by side. Each builder already
     # dedupes internally; an early cross-family suppress can drop a structural
@@ -183,6 +188,7 @@ def materialize_support_zones(
         current_price=current_price,
         buffer_pct=buffer_pct,
         internal_pivots=evidence.internal_pivots,
+        first_reclaim_indexes=evidence.first_reclaim_indexes,
     )
     rejection_pairs = _build_split_rejection_zone_pairs(
         ohlc=evidence.ohlc,
@@ -225,6 +231,7 @@ def materialize_support_zones(
         current_price=current_price,
         buffer_pct=buffer_pct,
         internal_pivots=evidence.internal_pivots,
+        first_reclaim_indexes=evidence.first_reclaim_indexes,
     )
     # Same resolver after gap-fill so inserted stairs cannot sit on top of a neighbor.
     zones = _enforce_support_zone_spacing(zones)

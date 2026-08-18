@@ -19,6 +19,7 @@ from .constants import DETECTOR_VERSION, FOUR_HOURS_MS, HOURLY_TIMEFRAME, ONE_HO
 from .signal import BUY, evaluate_support_close_v1
 from .backtest_zone_cache import ZoneCacheIdentity, build_four_hour_input_hashes, build_zone_cache_identity, load_cached_zone_snapshots, prune_incompatible_zone_cache, store_cached_zone_snapshot
 from .backtest_zone_state import BacktestIncrementalZoneState
+from .zone_identity import ZoneFingerprintCache
 from .zone_refresh import ZoneRefreshError, build_fingerprinted_support_zones, build_fingerprinted_support_zones_from_evidence
 
 
@@ -168,6 +169,7 @@ def run_backtest(
     input_hashes: dict[int, str] = {}
     cached_hits: dict[int, list[dict[str, Any]]] = {}
     incremental_state: BacktestIncrementalZoneState | None = None
+    fingerprint_cache = ZoneFingerprintCache()
     # Production path hashes prefixes once and bulk-loads cache hits. Injected detectors skip both.
     if detector is None:
         cache_identity = build_zone_cache_identity(config.zones)
@@ -245,6 +247,7 @@ def run_backtest(
                             exchange=config.exchange,
                             symbol=config.symbol,
                             detector_version=DETECTOR_VERSION,
+                            fingerprint_cache=fingerprint_cache,
                         )
                     else:
                         zones = build_fingerprinted_support_zones(

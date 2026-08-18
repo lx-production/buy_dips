@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from bisect import bisect_right
+
 import pandas as pd
 
 from .factory import Zone, _make_support_zone
@@ -23,6 +25,12 @@ def _build_split_rejection_zone_pairs(
     pairs: list[tuple[Zone, Zone]] = []
     min_wick_span = float(zone_width) * STRUCTURE_SPLIT_REJECTION_MIN_WICK_WIDTH_MULT
     min_retest_span = float(zone_width) * STRUCTURE_SPLIT_REJECTION_MIN_RETEST_WIDTH_MULT
+    # Retest is only valid in the next 4 bars, so index internal lows once and bisect.
+    internal_lows = sorted(
+        (pivot for pivot in internal_pivots if pivot.kind == "low"),
+        key=lambda item: int(item.index),
+    )
+    internal_low_indexes = [int(pivot.index) for pivot in internal_lows]
 
     for pivot in external_pivots:
         if pivot.kind != "low" or not 0 <= int(pivot.index) < len(ohlc):
@@ -35,7 +43,8 @@ def _build_split_rejection_zone_pairs(
 
         retest = _first_split_rejection_retest(
             pivot=pivot,
-            internal_pivots=internal_pivots,
+            internal_lows=internal_lows,
+            internal_low_indexes=internal_low_indexes,
             body_high=body_high,
             min_retest_span=min_retest_span,
             zone_width=zone_width,
@@ -86,15 +95,16 @@ def _build_split_rejection_zone_pairs(
 def _first_split_rejection_retest(
     *,
     pivot: StructurePivot,
-    internal_pivots: list[StructurePivot],
+    internal_lows: list[StructurePivot],
+    internal_low_indexes: list[int],
     body_high: float,
     min_retest_span: float,
     zone_width: float,
 ) -> StructurePivot | None:
     last_retest_index = int(pivot.index) + STRUCTURE_SPLIT_REJECTION_MAX_RETEST_BARS
-    for candidate in sorted(internal_pivots, key=lambda item: item.index):
-        if candidate.kind != "low" or not int(pivot.index) < int(candidate.index) <= last_retest_index:
-            continue
+    start = bisect_right(internal_low_indexes, int(pivot.index))
+    end = bisect_right(internal_low_indexes, last_retest_index)
+    for candidate in internal_lows[start:end]:
         wick_gap = float(candidate.wick_price) - float(pivot.wick_price)
         if min_retest_span <= wick_gap <= float(zone_width) and float(candidate.body_price) >= body_high:
             return candidate

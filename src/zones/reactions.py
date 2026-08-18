@@ -6,9 +6,10 @@ from .types import (
     STRUCTURE_LOCAL_REACTION_LOOKBACK_BARS,
     StructurePivot,
     SupportCandidate,
+    SwingTerm,
 )
 
-from .candidates import _first_reclaim_index
+from .candidates import _reclaim_index_for_pivot
 from .factory import Zone, _latest_defined, _make_support_zone
 from .build import _cluster_support_candidates, _has_minimum_unique_touches
 
@@ -23,6 +24,7 @@ def _build_local_reaction_zones(
     min_touches: int,
     current_price: float,
     buffer_pct: float,
+    first_reclaim_indexes: dict[tuple[SwingTerm, int], int] | None = None,
 ) -> list[Zone]:
     recent_start = max(0, len(closes) - STRUCTURE_LOCAL_REACTION_LOOKBACK_BARS)
     local_min_touches = max(2, int(min_touches))
@@ -37,7 +39,12 @@ def _build_local_reaction_zones(
             broken_index = None
             low_pivots_by_index[int(pivot.index)] = pivot
         else:
-            broken_index = _first_reclaim_index(pivot, closes, break_atr_mult)
+            broken_index = _reclaim_index_for_pivot(
+                pivot,
+                closes,
+                break_atr_mult,
+                first_reclaim_indexes,
+            )
             if broken_index is None:
                 continue
             origin = "local_flipped_resistance"

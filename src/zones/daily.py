@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
+
 from .factory import Zone, _make_support_zone
-from .timeframes import aggregate_ohlc_to_daily
+from .timeframes import aggregate_ohlc_to_daily, ohlc_open_times
 from .ohlc import _average_true_range, _coerce_ohlc
 from .types import STRUCTURE_ADJACENT_ZONE_MIN_GAP, StructurePivot
 from .pivots import _filter_prominent_structure_pivots, _find_structure_pivots, _label_structure_pivots
@@ -13,7 +15,7 @@ DAILY_ZONE_MIN_BARS_PER_DAY = 6
 DAILY_ZONE_SCORE_BONUS = 100.0
 
 
-# Find prominent daily swing pivots from completed UTC days. Zone dicts are built later.
+# Find prominent daily swing pivots and the completed UTC daily open times they index into.
 def _extract_daily_structure_pivots(
     df: Any,
     *,
@@ -21,15 +23,16 @@ def _extract_daily_structure_pivots(
     atr_period: int,
     external_min_swing_atr_mult: float,
     external_min_swing_pct: float,
-) -> list[StructurePivot]:
+) -> tuple[list[StructurePivot], np.ndarray]:
     daily_df = aggregate_ohlc_to_daily(df, min_bars_per_day=DAILY_ZONE_MIN_BARS_PER_DAY)
+    daily_open_times = ohlc_open_times(daily_df)
     ohlc = _coerce_ohlc(daily_df)
     if ohlc is None:
-        return []
+        return [], daily_open_times
 
     bars_each_side = max(1, int(external_swing_order))
     if len(ohlc) < (bars_each_side * 2 + 1):
-        return []
+        return [], daily_open_times
 
     highs = ohlc["high"].to_numpy(dtype=float)
     lows = ohlc["low"].to_numpy(dtype=float)
@@ -42,7 +45,7 @@ def _extract_daily_structure_pivots(
         min_swing_pct=external_min_swing_pct,
     )
     _label_structure_pivots(daily_pivots)
-    return daily_pivots
+    return daily_pivots, daily_open_times
 
 
 # Turn extracted daily low pivots into fixed-width body-support zones.
@@ -94,7 +97,7 @@ def _build_daily_body_support_zones(
     external_min_swing_atr_mult: float,
     external_min_swing_pct: float,
 ) -> list[Zone]:
-    daily_pivots = _extract_daily_structure_pivots(
+    daily_pivots, _daily_open_times = _extract_daily_structure_pivots(
         df,
         external_swing_order=external_swing_order,
         atr_period=atr_period,

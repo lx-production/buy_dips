@@ -5,7 +5,7 @@ from dataclasses import replace
 import numpy as np
 import pandas as pd
 
-from .types import StructurePivot, SwingTerm
+from .types import PivotKind, StructurePivot, SwingTerm
 
 
 # Sort key used everywhere pivots must stay in confirmation order: index, then low before high.
@@ -13,9 +13,35 @@ def _structure_pivot_sort_key(pivot: StructurePivot) -> tuple[int, int]:
     return (pivot.index, 0 if pivot.kind == "low" else 1)
 
 
-# Copy a pivot so callers can label or replace without mutating detector state.
+# Copy a pivot so prominent and raw lists can carry different structure roles.
 def _copy_structure_pivot(pivot: StructurePivot) -> StructurePivot:
     return replace(pivot)
+
+
+# Previous same-kind wick in `pivots`, or None when this is the first of that kind.
+def _previous_same_kind_wick(pivots: list[StructurePivot], kind: PivotKind) -> float | None:
+    for existing in reversed(pivots):
+        if existing.kind == kind:
+            return float(existing.wick_price)
+    return None
+
+
+# Assign H/HH/LH or L/HL/LL from the previous same-kind wick and return a new pivot.
+def _structure_pivot_with_role(pivot: StructurePivot, previous_same_kind_wick: float | None) -> StructurePivot:
+    if pivot.kind == "high":
+        role = "H" if previous_same_kind_wick is None else ("HH" if pivot.wick_price > previous_same_kind_wick else "LH")
+    else:
+        role = "L" if previous_same_kind_wick is None else ("HL" if pivot.wick_price > previous_same_kind_wick else "LL")
+    if pivot.structure_role == role:
+        return pivot
+    return replace(pivot, structure_role=role)
+
+
+# Append a detached, labeled copy so later list labeling cannot mutate other lists.
+def _append_labeled_structure_pivot(pivots: list[StructurePivot], pivot: StructurePivot) -> StructurePivot:
+    labeled = _structure_pivot_with_role(_copy_structure_pivot(pivot), _previous_same_kind_wick(pivots, pivot.kind))
+    pivots.append(labeled)
+    return labeled
 
 
 # Confirm high/low uniqueness at `index` using only the window [index-n, index+n].
@@ -112,16 +138,17 @@ def _append_prominent_structure_pivot(
     pct = max(0.0, float(min_swing_pct))
     # Zero thresholds mean "keep every raw pivot", including same-kind neighbors.
     if atr_mult == 0.0 and pct == 0.0:
-        prominent.append(pivot)
+        _append_labeled_structure_pivot(prominent, pivot)
         return
     if not prominent:
-        prominent.append(pivot)
+        _append_labeled_structure_pivot(prominent, pivot)
         return
 
     previous = prominent[-1]
     if pivot.kind == previous.kind:
         if _is_more_extreme_structure_pivot(pivot, previous):
-            prominent[-1] = pivot
+            previous_wick = _previous_same_kind_wick(prominent[:-1], pivot.kind)
+            prominent[-1] = _structure_pivot_with_role(_copy_structure_pivot(pivot), previous_wick)
         return
 
     min_move = max(
@@ -129,7 +156,7 @@ def _append_prominent_structure_pivot(
         _structure_pivot_min_move(pivot, atr_mult=atr_mult, pct=pct),
     )
     if abs(float(pivot.wick_price) - float(previous.wick_price)) >= min_move:
-        prominent.append(pivot)
+        _append_labeled_structure_pivot(prominent, pivot)
 
 
 # Keep only swings that reverse far enough, replacing a same-kind last swing when more extreme.
@@ -140,8 +167,13 @@ def _filter_prominent_structure_pivots(
 ) -> list[StructurePivot]:
     atr_mult = max(0.0, float(min_swing_atr_mult))
     pct = max(0.0, float(min_swing_pct))
-    if not pivots or (atr_mult == 0.0 and pct == 0.0):
-        return list(pivots)
+    if not pivots:
+        return []
+    if atr_mult == 0.0 and pct == 0.0:
+        labeled: list[StructurePivot] = []
+        for pivot in pivots:
+            _append_labeled_structure_pivot(labeled, pivot)
+        return labeled
 
     prominent: list[StructurePivot] = []
     for pivot in sorted(pivots, key=_structure_pivot_sort_key):
@@ -168,19 +200,15 @@ def _structure_pivot_min_move(pivot: StructurePivot, atr_mult: float, pct: float
     return max(atr_move, pct_move)
 
 
+# Assign H/HH/LH or L/HL/LL in confirmation order. Replaces list items so frozen pivots stay immutable.
 def _label_structure_pivots(pivots: list[StructurePivot]) -> None:
     previous_high: float | None = None
     previous_low: float | None = None
-    for pivot in pivots:
+    for index, pivot in enumerate(pivots):
         if pivot.kind == "high":
-            if previous_high is None:
-                pivot.structure_role = "H"
-            else:
-                pivot.structure_role = "HH" if pivot.wick_price > previous_high else "LH"
+            previous_wick = previous_high
             previous_high = pivot.wick_price
         else:
-            if previous_low is None:
-                pivot.structure_role = "L"
-            else:
-                pivot.structure_role = "HL" if pivot.wick_price > previous_low else "LL"
+            previous_wick = previous_low
             previous_low = pivot.wick_price
+        pivots[index] = _structure_pivot_with_role(pivot, previous_wick)

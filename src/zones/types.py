@@ -29,7 +29,7 @@ STRUCTURE_SPLIT_REJECTION_MIN_WICK_WIDTH_MULT = 2.0
 STRUCTURE_SPLIT_REJECTION_MIN_RETEST_WIDTH_MULT = 0.2
 
 
-@dataclass
+@dataclass(frozen=True)
 class StructurePivot:
     index: int
     kind: PivotKind
@@ -61,3 +61,5 @@ class ZoneDetectorEvidence:
     internal_pivots: list[StructurePivot]
     daily_pivots: list[StructurePivot] # prominent daily swings, already structure-labeled
     first_reclaim_indexes: dict[tuple[SwingTerm, int], int] # (term, pivot index) -> first close-through bar
+    four_hour_open_times: np.ndarray # 4h open_time per row, for fingerprint source resolution
+    daily_open_times: np.ndarray # completed UTC daily open_time per daily row

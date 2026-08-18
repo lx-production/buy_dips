@@ -603,6 +603,8 @@ def _assert_evidence_matches(incremental: Any, stateless: Any) -> None:
     assert incremental.internal_pivots == stateless.internal_pivots
     assert incremental.daily_pivots == stateless.daily_pivots
     assert incremental.first_reclaim_indexes == stateless.first_reclaim_indexes
+    np.testing.assert_array_equal(np.asarray(incremental.four_hour_open_times, dtype=np.int64), np.asarray(stateless.four_hour_open_times, dtype=np.int64))
+    np.testing.assert_array_equal(np.asarray(incremental.daily_open_times, dtype=np.int64), np.asarray(stateless.daily_open_times, dtype=np.int64))
 
 
 
