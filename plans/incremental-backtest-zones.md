@@ -203,6 +203,38 @@ Decision gate:
 - Nếu cold `>20s`: tối ưu hotspot đo được trước khi cân nhắc dirty materialization.
 - Chỉ triển khai Milestone 2 nếu materialization thật sự là bottleneck sau profile; không đoán trước.
 
+#### Kết quả đo (2026-08-18)
+
+Machine: macOS 26.5.2 arm64, Python 3.11.14. Source DB copy only; production `backtest_zone_cache` không bị ghi. Range và fixture trùng baseline: `2026-06-01T00:00:00Z` → `2026-08-13T06:00:00Z`, config mặc định.
+
+Correctness:
+
+- Golden / incremental parity: 19 passed (`tests/test_incremental_zone_detector.py` + backtest cache/parity tests).
+- Full `pytest`: 178 passed.
+
+Official cold + warm (một temp copy, cache cleared trước cold):
+
+- 1.758 nến 1h, 440 snapshots, 32 BUY.
+- Cold: `31,866s`, 440 rebuilds, 0 hits, 5.899 candles ingested, 1 full-history scan. Baseline cold `56,4s` → khoảng `1,77x`. Target `<=20s` **không đạt**.
+- Warm: `2,33s`, 0 rebuilds, 440 hits, 0 ingested, 0 scans. Baseline warm `2,23s` → chậm `4,5%`, trong hạn `10%`.
+
+Extended range (cùng copy, cold đến `2026-08-01T00:00:00Z` rồi mở đến `2026-08-13T06:00:00Z`):
+
+- Partial: 367 snapshots, 367 rebuilds, `27,434s`, 1 scan.
+- Extended: 440 snapshots, **73 rebuilds + 367 hits**, `10,84s`, 1 scan, ingested 5.899. Đúng “chỉ build watermark mới”.
+
+Profile cold (cProfile, wall ~76s vì overhead; dùng cumtime/tottime chứ không dùng elapsed này cho gate):
+
+- `run_backtest` ~76s; `build_fingerprinted_support_zones_from_evidence` ~56s; `materialize_support_zones` ~45s.
+- Incremental ingest rẻ: `advance_to` ~4,9s cho 5.899 nến.
+- Hotspot materialization: split-rejection retest (`_first_split_rejection_retest` ~20s tottime, ~59 triệu lambda), persistent-wick stair/gap-fill (`_fill_persistent_wick_floor_gaps` / `_stair_step_support_candidates` ~11s / ~9s), cluster (`_candidate_matches_cluster` / `_cluster_support_candidates`).
+- Chi phí phụ: `snapshot_evidence` copy pivot (`dataclasses.replace` ~1,5 triệu lần, ~8s), fingerprint ~9s.
+
+Quyết định:
+
+- **Không ship Milestone 1** theo gate `cold <=20s`.
+- **Chưa làm Milestone 2.** Materialization đúng là bottleneck, nhưng gate yêu cầu tối ưu hotspot đo được trên full materialization trước (split-rejection retest, stair-step gap-fill, snapshot copy), rồi mới cân nhắc dirty materialization.
+
 ### Bước 6 — Milestone 2: dirty price-component materialization (optional)
 
 Chỉ bắt đầu sau decision gate ở Bước 5.
