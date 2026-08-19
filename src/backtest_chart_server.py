@@ -1,15 +1,19 @@
 from __future__ import annotations
 
-import argparse
 import json
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
-from typing import Any
-from urllib.parse import urlparse
+import time
+import argparse
 
+from pathlib import Path
+from urllib.parse import urlparse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+from typing import Any
+
+from .elapsed_ticker import ElapsedTicker
+from .utils import ms_to_iso, resolve_path
 from .config import AppConfig, load_config
 from .trading.backtest import BacktestError, backtest_api_payload, parse_backtest_bound, run_backtest
-from .utils import ms_to_iso, resolve_path
 
 
 _INDEX_HTML_PATH = Path(__file__).with_name("backtest_chart.html")
@@ -26,8 +30,11 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    # Run the offline replay once up front; refuse to bind if candle/zone data is invalid.
+def main(argv: list[str] | None = None, *, started_at: float | None = None) -> int:
+    """Replay once, bind the chart port, and print wall time from process start to ready."""
+    # CLI entry may pass started_at from before importing this module (true command cold start).
+    if started_at is None:
+        started_at = time.perf_counter()
     args = build_parser().parse_args(argv)
     config = load_config(args.config)
     database_path = resolve_path(config.database_path)
@@ -36,8 +43,9 @@ def main(argv: list[str] | None = None) -> int:
         end_ms = parse_backtest_bound(args.end, label="end") if args.end else None
         end_label = args.end or "latest closed 1h candle"
         print(f"Running backtest {args.start} -> {end_label}...", flush=True)
-        result = run_backtest(config, database_path, start_ms=start_ms, end_ms=end_ms)
-        payload = backtest_api_payload(result, config=config)
+        with ElapsedTicker(started_at):
+            result = run_backtest(config, database_path, start_ms=start_ms, end_ms=end_ms)
+            payload = backtest_api_payload(result, config=config)
     except (BacktestError, Exception) as exc:
         print(f"Backtest chart failed to start: {exc}")
         return 2

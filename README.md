@@ -166,13 +166,25 @@ Backtest chart (1h candles, BUY markers, zones only while each snapshot was vali
 
 ```bash
 python3 scripts/serve_backtest_chart.py \
-  --start 2026-07-01T00:00:00+00:00 \
-  --end 2026-08-01T00:00:00+00:00
+  --start 2026-06-01T00:00:00+00:00 \
+  --end 2026-08-18T00:00:00+00:00
 ```
 
-Then open `http://127.0.0.1:8001`. The server prints the replay range, runs the offline replay once, and only then binds the port; bad/missing data prevents startup. The page uses TradingView Lightweight Charts: scroll to zoom time, drag the plot to pan, and use the price axis to scale price. Reset viewport fits the full window. Hover a candle for its UTC+7 time and OHLC; hover a BUY marker or a support band to append those details under the candle values. Axis labels, HUD, and hover times are shown in UTC+7; replay math and the API stay on UTC milliseconds. There is no HOLD marker or HOLD table. For readability the chart only draws support zones with `low > 57000` and `high < 75000`; the replay and API still include every zone. The chart script is loaded from a CDN, so the browser needs network the first time the page opens.
+Then open `http://127.0.0.1:8001`. The server prints the replay range, runs the offline replay once, and only then binds the port; bad/missing data prevents startup. Under `Running backtest …` an `Elapsed: Ns` line updates in place every second until replay finishes (whole seconds from launching the script). The page uses TradingView Lightweight Charts: scroll to zoom time, drag the plot to pan, and use the price axis to scale price. Reset viewport fits the full window. Hover a candle for its UTC+7 time and OHLC; hover a BUY marker or a support band to append those details under the candle values. Axis labels, HUD, and hover times are shown in UTC+7; replay math and the API stay on UTC milliseconds. There is no HOLD marker or HOLD table. For readability the chart only draws support zones with `low > 57000` and `high < 75000`; the replay and API still include every zone. The chart script is loaded from a CDN, so the browser needs network the first time the page opens.
 
 During replay, each completed 4h bucket is aggregated once and reused by later 1h trigger candles. Cached zone snapshots are validated before use; malformed cache JSON is rebuilt from canonical candles. Backtest still never reads or writes the live `zones`, `zone_sets`, `decisions`, or `bot_state` rows.
+
+## Xóa cache zone của backtest
+
+python3 -c "
+import sqlite3
+conn = sqlite3.connect('data/prana_buy_the_dips.sqlite')
+n = conn.execute('SELECT COUNT(*) FROM backtest_zone_cache').fetchone()[0]
+conn.execute('DELETE FROM backtest_zone_cache')
+conn.commit()
+conn.close()
+print(f'deleted {n} rows')
+"
 
 ## Run One Observe Cycle
 
