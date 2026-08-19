@@ -26,6 +26,9 @@ def detect_support_resistance_zones(
     external_swing_order: int = 5, # 5 candles each side, or 20 hours on each side, or 40 + 4 hours total
     atr_period: int = 14,
     break_atr_mult: float = 0.2,
+    near_price_gap_fill_edge_clearance: float = 450.0,
+    near_price_gap_fill_midpoint_spacing: float = 850.0,
+    near_price_gap_fill_min_touches: int = 4,
     external_min_swing_atr_mult: float = 4.0, # might be too strict, could be reduced if fine-tuning
     external_min_swing_pct: float = 2.5,
 ) -> dict[str, list[dict[str, Any]]]:
@@ -37,6 +40,9 @@ def detect_support_resistance_zones(
         external_swing_order=external_swing_order,
         atr_period=atr_period,
         break_atr_mult=break_atr_mult,
+        near_price_gap_fill_edge_clearance=near_price_gap_fill_edge_clearance,
+        near_price_gap_fill_midpoint_spacing=near_price_gap_fill_midpoint_spacing,
+        near_price_gap_fill_min_touches=near_price_gap_fill_min_touches,
         external_min_swing_atr_mult=external_min_swing_atr_mult,
         external_min_swing_pct=external_min_swing_pct,
     )
@@ -53,6 +59,9 @@ def detect_support_resistance_zones_structure_v1(
     current_price: float | None = None,
     buffer_pct: float = 0.0015,
     break_atr_mult: float = 0.2,
+    near_price_gap_fill_edge_clearance: float = 450.0,
+    near_price_gap_fill_midpoint_spacing: float = 850.0,
+    near_price_gap_fill_min_touches: int = 4,
 ) -> dict[str, list[dict[str, Any]]]:
     empty = {"support": [], "resistance": [], "active": [], "all": []}
     evidence = extract_zone_detector_evidence(
@@ -71,6 +80,9 @@ def detect_support_resistance_zones_structure_v1(
         min_touches=min_touches,
         buffer_pct=buffer_pct,
         break_atr_mult=break_atr_mult,
+        near_price_gap_fill_edge_clearance=near_price_gap_fill_edge_clearance,
+        near_price_gap_fill_midpoint_spacing=near_price_gap_fill_midpoint_spacing,
+        near_price_gap_fill_min_touches=near_price_gap_fill_min_touches,
     )
 
 
@@ -146,6 +158,9 @@ def materialize_support_zones(
     min_touches: int = 2,
     buffer_pct: float = 0.0015,
     break_atr_mult: float = 0.2,
+    near_price_gap_fill_edge_clearance: float = 450.0,
+    near_price_gap_fill_midpoint_spacing: float = 850.0,
+    near_price_gap_fill_min_touches: int = 4,
 ) -> dict[str, list[dict[str, Any]]]:
     current_price = float(evidence.current_price)
     candidates = _support_candidates(
@@ -219,7 +234,11 @@ def materialize_support_zones(
     # Overlaps only here; nearby-slot conflicts wait for the unified resolver.
     zones = _make_support_zones_distinct(zones, current_price=current_price, buffer_pct=buffer_pct)
     # Persistent first, then daily/structural/local by score, touches, width.
-    zones = _enforce_support_zone_spacing(zones)
+    zones = _enforce_support_zone_spacing(
+        zones,
+        near_price_gap_fill_edge_clearance=near_price_gap_fill_edge_clearance,
+        near_price_gap_fill_midpoint_spacing=near_price_gap_fill_midpoint_spacing,
+    )
     # Recover reclaimed-high stairs in wide gaps on the final spaced ladder.
     zones = _fill_persistent_wick_floor_gaps(
         zones=zones,
@@ -232,9 +251,17 @@ def materialize_support_zones(
         buffer_pct=buffer_pct,
         internal_pivots=evidence.internal_pivots,
         first_reclaim_indexes=evidence.first_reclaim_indexes,
+        near_price_gap_fill_edge_clearance=near_price_gap_fill_edge_clearance,
+        near_price_gap_fill_midpoint_spacing=near_price_gap_fill_midpoint_spacing,
+        near_price_gap_fill_min_touches=near_price_gap_fill_min_touches,
     )
     # Same resolver after gap-fill so inserted stairs cannot sit on top of a neighbor.
-    zones = _enforce_support_zone_spacing(zones)
+    zones = _enforce_support_zone_spacing(
+        zones,
+        near_price_gap_fill_edge_clearance=near_price_gap_fill_edge_clearance,
+        near_price_gap_fill_midpoint_spacing=near_price_gap_fill_midpoint_spacing,
+        clear_near_price_gap_fill_marker=True,
+    )
 
     support = sorted(zones, key=lambda zone: float(zone["low"]))
     return {"support": support, "resistance": [], "active": [], "all": support}

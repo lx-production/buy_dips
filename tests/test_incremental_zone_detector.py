@@ -103,7 +103,14 @@ def detect_canonical_support_snapshot_from_evidence(df: pd.DataFrame, **detector
         "external_min_swing_atr_mult",
         "external_min_swing_pct",
     )
-    materialize_keys = ("min_touches", "buffer_pct", "break_atr_mult")
+    materialize_keys = (
+        "min_touches",
+        "buffer_pct",
+        "break_atr_mult",
+        "near_price_gap_fill_edge_clearance",
+        "near_price_gap_fill_midpoint_spacing",
+        "near_price_gap_fill_min_touches",
+    )
     evidence = extract_zone_detector_evidence(
         df,
         **{key: detector_kwargs[key] for key in extract_keys if key in detector_kwargs},
@@ -558,6 +565,12 @@ def _zone_config_from_kwargs(kwargs: dict[str, Any]) -> ZoneConfig:
         fields["atr_period"] = kwargs["atr_period"]
     if "break_atr_mult" in kwargs:
         fields["break_atr_mult"] = kwargs["break_atr_mult"]
+    if "near_price_gap_fill_edge_clearance" in kwargs:
+        fields["near_price_gap_fill_edge_clearance"] = kwargs["near_price_gap_fill_edge_clearance"]
+    if "near_price_gap_fill_midpoint_spacing" in kwargs:
+        fields["near_price_gap_fill_midpoint_spacing"] = kwargs["near_price_gap_fill_midpoint_spacing"]
+    if "near_price_gap_fill_min_touches" in kwargs:
+        fields["near_price_gap_fill_min_touches"] = kwargs["near_price_gap_fill_min_touches"]
     if "external_min_swing_atr_mult" in kwargs:
         fields["external_min_swing_atr_mult"] = kwargs["external_min_swing_atr_mult"]
     if "external_min_swing_pct" in kwargs:
@@ -582,7 +595,14 @@ def _extract_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
 def _canonical_zones_from_evidence(evidence: Any, kwargs: dict[str, Any]) -> list[dict[str, Any]]:
     if evidence is None:
         return []
-    materialize_keys = ("min_touches", "buffer_pct", "break_atr_mult")
+    materialize_keys = (
+        "min_touches",
+        "buffer_pct",
+        "break_atr_mult",
+        "near_price_gap_fill_edge_clearance",
+        "near_price_gap_fill_midpoint_spacing",
+        "near_price_gap_fill_min_touches",
+    )
     result = materialize_support_zones(
         evidence,
         **{key: kwargs[key] for key in materialize_keys if key in kwargs},

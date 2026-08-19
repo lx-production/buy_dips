@@ -59,6 +59,9 @@ Live `refresh_zones` still uses the full-frame extract. Offline backtest cache m
 - `external_min_swing_atr_mult` (default `4.0`)
 - `external_min_swing_pct` (default `2.5`) — percent of wick price, not a percent label
 - `min_touches` (default `2`)
+- `near_price_gap_fill_edge_clearance` (default `$450`)
+- `near_price_gap_fill_midpoint_spacing` (default `$850`)
+- `near_price_gap_fill_min_touches` (default `4`)
 - `role_buffer_pct` (default `0.0015` = 0.15%) — only used to label `price_state`
 - `break_atr_mult` (default `0.2`) — how far a close must go through a high to count as “reclaimed”
 - `current_price` — defaults to the last close
@@ -375,7 +378,20 @@ Keep a candidate only when it does not share a ladder slot with either boundary 
 
 This pass allows zones above current price. The support list is a historical ladder; overhead shelves stay in it.
 
-Then spacing runs **again**, so an inserted stair cannot sit on a neighbor.
+If the regular `$650/$1000` profile cannot insert a candidate, the one adjacent
+gap that crosses current price may retry with the configured near-price profile:
+
+```text
+min_fillable_gap = zone_width + 2 * near_price_gap_fill_edge_clearance
+# default: 500 + 2 * 450 = 1,400
+```
+
+That fallback requires at least `near_price_gap_fill_min_touches` (default `4`),
+uses `$850` midpoint spacing by default, and inserts at most one recovered stair
+in that current-price gap. Other gaps keep the regular `$650/$1000` rules.
+
+Then spacing runs **again**. A near-price fallback carries its tighter profile
+through that final pass, after which the internal marker is removed from output.
 
 ### 14. Return
 

@@ -548,6 +548,75 @@ def test_final_ladder_gap_fill_recovers_zone_between_local_flip_and_persistent_f
     ]
 
 
+def test_near_price_gap_fill_recovers_65300_zone_with_local_spacing_profile() -> None:
+    # Aug 7-style pair: the $1712.66 edge gap is below the regular $1800
+    # minimum but can hold a strong reclaimed-high stair with $450 clearance.
+    lower = _support_zone(low=64085.36, high=64370.0, source_closes=[64085.36, 64370.0], score=9.0)
+    lower["origin"] = "local_retested_flip_support"
+    lower["bounds_style"] = "local_reaction"
+    lower["price_state"] = "active"
+    upper = _support_zone(low=66082.66, high=66582.66, source_closes=[66082.66], score=2.0)
+    upper["origin"] = "persistent_wick_floor"
+    upper["bounds_style"] = "support_floor"
+    upper["price_state"] = "resistance"
+    pivots = [
+        _high_pivot(index=1, wick_price=65200.0, body_price=65104.02),
+        _high_pivot(index=2, wick_price=65250.0, body_price=65170.0),
+        _high_pivot(index=3, wick_price=65320.0, body_price=65229.03),
+        _high_pivot(index=4, wick_price=65450.0, body_price=65354.02),
+    ]
+
+    filled = _fill_persistent_wick_floor_gaps(
+        zones=[lower, upper],
+        raw_external_pivots=pivots,
+        closes=pd.Series([63000.0] * 5 + [80000.0]).to_numpy(dtype=float),
+        break_atr_mult=0.0,
+        zone_width=500.0,
+        min_touches=2,
+        current_price=64319.84,
+        buffer_pct=0.0015,
+    )
+    spaced = _enforce_support_zone_spacing(filled, clear_near_price_gap_fill_marker=True)
+
+    assert [(zone["low"], zone["high"], zone["origin"], zone["touches"]) for zone in spaced] == [
+        (64085.36, 64370.0, "local_retested_flip_support", 2),
+        (64854.02, 65354.02, "stair_step_flipped_resistance", 4),
+        (66082.66, 66582.66, "persistent_wick_floor", 1),
+    ]
+    assert all("_near_price_gap_fill" not in zone for zone in spaced)
+
+
+def test_near_price_gap_fill_requires_configured_touch_floor() -> None:
+    # Three reclaimed highs meet regular min_touches=2 but not the safer local fallback floor of four.
+    lower = _support_zone(low=64085.36, high=64370.0, source_closes=[64085.36, 64370.0], score=9.0)
+    lower["origin"] = "local_retested_flip_support"
+    lower["price_state"] = "active"
+    upper = _support_zone(low=66082.66, high=66582.66, source_closes=[66082.66], score=2.0)
+    upper["origin"] = "persistent_wick_floor"
+    upper["price_state"] = "resistance"
+    pivots = [
+        _high_pivot(index=1, wick_price=65200.0, body_price=65104.02),
+        _high_pivot(index=2, wick_price=65250.0, body_price=65170.0),
+        _high_pivot(index=3, wick_price=65450.0, body_price=65354.02),
+    ]
+
+    filled = _fill_persistent_wick_floor_gaps(
+        zones=[lower, upper],
+        raw_external_pivots=pivots,
+        closes=pd.Series([63000.0] * 4 + [80000.0]).to_numpy(dtype=float),
+        break_atr_mult=0.0,
+        zone_width=500.0,
+        min_touches=2,
+        current_price=64319.84,
+        buffer_pct=0.0015,
+    )
+
+    assert [(zone["low"], zone["high"], zone["origin"]) for zone in filled] == [
+        (64085.36, 64370.0, "local_retested_flip_support"),
+        (66082.66, 66582.66, "persistent_wick_floor"),
+    ]
+
+
 def test_final_ladder_gap_fill_skips_when_reclaimed_highs_are_not_confirmed() -> None:
     lower, upper = _mixed_origin_64k_ladder_pair()
     pivots = [

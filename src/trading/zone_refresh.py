@@ -69,6 +69,9 @@ def build_fingerprinted_support_zones(
         external_swing_order=zone_config.external_swing_order,
         atr_period=zone_config.atr_period,
         break_atr_mult=zone_config.break_atr_mult,
+        near_price_gap_fill_edge_clearance=zone_config.near_price_gap_fill_edge_clearance,
+        near_price_gap_fill_midpoint_spacing=zone_config.near_price_gap_fill_midpoint_spacing,
+        near_price_gap_fill_min_touches=zone_config.near_price_gap_fill_min_touches,
         external_min_swing_atr_mult=zone_config.external_min_swing_atr_mult,
         external_min_swing_pct=zone_config.external_min_swing_pct,
     )
@@ -115,6 +118,9 @@ def build_fingerprinted_support_zones_from_evidence(
             min_touches=zone_config.min_touches,
             buffer_pct=zone_config.role_buffer_pct,
             break_atr_mult=zone_config.break_atr_mult,
+            near_price_gap_fill_edge_clearance=zone_config.near_price_gap_fill_edge_clearance,
+            near_price_gap_fill_midpoint_spacing=zone_config.near_price_gap_fill_midpoint_spacing,
+            near_price_gap_fill_min_touches=zone_config.near_price_gap_fill_min_touches,
         )
         support = materialized.get("support")
         if not isinstance(support, list):

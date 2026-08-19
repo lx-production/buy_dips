@@ -41,6 +41,9 @@ def main() -> int:
         external_swing_order=zone_config.external_swing_order,
         atr_period=zone_config.atr_period,
         break_atr_mult=zone_config.break_atr_mult,
+        near_price_gap_fill_edge_clearance=zone_config.near_price_gap_fill_edge_clearance,
+        near_price_gap_fill_midpoint_spacing=zone_config.near_price_gap_fill_midpoint_spacing,
+        near_price_gap_fill_min_touches=zone_config.near_price_gap_fill_min_touches,
         external_min_swing_atr_mult=zone_config.external_min_swing_atr_mult,
         external_min_swing_pct=zone_config.external_min_swing_pct,
     )

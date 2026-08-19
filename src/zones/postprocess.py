@@ -14,6 +14,9 @@ from .build import _cluster_support_candidates, _has_minimum_unique_touches
 from .types import STRUCTURE_ADJACENT_ZONE_MIN_GAP, STRUCTURE_IMPORTANT_ZONE_SPACING, STRUCTURE_STAIR_STEP_MAX_INSERTIONS, STRUCTURE_STAIR_STEP_MAX_SUPPORT_GAP, StructurePivot, SupportCandidate, SwingTerm
 
 
+_NEAR_PRICE_GAP_FILL_MARKER = "_near_price_gap_fill"
+
+
 # Insert reclaimed-high stairs into wide support gaps, using a price-sorted index per pivot set.
 def _fill_support_staircase_gaps(
     zones: list[dict[str, Any]],
@@ -67,17 +70,21 @@ def _fill_persistent_wick_floor_gaps(
     buffer_pct: float,
     internal_pivots: list[StructurePivot] | None = None,
     first_reclaim_indexes: dict[tuple[SwingTerm, int], int] | None = None,
+    near_price_gap_fill_edge_clearance: float = 450.0,
+    near_price_gap_fill_midpoint_spacing: float = 850.0,
+    near_price_gap_fill_min_touches: int = 4,
 ) -> list[dict[str, Any]]:
     """Recover one evidence-backed stair inside each wide adjacent gap.
 
     This pass runs after persistent/daily overlays and the first spacing
     resolver, so the boundaries can be any surviving origins — not only two
     persistent floors. A gap is fillable when its edge distance can hold one
-    `zone_width` band plus `$650` clearance on both sides. Candidates are
-    clustered inside that gap only; the full structural factory is skipped
-    because its `$2000` macro-merge can swallow a middle cluster into a band
-    that then shares a slot with the lower neighbor. Historical shelves above
-    the current price stay eligible.
+    `zone_width` band plus `$650` clearance on both sides. If that regular pass
+    finds nothing, the single gap crossing current price may use its configured
+    tighter clearance and stronger touch floor. Candidates are clustered inside
+    that gap only; the full structural factory is skipped because its `$2000`
+    macro-merge can swallow a middle cluster into a band that then shares a slot
+    with the lower neighbor. Historical shelves above current price stay eligible.
     """
     boundary_zones = sorted((dict(zone) for zone in zones), key=lambda zone: float(zone["low"]))
     pivot_sets = [raw_external_pivots]
@@ -87,35 +94,47 @@ def _fill_persistent_wick_floor_gaps(
         _index_reclaimed_high_candidates(pivots, closes, break_atr_mult, first_reclaim_indexes)
         for pivots in pivot_sets
     ]
-    min_fillable_gap = _min_fillable_support_gap(zone_width)
+    regular_min_fillable_gap = _min_fillable_support_gap(zone_width, STRUCTURE_ADJACENT_ZONE_MIN_GAP)
+    near_price_edge_clearance = max(0.0, float(near_price_gap_fill_edge_clearance))
+    near_price_midpoint_spacing = max(0.0, float(near_price_gap_fill_midpoint_spacing))
+    near_price_min_fillable_gap = _min_fillable_support_gap(zone_width, near_price_edge_clearance)
+    near_price_min_touches = max(int(min_touches), int(near_price_gap_fill_min_touches))
 
     gap_fills: list[dict[str, Any]] = []
     for lower_zone, upper_zone in zip(boundary_zones, boundary_zones[1:]):
         gap = float(upper_zone["low"]) - float(lower_zone["high"])
-        if gap < min_fillable_gap:
-            continue
-
-        candidate_zones: list[dict[str, Any]] = []
-        for priced in priced_sets:
-            candidate_zones.extend(
-                _cluster_reclaimed_high_gap_zones(
-                    priced=priced,
-                    zone_width=zone_width,
-                    min_touches=min_touches,
-                    lower_zone=lower_zone,
-                    upper_zone=upper_zone,
-                    current_price=current_price,
-                    buffer_pct=buffer_pct,
-                )
+        selected: dict[str, Any] | None = None
+        if gap >= regular_min_fillable_gap:
+            selected = _best_reclaimed_high_gap_fill(
+                priced_sets=priced_sets,
+                zone_width=zone_width,
+                min_touches=min_touches,
+                lower_zone=lower_zone,
+                upper_zone=upper_zone,
+                current_price=current_price,
+                buffer_pct=buffer_pct,
+                edge_clearance=STRUCTURE_ADJACENT_ZONE_MIN_GAP,
+                midpoint_spacing=STRUCTURE_IMPORTANT_ZONE_SPACING,
             )
-        candidate_zones = [
-            zone
-            for zone in candidate_zones
-            if not _support_zones_share_ladder_slot(zone, lower_zone)
-            and not _support_zones_share_ladder_slot(zone, upper_zone)
-        ]
-        if candidate_zones:
-            selected = min(candidate_zones, key=lambda zone: _stair_step_gap_rank(zone, lower_zone, upper_zone))
+        if (
+            selected is None
+            and gap >= near_price_min_fillable_gap
+            and _is_near_price_ladder_gap(lower_zone, upper_zone, current_price, buffer_pct)
+        ):
+            selected = _best_reclaimed_high_gap_fill(
+                priced_sets=priced_sets,
+                zone_width=zone_width,
+                min_touches=near_price_min_touches,
+                lower_zone=lower_zone,
+                upper_zone=upper_zone,
+                current_price=current_price,
+                buffer_pct=buffer_pct,
+                edge_clearance=near_price_edge_clearance,
+                midpoint_spacing=near_price_midpoint_spacing,
+            )
+            if selected is not None:
+                selected[_NEAR_PRICE_GAP_FILL_MARKER] = True
+        if selected is not None:
             gap_fills.append(selected)
 
     return _make_support_zones_distinct(
@@ -125,10 +144,67 @@ def _fill_persistent_wick_floor_gaps(
     )
 
 
-# Smallest edge gap that can fit one zone_width band with $650 clear of both neighbors.
-# 500 + 2 * 650 = 1800, so the inserted stair cannot share a ladder slot with either side.
-def _min_fillable_support_gap(zone_width: float) -> float:
-    return float(zone_width) + 2.0 * STRUCTURE_ADJACENT_ZONE_MIN_GAP
+# Compute the edge gap needed to fit one zone band plus the selected clearance on both sides.
+def _min_fillable_support_gap(zone_width: float, edge_clearance: float = STRUCTURE_ADJACENT_ZONE_MIN_GAP) -> float:
+    return float(zone_width) + 2.0 * float(edge_clearance)
+
+
+# Pick the best reclaimed-high cluster that clears both boundaries under one spacing profile.
+def _best_reclaimed_high_gap_fill(
+    priced_sets: list[_PricedReclaimedHighs],
+    zone_width: float,
+    min_touches: int,
+    lower_zone: dict[str, Any],
+    upper_zone: dict[str, Any],
+    current_price: float,
+    buffer_pct: float,
+    edge_clearance: float,
+    midpoint_spacing: float,
+) -> dict[str, Any] | None:
+    candidate_zones: list[dict[str, Any]] = []
+    for priced in priced_sets:
+        candidate_zones.extend(
+            _cluster_reclaimed_high_gap_zones(
+                priced=priced,
+                zone_width=zone_width,
+                min_touches=min_touches,
+                lower_zone=lower_zone,
+                upper_zone=upper_zone,
+                current_price=current_price,
+                buffer_pct=buffer_pct,
+            )
+        )
+    eligible = [
+        zone
+        for zone in candidate_zones
+        if not _support_zones_share_ladder_slot(
+            zone,
+            lower_zone,
+            edge_clearance=edge_clearance,
+            midpoint_spacing=midpoint_spacing,
+        )
+        and not _support_zones_share_ladder_slot(
+            zone,
+            upper_zone,
+            edge_clearance=edge_clearance,
+            midpoint_spacing=midpoint_spacing,
+        )
+    ]
+    if not eligible:
+        return None
+    return dict(min(eligible, key=lambda zone: _stair_step_gap_rank(zone, lower_zone, upper_zone)))
+
+
+# True only for the adjacent ladder pair that transitions from current/below price to resistance.
+def _is_near_price_ladder_gap(
+    lower_zone: dict[str, Any],
+    upper_zone: dict[str, Any],
+    current_price: float,
+    buffer_pct: float,
+) -> bool:
+    lower_state = _coerce_price_state(lower_zone, current_price, buffer_pct)
+    upper_state = _coerce_price_state(upper_zone, current_price, buffer_pct)
+    return lower_state in ("support", "active") and upper_state == "resistance"
 
 
 # Choose the best reclaimed-high zone across all regular support gaps.
@@ -341,7 +417,13 @@ def _make_support_zones_distinct(
 
 
 # Keep one zone per nearby ladder slot after overlays finish.
-def _enforce_support_zone_spacing(zones: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _enforce_support_zone_spacing(
+    zones: list[dict[str, Any]],
+    *,
+    near_price_gap_fill_edge_clearance: float = 450.0,
+    near_price_gap_fill_midpoint_spacing: float = 850.0,
+    clear_near_price_gap_fill_marker: bool = False,
+) -> list[dict[str, Any]]:
     """Resolve nearby-slot conflicts with one priority order.
 
     A $650 edge gap or $1000 midpoint counts as the same ladder step. Persistent
@@ -351,18 +433,53 @@ def _enforce_support_zone_spacing(zones: list[dict[str, Any]]) -> list[dict[str,
     kept: list[dict[str, Any]] = []
     for zone in sorted(zones, key=_spaced_support_zone_rank, reverse=True):
         zone = dict(zone)
-        if any(_support_zones_share_ladder_slot(zone, previous) for previous in kept):
+        if any(
+            _support_zones_share_configured_ladder_slot(
+                zone,
+                previous,
+                near_price_gap_fill_edge_clearance=near_price_gap_fill_edge_clearance,
+                near_price_gap_fill_midpoint_spacing=near_price_gap_fill_midpoint_spacing,
+            )
+            for previous in kept
+        ):
             continue
         kept.append(zone)
+    if clear_near_price_gap_fill_marker:
+        for zone in kept:
+            zone.pop(_NEAR_PRICE_GAP_FILL_MARKER, None)
     return sorted(kept, key=lambda item: float(item["low"]))
 
 
 # True when two zones are close enough to count as the same support step.
-def _support_zones_share_ladder_slot(first: dict[str, Any], second: dict[str, Any]) -> bool:
+def _support_zones_share_ladder_slot(
+    first: dict[str, Any],
+    second: dict[str, Any],
+    *,
+    edge_clearance: float = STRUCTURE_ADJACENT_ZONE_MIN_GAP,
+    midpoint_spacing: float = STRUCTURE_IMPORTANT_ZONE_SPACING,
+) -> bool:
     lower, upper = (first, second) if float(first["low"]) <= float(second["low"]) else (second, first)
     gap = float(upper["low"]) - float(lower["high"])
     midpoint_gap = abs(float(first["mid"]) - float(second["mid"]))
-    return gap < STRUCTURE_ADJACENT_ZONE_MIN_GAP or midpoint_gap < STRUCTURE_IMPORTANT_ZONE_SPACING
+    return gap < float(edge_clearance) or midpoint_gap < float(midpoint_spacing)
+
+
+# Apply the relaxed profile only while resolving a tagged near-price gap-fill zone.
+def _support_zones_share_configured_ladder_slot(
+    first: dict[str, Any],
+    second: dict[str, Any],
+    *,
+    near_price_gap_fill_edge_clearance: float,
+    near_price_gap_fill_midpoint_spacing: float,
+) -> bool:
+    if first.get(_NEAR_PRICE_GAP_FILL_MARKER) or second.get(_NEAR_PRICE_GAP_FILL_MARKER):
+        return _support_zones_share_ladder_slot(
+            first,
+            second,
+            edge_clearance=max(0.0, float(near_price_gap_fill_edge_clearance)),
+            midpoint_spacing=max(0.0, float(near_price_gap_fill_midpoint_spacing)),
+        )
+    return _support_zones_share_ladder_slot(first, second)
 
 
 # Persistent floors first, then score, touches, and narrower width.

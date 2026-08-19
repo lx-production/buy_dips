@@ -111,6 +111,9 @@ def _cmd_zones(config: AppConfig, database_path: Path) -> int:
         external_swing_order=zc.external_swing_order,
         atr_period=zc.atr_period,
         break_atr_mult=zc.break_atr_mult,
+        near_price_gap_fill_edge_clearance=zc.near_price_gap_fill_edge_clearance,
+        near_price_gap_fill_midpoint_spacing=zc.near_price_gap_fill_midpoint_spacing,
+        near_price_gap_fill_min_touches=zc.near_price_gap_fill_min_touches,
         external_min_swing_atr_mult=zc.external_min_swing_atr_mult,
         external_min_swing_pct=zc.external_min_swing_pct,
     )

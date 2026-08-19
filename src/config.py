@@ -16,6 +16,9 @@ from .trading.constants import POLYGON_CHAIN_ID, SWAP_ROUTER_02_ADDRESSES
 class ZoneConfig(BaseModel):
     min_touches: int = 2
     role_buffer_pct: float = 0.0015
+    near_price_gap_fill_edge_clearance: float = Field(default=450.0, ge=0.0)
+    near_price_gap_fill_midpoint_spacing: float = Field(default=850.0, ge=0.0)
+    near_price_gap_fill_min_touches: int = Field(default=4, ge=2)
     internal_swing_order: int = 2
     external_swing_order: int = 5
     atr_period: int = 14
