@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-import argparse
 import json
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import argparse
+
 from pathlib import Path
-from typing import Any
+from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlparse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+from typing import Any
 
 from .config import AppConfig, load_config
 from .db import load_candles_df
@@ -22,8 +25,12 @@ from .zones import (
 
 DEFAULT_LIMIT = 400
 ALL_CANDLES_LIMIT = "all"
-VISIBLE_SUPPORT_ZONES_BELOW_PRICE = 4
+# Display-only: hide cheap historical supports; detector still sees every zone.
+VISIBLE_ZONE_MIN = 57000
 VISIBLE_SUPPORT_ZONES_ABOVE_PRICE = 2
+# Inclusive UTC open_time for the default 4h helper view (2026-06-01 07:00 +07:00).
+CHART_VISIBLE_START_MS = int(datetime(2026, 6, 1, tzinfo=timezone.utc).timestamp() * 1000)
+_INDEX_HTML_PATH = Path(__file__).with_name("chart.html")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -57,6 +64,7 @@ def load_chart_payload(
     database_path: str | Path,
     limit: int | None = DEFAULT_LIMIT,
     timeframe: str | None = None,
+    start_ms: int | None = None,
 ) -> dict[str, Any]:
     selected_timeframe = _normalize_timeframe(timeframe, config.timeframe)
     df = _load_chart_candles_df(
@@ -81,8 +89,7 @@ def load_chart_payload(
     zone_config = config.zones
     zones = _detect_chart_zones(df=zone_df, current_price=current_price, zone_config=zone_config)
     support_zones = _visible_support_zones(zones["support"], current_price)
-    visible_df = df if limit is None else df.tail(max(1, int(limit)))
-    visible_start_index = max(0, len(df) - len(visible_df))
+    visible_df, visible_start_index = _visible_candle_frame(df, start_ms=start_ms, limit=limit)
     pivots = _chart_pivots(
         df=df,
         visible_start_index=visible_start_index,
@@ -217,26 +224,40 @@ def _chart_pivots(
 def _visible_support_zones(
     support_zones: list[dict[str, Any]],
     current_price: float,
-    below_count: int = VISIBLE_SUPPORT_ZONES_BELOW_PRICE,
+    min_low: float = VISIBLE_ZONE_MIN,
     above_count: int = VISIBLE_SUPPORT_ZONES_ABOVE_PRICE,
 ) -> list[dict[str, Any]]:
     """Filter detected zones for chart display only; detection algo stays unchanged."""
     price = float(current_price)
-    # Keep the nearest N supports at/below price (closest zone high to current price).
-    nearest_below = sorted(
-        [zone for zone in support_zones if float(zone["low"]) <= price],
-        key=lambda zone: (
-            price - float(zone["high"]),
-            -float(zone.get("score", 0.0)),
-            -int(zone["touches"]),
-        ),
-    )[: max(0, int(below_count))]
-    below_or_touching = sorted(nearest_below, key=lambda zone: float(zone["low"]))
+    eligible = [zone for zone in support_zones if float(zone["low"]) > float(min_low)]
+    # Keep every eligible support at/below price; only the nearest N above price.
+    below_or_touching = sorted(
+        [zone for zone in eligible if float(zone["low"]) <= price],
+        key=lambda zone: float(zone["low"]),
+    )
     above = sorted(
-        [zone for zone in support_zones if float(zone["low"]) > price],
+        [zone for zone in eligible if float(zone["low"]) > price],
         key=lambda zone: (float(zone["low"]) - price, -float(zone.get("score", 0.0)), -int(zone["touches"])),
     )
     return below_or_touching + above[: max(0, int(above_count))]
+
+
+def _visible_candle_frame(df: Any, *, start_ms: int | None, limit: int | None) -> tuple[Any, int]:
+    """Slice plotted candles by inclusive start and optional tail limit.
+
+    Zone detection still uses the full closed series; this only chooses what the chart draws.
+    """
+    visible = df
+    if start_ms is not None:
+        visible = visible[visible["open_time"].astype("int64") >= int(start_ms)]
+    if limit is not None and not visible.empty:
+        visible = visible.tail(max(1, int(limit)))
+    if visible.empty:
+        return visible, len(df)
+    first_open = int(visible.iloc[0]["open_time"])
+    matches = df.index[df["open_time"].astype("int64") == first_open]
+    visible_start_index = int(matches[0]) if len(matches) else 0
+    return visible, visible_start_index
 
 
 def _make_handler(config: AppConfig, database_path: Path, default_limit: int) -> type[BaseHTTPRequestHandler]:
@@ -257,6 +278,7 @@ def _make_handler(config: AppConfig, database_path: Path, default_limit: int) ->
                     database_path=database_path,
                     limit=limit,
                     timeframe=timeframe,
+                    start_ms=_parse_start_ms(query.get("start_ms", [""])[0]),
                 )
                 self._send_json(payload)
                 return
@@ -284,6 +306,17 @@ def _make_handler(config: AppConfig, database_path: Path, default_limit: int) ->
     return ChartHandler
 
 
+def _parse_start_ms(raw: str) -> int | None:
+    """Parse an optional UTC-ms query bound; ignore empty or invalid values."""
+    text = raw.strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
 def _parse_limit(raw: str, fallback: int) -> int | None:
     if raw.strip().lower() == ALL_CANDLES_LIMIT:
         return None
@@ -300,329 +333,12 @@ def _normalize_timeframe(raw: str | None, fallback: str) -> str:
 
 
 def _build_index_html(default_limit: int) -> str:
-    return _INDEX_HTML_TEMPLATE.replace("__LIMIT__", str(default_limit))
+    """Load the Lightweight Charts page from disk and inject view placeholders.
 
-
-_INDEX_HTML_TEMPLATE = """<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>BTCUSDT 4H Zones</title>
-  <style>
-    :root { color-scheme: dark; }
-    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #090c10; color: #e6edf3; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    #app { position: fixed; inset: 0; }
-    canvas { display: block; width: 100vw; height: 100vh; }
-    .hud { position: fixed; top: 18px; left: 22px; z-index: 2; padding: 12px 14px; border: 1px solid rgba(255,255,255,.08); border-radius: 12px; background: rgba(9,12,16,.72); backdrop-filter: blur(10px); box-shadow: 0 12px 40px rgba(0,0,0,.32); max-width: min(360px, calc(100vw - 44px)); }
-    .hud-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-    .title { font-size: 15px; font-weight: 700; letter-spacing: .04em; }
-    .hud-toggle { flex: 0 0 auto; width: 24px; height: 24px; margin: 0; padding: 0; border: 1px solid rgba(255,255,255,.14); border-radius: 7px; color: #c9d1d9; background: rgba(13,17,23,.88); font: 700 14px/1 ui-sans-serif, system-ui; cursor: pointer; }
-    .hud-toggle:hover { color: #e6edf3; border-color: rgba(255,255,255,.28); }
-    .hud.collapsed { padding: 8px 10px; }
-    .hud.collapsed .hud-body { display: none; }
-    .meta { margin-top: 4px; color: #8b949e; font-size: 12px; }
-    .legend { display: flex; gap: 12px; margin-top: 9px; color: #c9d1d9; font-size: 12px; }
-    .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; }
-    .support { background: #2ea043; }
-    .controls { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; color: #c9d1d9; font-size: 12px; }
-    .field { display: inline-flex; align-items: center; gap: 6px; }
-    .field select { color: #e6edf3; background: rgba(13,17,23,.88); border: 1px solid rgba(255,255,255,.14); border-radius: 7px; padding: 3px 7px; font: inherit; }
-    .error { position: fixed; inset: auto 22px 22px 22px; padding: 12px 14px; border-radius: 10px; color: #ffdcd7; background: rgba(248,81,73,.14); border: 1px solid rgba(248,81,73,.35); font-size: 13px; display: none; }
-  </style>
-</head>
-<body>
-  <div id="app"><canvas id="chart"></canvas></div>
-  <div class="hud" id="hud">
-    <div class="hud-header">
-      <div class="title" id="title">BTCUSDT 4H</div>
-      <button type="button" class="hud-toggle" id="hud-toggle" title="Minimize panel" aria-label="Minimize panel" aria-expanded="true">−</button>
-    </div>
-    <div class="hud-body" id="hud-body">
-      <div class="meta" id="meta">Loading SQLite candles and zones…</div>
-      <div class="legend">
-        <span><i class="dot support"></i>Support</span>
-      </div>
-      <div class="controls">
-        <label class="field">
-          View
-          <select id="view-select">
-            <option value="4h-recent">4H recent (__LIMIT__)</option>
-            <option value="1d-all">1D all candles</option>
-          </select>
-        </label>
-      </div>
-    </div>
-  </div>
-  <div class="error" id="error"></div>
-  <script>
-    const canvas = document.getElementById('chart');
-    const ctx = canvas.getContext('2d');
-    const hud = document.getElementById('hud');
-    const title = document.getElementById('title');
-    const meta = document.getElementById('meta');
-    const error = document.getElementById('error');
-    const hudToggle = document.getElementById('hud-toggle');
-    const viewSelect = document.getElementById('view-select');
-    const HUD_COLLAPSED_KEY = 'chartHudCollapsed';
-    const viewOptions = {
-      '4h-recent': { timeframe: '4h', limit: '__LIMIT__' },
-      '1d-all': { timeframe: '1d', limit: 'all' }
-    };
-    let chartData = null;
-
-    // Collapse the HUD so the panel stops covering the top-left of the chart.
-    function setHudCollapsed(collapsed) {
-      hud.classList.toggle('collapsed', collapsed);
-      hudToggle.textContent = collapsed ? '+' : '−';
-      hudToggle.title = collapsed ? 'Expand panel' : 'Minimize panel';
-      hudToggle.setAttribute('aria-label', hudToggle.title);
-      hudToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-      try { localStorage.setItem(HUD_COLLAPSED_KEY, collapsed ? '1' : '0'); } catch (_) {}
-    }
-
-    function isHudCollapsedStored() {
-      try { return localStorage.getItem(HUD_COLLAPSED_KEY) === '1'; } catch (_) { return false; }
-    }
-
-    setHudCollapsed(isHudCollapsedStored());
-    hudToggle.addEventListener('click', () => {
-      setHudCollapsed(!hud.classList.contains('collapsed'));
-    });
-
-    async function load() {
-      error.style.display = 'none';
-      const params = new URLSearchParams(viewOptions[viewSelect.value] || viewOptions['4h-recent']);
-      const response = await fetch(`/api/chart?${params.toString()}`);
-      if (!response.ok) throw new Error(`Chart API failed: ${response.status}`);
-      chartData = await response.json();
-      title.textContent = `${chartData.symbol} ${chartData.timeframe.toUpperCase()}`;
-      const candleText = formatCandleCount(chartData.candles.length, chartData.total_candles);
-      meta.textContent = `${candleText} • last close ${formatPrice(chartData.current_price)}`;
-      draw();
-    }
-
-    function resize() {
-      const ratio = window.devicePixelRatio || 1;
-      canvas.width = Math.floor(window.innerWidth * ratio);
-      canvas.height = Math.floor(window.innerHeight * ratio);
-      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-      draw();
-    }
-
-    function draw() {
-      const width = window.innerWidth;
-      const height = window.innerHeight;
-      ctx.clearRect(0, 0, width, height);
-      drawBackground(width, height);
-      if (!chartData || chartData.candles.length === 0) {
-        drawCentered('No closed candles found in SQLite.');
-        return;
-      }
-      const candles = chartData.candles;
-      const zones = chartData.zones.support || [];
-      const prices = candles.flatMap(candle => [candle.high, candle.low]).concat(zones.flatMap(zone => [zone.low, zone.high]));
-      const minPrice = Math.min(...prices);
-      const maxPrice = Math.max(...prices);
-      const padding = Math.max((maxPrice - minPrice) * 0.08, 1);
-      const scale = {
-        left: 56,
-        right: 92,
-        top: 38,
-        bottom: 44,
-        min: minPrice - padding,
-        max: maxPrice + padding,
-        plotWidth: width - 148,
-        plotHeight: height - 82
-      };
-      drawGrid(width, height, scale);
-      drawZones(zones, width, scale);
-      drawCandles(candles, scale);
-      drawPivots(chartData.pivots || [], candles, scale);
-      drawPriceAxis(scale, width);
-      drawTimeAxis(candles, scale, height);
-    }
-
-    function yFor(price, scale) {
-      return scale.top + ((scale.max - price) / (scale.max - scale.min)) * scale.plotHeight;
-    }
-
-    function drawBackground(width, height) {
-      const gradient = ctx.createLinearGradient(0, 0, 0, height);
-      gradient.addColorStop(0, '#0d1117');
-      gradient.addColorStop(1, '#05070a');
-      ctx.fillStyle = gradient;
-      ctx.fillRect(0, 0, width, height);
-    }
-
-    function drawGrid(width, height, scale) {
-      ctx.strokeStyle = 'rgba(139,148,158,.15)';
-      ctx.lineWidth = 1;
-      for (let i = 0; i <= 6; i++) {
-        const y = scale.top + (scale.plotHeight / 6) * i;
-        ctx.beginPath();
-        ctx.moveTo(scale.left, y);
-        ctx.lineTo(width - scale.right, y);
-        ctx.stroke();
-      }
-      for (let i = 0; i <= 8; i++) {
-        const x = scale.left + (scale.plotWidth / 8) * i;
-        ctx.beginPath();
-        ctx.moveTo(x, scale.top);
-        ctx.lineTo(x, height - scale.bottom);
-        ctx.stroke();
-      }
-    }
-
-    function drawZones(zones, width, scale) {
-      for (const zone of zones) {
-        const top = yFor(zone.high, scale);
-        const bottom = yFor(zone.low, scale);
-        const color = '46,160,67';
-        ctx.fillStyle = `rgba(${color}, .16)`;
-        ctx.strokeStyle = `rgba(${color}, .55)`;
-        ctx.fillRect(scale.left, top, scale.plotWidth, Math.max(bottom - top, 2));
-        ctx.strokeRect(scale.left, top, scale.plotWidth, Math.max(bottom - top, 2));
-        ctx.fillStyle = `rgba(${color}, .95)`;
-        ctx.font = '12px ui-sans-serif, system-ui';
-        ctx.textAlign = 'left';
-        ctx.fillText(`support ${formatPrice(zone.low)}-${formatPrice(zone.high)} (${zone.touches})`, scale.left + 8, top - 5);
-      }
-    }
-
-    function drawCandles(candles, scale) {
-      const step = scale.plotWidth / candles.length;
-      const bodyWidth = Math.max(2, Math.min(12, step * 0.62));
-      candles.forEach((candle, index) => {
-        const x = scale.left + step * index + step / 2;
-        const openY = yFor(candle.open, scale);
-        const closeY = yFor(candle.close, scale);
-        const highY = yFor(candle.high, scale);
-        const lowY = yFor(candle.low, scale);
-        const up = candle.close >= candle.open;
-        ctx.strokeStyle = up ? '#3fb950' : '#ff7b72';
-        ctx.fillStyle = up ? '#3fb950' : '#ff7b72';
-        ctx.beginPath();
-        ctx.moveTo(x, highY);
-        ctx.lineTo(x, lowY);
-        ctx.stroke();
-        const bodyTop = Math.min(openY, closeY);
-        const bodyHeight = Math.max(Math.abs(closeY - openY), 1);
-        ctx.fillRect(x - bodyWidth / 2, bodyTop, bodyWidth, bodyHeight);
-      });
-    }
-
-    function drawPivots(pivots, candles, scale) {
-      if (!pivots.length || !candles.length) return;
-      const step = scale.plotWidth / candles.length;
-      for (const pivot of pivots) {
-        const visibleIndex = Number(pivot.visible_index);
-        if (!Number.isFinite(visibleIndex) || visibleIndex < 0 || visibleIndex >= candles.length) continue;
-
-        const x = scale.left + step * visibleIndex + step / 2;
-        const isHigh = pivot.kind === 'high';
-        const priceY = yFor(pivot.wick_price, scale);
-        const markerY = isHigh ? priceY - 7 : priceY + 7;
-        const labelY = isHigh ? priceY - 18 : priceY + 26;
-        const label = `internal ${pivot.role || (isHigh ? 'H' : 'L')}`;
-        const color = '#79c0ff';
-        const fill = 'rgba(121,192,255,.16)';
-
-        ctx.strokeStyle = color;
-        ctx.fillStyle = color;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        if (isHigh) {
-          ctx.moveTo(x, priceY - 2);
-          ctx.lineTo(x - 4, markerY);
-          ctx.lineTo(x + 4, markerY);
-        } else {
-          ctx.moveTo(x, priceY + 2);
-          ctx.lineTo(x - 4, markerY);
-          ctx.lineTo(x + 4, markerY);
-        }
-        ctx.closePath();
-        ctx.stroke();
-
-        ctx.font = '10px ui-sans-serif, system-ui';
-        const metrics = ctx.measureText(label);
-        const padX = 4;
-        const boxWidth = metrics.width + padX * 2;
-        const boxHeight = 14;
-        const boxX = Math.max(scale.left, Math.min(x - boxWidth / 2, scale.left + scale.plotWidth - boxWidth));
-        const boxY = Math.max(scale.top, Math.min(labelY - boxHeight / 2, scale.top + scale.plotHeight - boxHeight));
-        ctx.fillStyle = 'rgba(9,12,16,.78)';
-        ctx.fillRect(boxX, boxY, boxWidth, boxHeight);
-        ctx.strokeStyle = fill;
-        ctx.strokeRect(boxX, boxY, boxWidth, boxHeight);
-        ctx.fillStyle = color;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(label, boxX + boxWidth / 2, boxY + boxHeight / 2);
-        ctx.textBaseline = 'alphabetic';
-      }
-    }
-
-    function drawPriceAxis(scale, width) {
-      ctx.fillStyle = '#8b949e';
-      ctx.font = '12px ui-sans-serif, system-ui';
-      ctx.textAlign = 'left';
-      for (let i = 0; i <= 6; i++) {
-        const price = scale.max - ((scale.max - scale.min) / 6) * i;
-        ctx.fillText(formatPrice(price), width - scale.right + 12, yFor(price, scale) + 4);
-      }
-    }
-
-    function drawTimeAxis(candles, scale, height) {
-      ctx.fillStyle = '#8b949e';
-      ctx.font = '12px ui-sans-serif, system-ui';
-      ctx.textAlign = 'center';
-      for (let i = 0; i <= 4; i++) {
-        const index = Math.min(candles.length - 1, Math.floor((candles.length - 1) * (i / 4)));
-        const x = scale.left + scale.plotWidth * (i / 4);
-        ctx.fillText(formatDate(candles[index].time), x, height - 18);
-      }
-    }
-
-    function drawCentered(message) {
-      ctx.fillStyle = '#8b949e';
-      ctx.font = '16px ui-sans-serif, system-ui';
-      ctx.textAlign = 'center';
-      ctx.fillText(message, window.innerWidth / 2, window.innerHeight / 2);
-    }
-
-    function formatPrice(value) {
-      if (value === null || value === undefined) return 'n/a';
-      return Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 });
-    }
-
-    function formatCandleCount(visibleCount, totalCount) {
-      if (Number.isFinite(totalCount) && totalCount > visibleCount) {
-        return `${visibleCount} of ${totalCount} closed candles`;
-      }
-      return `${visibleCount} closed candles`;
-    }
-
-    function formatDate(value) {
-      return new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-    }
-
-    window.addEventListener('resize', resize);
-    viewSelect.addEventListener('change', () => {
-      load().catch(showLoadError);
-    });
-    resize();
-    load().catch(showLoadError);
-
-    function showLoadError(err) {
-      error.style.display = 'block';
-      error.textContent = err.message;
-      drawCentered('Unable to load chart data.');
-    }
-  </script>
-</body>
-</html>
-"""
+    Candle and zone data still come from GET /api/chart, not from this HTML.
+    """
+    template = _INDEX_HTML_PATH.read_text(encoding="utf-8")
+    return template.replace("__LIMIT__", str(default_limit)).replace("__START_MS__", str(CHART_VISIBLE_START_MS))
 
 
 if __name__ == "__main__":

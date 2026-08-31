@@ -3,23 +3,26 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Backtest BUY Chart</title>
+  <title>BTCUSDT 4H Zones</title>
   <style>
     :root { color-scheme: dark; }
-    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #090c10; color: #e6edf3; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #090c10; color: #e6edf3; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     #app, #chart { position: fixed; inset: 0; }
-    .hud { position: fixed; top: 18px; left: 22px; z-index: 2; padding: 12px 14px; border: 1px solid rgba(255,255,255,.08); border-radius: 12px; background: rgba(9,12,16,.78); backdrop-filter: blur(10px); max-width: min(420px, calc(100vw - 44px)); }
+    .hud { position: fixed; top: 18px; left: 22px; z-index: 2; padding: 12px 14px; border: 1px solid rgba(255,255,255,.08); border-radius: 12px; background: rgba(9,12,16,.78); backdrop-filter: blur(10px); box-shadow: 0 12px 40px rgba(0,0,0,.32); max-width: min(420px, calc(100vw - 44px)); }
     .hud-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-    .title { font-size: 15px; font-weight: 700; letter-spacing: .03em; }
-    .hud-toggle { width: 24px; height: 24px; margin: 0; padding: 0; border: 1px solid rgba(255,255,255,.14); border-radius: 7px; color: #c9d1d9; background: rgba(13,17,23,.88); font: 700 14px/1 ui-sans-serif, system-ui; cursor: pointer; }
+    .title { font-size: 15px; font-weight: 700; letter-spacing: .04em; }
+    .hud-toggle { flex: 0 0 auto; width: 24px; height: 24px; margin: 0; padding: 0; border: 1px solid rgba(255,255,255,.14); border-radius: 7px; color: #c9d1d9; background: rgba(13,17,23,.88); font: 700 14px/1 ui-sans-serif, system-ui; cursor: pointer; }
+    .hud-toggle:hover { color: #e6edf3; border-color: rgba(255,255,255,.28); }
+    .hud.collapsed { padding: 8px 10px; }
     .hud.collapsed .hud-body { display: none; }
     .meta { margin-top: 6px; color: #8b949e; font-size: 12px; line-height: 1.45; }
     .legend { display: flex; gap: 12px; margin-top: 9px; color: #c9d1d9; font-size: 12px; }
     .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; }
     .support { background: #2ea043; }
-    .buy { background: #3fb950; }
-    .controls { margin-top: 10px; }
-    .controls button { color: #e6edf3; background: rgba(13,17,23,.88); border: 1px solid rgba(255,255,255,.14); border-radius: 7px; padding: 4px 10px; font: inherit; cursor: pointer; }
+    .pivot { background: #79c0ff; }
+    .controls { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; color: #c9d1d9; font-size: 12px; }
+    .field { display: inline-flex; align-items: center; gap: 6px; }
+    .field select, .controls button { color: #e6edf3; background: rgba(13,17,23,.88); border: 1px solid rgba(255,255,255,.14); border-radius: 7px; padding: 4px 10px; font: inherit; cursor: pointer; }
     .tooltip { position: fixed; z-index: 3; display: none; max-width: min(360px, calc(100vw - 24px)); padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,.12); background: rgba(9,12,16,.92); color: #e6edf3; font-size: 12px; line-height: 1.45; pointer-events: none; white-space: pre-wrap; }
     .error { position: fixed; inset: auto 22px 22px 22px; padding: 12px 14px; border-radius: 10px; color: #ffdcd7; background: rgba(248,81,73,.14); border: 1px solid rgba(248,81,73,.35); font-size: 13px; display: none; }
   </style>
@@ -29,16 +32,23 @@
   <div id="app"><div id="chart"></div></div>
   <div class="hud" id="hud">
     <div class="hud-header">
-      <div class="title" id="title">Backtest</div>
+      <div class="title" id="title">BTCUSDT 4H</div>
       <button type="button" class="hud-toggle" id="hud-toggle" title="Minimize panel" aria-label="Minimize panel" aria-expanded="true">−</button>
     </div>
     <div class="hud-body" id="hud-body">
-      <div class="meta" id="meta">Loading backtest replay…</div>
+      <div class="meta" id="meta">Loading SQLite candles and zones…</div>
       <div class="legend">
-        <span><i class="dot support"></i>Support (valid window)</span>
-        <span><i class="dot buy"></i>BUY</span>
+        <span><i class="dot support"></i>Support</span>
+        <span><i class="dot pivot"></i>Internal pivot</span>
       </div>
       <div class="controls">
+        <label class="field">
+          View
+          <select id="view-select">
+            <option value="4h-from-june">4H from 2026-06-01</option>
+            <option value="1d-all">1D all candles</option>
+          </select>
+        </label>
         <button type="button" id="reset-view">Reset viewport</button>
       </div>
       <div class="meta">Times are UTC+7. Scroll to zoom time. Drag plot to pan. Drag / scroll the price axis to scale price.</div>
@@ -54,19 +64,24 @@
     const error = document.getElementById('error');
     const tooltip = document.getElementById('tooltip');
     const hudToggle = document.getElementById('hud-toggle');
+    const viewSelect = document.getElementById('view-select');
     const resetView = document.getElementById('reset-view');
-    const HUD_COLLAPSED_KEY = 'backtestChartHudCollapsed';
-    // Display-only band so far-away supports do not clutter the pane.
-    const VISIBLE_ZONE_MIN = 62000;
-    const VISIBLE_ZONE_MAX = 83000;
+    const HUD_COLLAPSED_KEY = 'chartHudCollapsed';
+    const viewOptions = {
+      '4h-from-june': { timeframe: '4h', limit: 'all', start_ms: '__START_MS__' },
+      '1d-all': { timeframe: '1d', limit: 'all' }
+    };
+    const BAR_SECONDS = { '4h': 4 * 3600, '1d': 86400 };
 
     let chartData = null;
     let visibleZones = [];
-    let visibleBuys = [];
+    let visiblePivots = [];
     let candleByTime = new Map();
+    let barSeconds = BAR_SECONDS['4h'];
     let chart = null;
     let candleSeries = null;
 
+    // Collapse the HUD so the panel stops covering the top-left of the chart.
     function setHudCollapsed(collapsed) {
       hud.classList.toggle('collapsed', collapsed);
       hudToggle.textContent = collapsed ? '+' : '−';
@@ -75,15 +90,22 @@
       hudToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
       try { localStorage.setItem(HUD_COLLAPSED_KEY, collapsed ? '1' : '0'); } catch (_) {}
     }
-    try { setHudCollapsed(localStorage.getItem(HUD_COLLAPSED_KEY) === '1'); } catch (_) { setHudCollapsed(false); }
-    hudToggle.addEventListener('click', () => setHudCollapsed(!hud.classList.contains('collapsed')));
+
+    function isHudCollapsedStored() {
+      try { return localStorage.getItem(HUD_COLLAPSED_KEY) === '1'; } catch (_) { return false; }
+    }
+
+    setHudCollapsed(isHudCollapsedStored());
+    hudToggle.addEventListener('click', () => {
+      setHudCollapsed(!hud.classList.contains('collapsed'));
+    });
 
     function toSec(ms) {
       return Math.floor(Number(ms) / 1000);
     }
 
-    function isVisibleZone(zone) {
-      return Number(zone.low) > VISIBLE_ZONE_MIN && Number(zone.high) < VISIBLE_ZONE_MAX;
+    function barSecondsFor(timeframe) {
+      return BAR_SECONDS[String(timeframe || '').toLowerCase()] || BAR_SECONDS['4h'];
     }
 
     // Map a UTC-ms bound onto the bar edge. valid_to is exclusive.
@@ -92,7 +114,7 @@
       const x = timeScale.timeToCoordinate(sec);
       if (x !== null) return x - spacing / 2;
       if (which === 'end') {
-        const prev = timeScale.timeToCoordinate(sec - 3600);
+        const prev = timeScale.timeToCoordinate(sec - barSeconds);
         if (prev !== null) return prev + spacing / 2;
       }
       return null;
@@ -105,16 +127,20 @@
       draw(target) {
         target.useMediaCoordinateSpace((scope) => {
           const ctx = scope.context;
+          ctx.font = '12px ui-sans-serif, system-ui';
+          ctx.textAlign = 'left';
           for (const box of this._boxes) {
             const x = Math.min(box.x1, box.x2);
             const y = Math.min(box.y1, box.y2);
             const width = Math.max(Math.abs(box.x2 - box.x1), 1);
             const height = Math.max(Math.abs(box.y2 - box.y1), 1);
             ctx.fillStyle = 'rgba(46,160,67,0.16)';
-            ctx.strokeStyle = box.highlight ? 'rgba(63,185,80,0.95)' : 'rgba(46,160,67,0.55)';
-            ctx.lineWidth = box.highlight ? 2 : 1;
+            ctx.strokeStyle = 'rgba(46,160,67,0.55)';
+            ctx.lineWidth = 1;
             ctx.fillRect(x, y, width, height);
             ctx.strokeRect(x, y, width, height);
+            ctx.fillStyle = 'rgba(46,160,67,0.95)';
+            ctx.fillText(box.label, x + 8, y - 5);
           }
         });
       }
@@ -144,7 +170,7 @@
           const y1 = series.priceToCoordinate(Number(zone.high));
           const y2 = series.priceToCoordinate(Number(zone.low));
           if (x1 === null || x2 === null || y1 === null || y2 === null) continue;
-          this._boxes.push({ x1, x2, y1, y2, highlight: Boolean(zone.highlight) });
+          this._boxes.push({ x1, x2, y1, y2, label: zone.label });
         }
       }
       renderer() {
@@ -152,7 +178,7 @@
       }
     }
 
-    // One primitive draws every time-bounded support band so zoom/pan stay on the library.
+    // One primitive draws every support band so zoom/pan stay on the library.
     class ZoneBandsPrimitive {
       constructor(zones) {
         this._zones = zones;
@@ -181,9 +207,16 @@
       return Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 });
     }
 
+    function formatCandleCount(visibleCount, totalCount) {
+      if (Number.isFinite(totalCount) && totalCount > visibleCount) {
+        return `${visibleCount} of ${totalCount} closed candles`;
+      }
+      return `${visibleCount} closed candles`;
+    }
+
     const UTC7_OFFSET_MS = 7 * 60 * 60 * 1000;
 
-    // Display-only: shift the UTC instant into UTC+7 wall time. Replay math stays UTC.
+    // Display-only: shift the UTC instant into UTC+7 wall time. API times stay UTC.
     function formatUtc7(ms, withSeconds) {
       if (ms === null || ms === undefined || !Number.isFinite(Number(ms))) return 'n/a';
       const shifted = new Date(Number(ms) + UTC7_OFFSET_MS);
@@ -205,12 +238,6 @@
       return `${month}-${day} ${hour}:${minute}`;
     }
 
-    function shortFp(fp) {
-      if (!fp) return 'n/a';
-      return fp.length > 18 ? `${fp.slice(0, 10)}…${fp.slice(-6)}` : fp;
-    }
-
-    // Candle OHLC for the hovered 1h bar. Time is UTC+7 display only.
     function formatOhlcLines(candle) {
       return [
         formatUtc7(Number(candle.time) * 1000),
@@ -221,7 +248,6 @@
       ];
     }
 
-    // Always show the hovered candle OHLC; append BUY or zone details when the pointer is on those.
     function showTooltip(candle, hit, clientX, clientY) {
       if (!candle && !hit) {
         tooltip.style.display = 'none';
@@ -229,28 +255,16 @@
       }
       const parts = [];
       if (candle) parts.push(formatOhlcLines(candle).join('\n'));
-      if (hit && hit.type === 'buy') {
-        const b = hit.item;
-        parts.push([
-          `BUY ${formatUtc7(b.trigger_open_time)}`,
-          `close ${formatPrice(b.trigger_close)}`,
-          `entry ${b.entry_region}`,
-          `zone ${formatPrice(b.zone_low)} / ${formatPrice(b.zone_mid)} / ${formatPrice(b.zone_high)}`,
-          `higher ${shortFp(b.higher_zone_fingerprint)} low=${formatPrice(b.higher_zone_low)}`,
-          `next-lower ${shortFp(b.next_lower_zone_fingerprint)} high=${formatPrice(b.next_lower_zone_high)}`,
-          `midpoint ${formatPrice(b.internal_range_midpoint)}`,
-          `below-zone % ${b.below_zone_pct == null ? 'n/a' : Number(b.below_zone_pct).toFixed(3)}`,
-          `dip ${formatUtc7(b.dip_origin_open_time)} @ ${formatPrice(b.dip_origin_close)}`,
-          `zone_set_as_of ${formatUtc7(b.zone_set_as_of)}`
-        ].join('\n'));
-      } else if (hit && hit.type === 'zone') {
+      if (hit && hit.type === 'zone') {
         const z = hit.item;
         parts.push([
-          `zone ${formatPrice(z.low)}-${formatPrice(z.high)} mid ${formatPrice(z.mid)}`,
-          `valid ${formatUtc7(z.valid_from)} → ${formatUtc7(z.valid_to)}`,
-          `source ${z.source_timeframe} • touches ${z.touches}`,
-          `fp ${shortFp(z.fingerprint)}`
+          `zone ${formatPrice(z.low)}-${formatPrice(z.high)}`,
+          `touches ${z.touches}`
         ].join('\n'));
+      } else if (hit && hit.type === 'pivot') {
+        const p = hit.item;
+        const kind = p.kind === 'high' ? 'H' : 'L';
+        parts.push(`internal ${p.role || kind} @ ${formatPrice(p.wick_price)}`);
       }
       tooltip.textContent = parts.join('\n\n');
       tooltip.style.display = 'block';
@@ -261,8 +275,8 @@
 
     function hitAt(timeSec, price) {
       const timeMs = Number(timeSec) * 1000;
-      const buy = visibleBuys.find((item) => item.trigger_open_time === timeMs);
-      if (buy) return { type: 'buy', item: buy };
+      const pivot = visiblePivots.find((item) => Number(item.time) === timeMs);
+      if (pivot) return { type: 'pivot', item: pivot };
       if (price === null || price === undefined) return null;
       const zone = visibleZones.find((item) =>
         timeMs >= item.valid_from && timeMs < item.valid_to &&
@@ -280,9 +294,23 @@
     function requireLightweightCharts() {
       const lib = window.LightweightCharts;
       if (!lib || typeof lib.createChart !== 'function') {
-        throw new Error('Lightweight Charts failed to load. The backtest page needs network once to fetch the CDN script.');
+        throw new Error('Lightweight Charts failed to load. The chart page needs network once to fetch the CDN script.');
       }
       return lib;
+    }
+
+    // Latest-zone helper chart: bands span the whole visible window, not a replay validity range.
+    function zonesSpanningWindow(zones, candles) {
+      if (!candles.length) return [];
+      const firstMs = Number(candles[0].time) * 1000;
+      const lastMs = Number(candles[candles.length - 1].time) * 1000;
+      const validTo = lastMs + barSeconds * 1000;
+      return (zones || []).map((zone) => ({
+        ...zone,
+        valid_from: firstMs,
+        valid_to: validTo,
+        label: `support ${formatPrice(zone.low)}-${formatPrice(zone.high)} (${zone.touches})`
+      }));
     }
 
     function renderChart(data) {
@@ -294,18 +322,11 @@
         low: Number(candle.low),
         close: Number(candle.close)
       }));
-      if (!candles.length) throw new Error('No closed candles in backtest window.');
+      if (!candles.length) throw new Error('No closed candles found in SQLite.');
+      barSeconds = barSecondsFor(data.timeframe);
       candleByTime = new Map(candles.map((candle) => [candle.time, candle]));
-
-      visibleBuys = data.buys || [];
-      visibleZones = (data.zone_segments || []).filter(isVisibleZone).map((zone) => ({
-        ...zone,
-        highlight: visibleBuys.some((buy) =>
-          buy.selected_zone_fingerprint === zone.fingerprint &&
-          buy.trigger_open_time >= zone.valid_from &&
-          buy.trigger_open_time < zone.valid_to
-        )
-      }));
+      visibleZones = zonesSpanningWindow(data.zones && data.zones.support, candles);
+      visiblePivots = data.pivots || [];
 
       if (chart) {
         chart.remove();
@@ -348,13 +369,17 @@
       candleSeries.setData(candles);
       candleSeries.attachPrimitive(new ZoneBandsPrimitive(visibleZones));
 
-      const markers = visibleBuys.map((buy) => ({
-        time: toSec(buy.trigger_open_time),
-        position: 'belowBar',
-        color: '#3fb950',
-        shape: 'arrowUp',
-        text: 'BUY'
-      }));
+      const markers = visiblePivots.map((pivot) => {
+        const isHigh = pivot.kind === 'high';
+        const role = pivot.role || (isHigh ? 'H' : 'L');
+        return {
+          time: toSec(pivot.time),
+          position: isHigh ? 'aboveBar' : 'belowBar',
+          color: '#79c0ff',
+          shape: isHigh ? 'arrowDown' : 'arrowUp',
+          text: `internal ${role}`
+        };
+      });
       if (typeof lib.createSeriesMarkers === 'function') {
         lib.createSeriesMarkers(candleSeries, markers);
       } else if (typeof candleSeries.setMarkers === 'function') {
@@ -377,24 +402,27 @@
 
     async function load() {
       error.style.display = 'none';
-      const response = await fetch('/api/backtest');
-      if (!response.ok) throw new Error(`Backtest API failed: ${response.status}`);
+      tooltip.style.display = 'none';
+      const params = new URLSearchParams(viewOptions[viewSelect.value] || viewOptions['4h-from-june']);
+      const response = await fetch(`/api/chart?${params.toString()}`);
+      if (!response.ok) throw new Error(`Chart API failed: ${response.status}`);
       chartData = await response.json();
-      if (chartData.holds) throw new Error('API payload unexpectedly contains HOLD decisions');
-      title.textContent = `${chartData.meta.symbol} 1H backtest`;
-      meta.textContent = [
-        `${formatUtc7(chartData.meta.start_ms)} → ${formatUtc7(chartData.meta.end_ms)}`,
-        `${chartData.meta.evaluated_candles} candles • ${chartData.meta.zone_snapshot_count} zone snapshots • ${chartData.meta.buy_count} BUY`,
-        `${chartData.meta.zone_cache_hit_count} cache hits • ${chartData.meta.zone_rebuild_count} detector builds`
-      ].join('\n');
+      title.textContent = `${chartData.symbol} ${chartData.timeframe.toUpperCase()}`;
+      const candleText = formatCandleCount(chartData.candles.length, chartData.total_candles);
+      meta.textContent = `${candleText} • last close ${formatPrice(chartData.current_price)}`;
       renderChart(chartData);
     }
 
-    resetView.addEventListener('click', resetViewport);
-    load().catch((err) => {
+    function showLoadError(err) {
       error.style.display = 'block';
       error.textContent = err.message;
+    }
+
+    resetView.addEventListener('click', resetViewport);
+    viewSelect.addEventListener('change', () => {
+      load().catch(showLoadError);
     });
+    load().catch(showLoadError);
   </script>
 </body>
 </html>

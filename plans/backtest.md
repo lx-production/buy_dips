@@ -38,7 +38,7 @@
 
 ## Hành vi chart
 
-- Backtest chart dùng TradingView Lightweight Charts (CDN). `serve_chart.py` vẫn là canvas homemade.
+- Backtest chart và chart 4h live (`serve_chart.py`) đều dùng TradingView Lightweight Charts (CDN).
 - Ban đầu fit toàn bộ khoảng backtest; zoom/pan thời gian và giá do thư viện; nút reset viewport gọi `fitContent`.
 - Vẽ support zone bằng một series primitive (hình chữ nhật `valid_from` → `valid_to`, `low` → `high`); chỉ các band có `low > 57000` và `high < 75000` (lọc hiển thị; API vẫn trả đủ segment).
 - Vẽ BUY bằng marker xanh tại `trigger_close`; selected zone tại BUY được nhấn mạnh.
@@ -54,4 +54,4 @@
 - Chart và quyết định dùng timeframe 1h; replay/API giữ Unix UTC, còn nhãn trục / HUD / hover của backtest chart hiển thị UTC+7.
 - `start` là ranh giới bắt đầu một replay độc lập: prior-setup state rỗng tại đó, còn `dip_lookback_hours` trước `start` chỉ dùng cho dip-origin lookback.
 - Backtest là signal-only: không PnL, sell, quote, slippage, gas, wallet hoặc transaction simulation.
-- Backtest chart được phép dùng Lightweight Charts + một rectangle primitive cho zone time-bounded. Chart 4h live (`serve_chart.py`) vẫn canvas cho đến khi đổi riêng.
+- Cả backtest chart và chart 4h live đều dùng Lightweight Charts + một rectangle primitive cho zone bands. Backtest band bị cắt theo `valid_from`/`valid_to`; live band trải suốt cửa sổ nến đang xem.

@@ -2,57 +2,30 @@ from __future__ import annotations
 
 import pandas as pd
 
-from src.chart_server import _chart_pivots, _visible_support_zones, load_chart_payload
+from src.chart_server import CHART_VISIBLE_START_MS, _chart_pivots, _visible_support_zones, load_chart_payload
 from src.config import AppConfig, ZoneConfig
 from src.db import upsert_candles
 
 
-def test_visible_support_zones_keep_below_price_and_nearest_two_above() -> None:
+def test_visible_support_zones_keep_lows_above_min_and_nearest_two_above_price() -> None:
     zones = [
-        _zone(80.0, 85.0, touches=4),
-        _zone(70.0, 75.0, touches=3),
-        _zone(102.0, 107.0, touches=2),
-        _zone(110.0, 115.0, touches=8),
-        _zone(130.0, 135.0, touches=10),
+        _zone(50000.0, 51000.0, touches=4),
+        _zone(57000.0, 57500.0, touches=3),
+        _zone(58000.0, 59000.0, touches=2),
+        _zone(65000.0, 66000.0, touches=5),
+        _zone(80000.0, 81000.0, touches=8),
+        _zone(90000.0, 91000.0, touches=1),
+        _zone(100000.0, 101000.0, touches=9),
     ]
 
-    visible = _visible_support_zones(zones, current_price=100.0)
+    visible = _visible_support_zones(zones, current_price=70000.0)
 
     assert [(zone["low"], zone["high"]) for zone in visible] == [
-        (70.0, 75.0),
-        (80.0, 85.0),
-        (102.0, 107.0),
-        (110.0, 115.0),
+        (58000.0, 59000.0),
+        (65000.0, 66000.0),
+        (80000.0, 81000.0),
+        (90000.0, 91000.0),
     ]
-
-
-def test_visible_support_zones_keep_only_nearest_four_below_price() -> None:
-    zones = [
-        _zone(40.0, 45.0, touches=9),
-        _zone(50.0, 55.0, touches=8),
-        _zone(60.0, 65.0, touches=7),
-        _zone(70.0, 75.0, touches=6),
-        _zone(80.0, 85.0, touches=5),
-        _zone(90.0, 95.0, touches=4),
-        _zone(102.0, 107.0, touches=2),
-    ]
-
-    visible = _visible_support_zones(zones, current_price=100.0, above_count=0)
-
-    assert [(zone["low"], zone["high"]) for zone in visible] == [
-        (60.0, 65.0),
-        (70.0, 75.0),
-        (80.0, 85.0),
-        (90.0, 95.0),
-    ]
-
-
-def test_visible_support_zones_keep_price_touching_zone() -> None:
-    zones = [_zone(98.0, 103.0), _zone(104.0, 109.0), _zone(120.0, 125.0)]
-
-    visible = _visible_support_zones(zones, current_price=100.0, above_count=1)
-
-    assert [(zone["low"], zone["high"]) for zone in visible] == [(98.0, 103.0), (104.0, 109.0)]
 
 
 def test_chart_pivots_hide_by_default() -> None:
@@ -162,6 +135,37 @@ def test_daily_chart_view_uses_four_hour_zones(tmp_path) -> None:
     assert daily_payload["timeframe"] == "1d"
     assert [candle["close"] for candle in daily_payload["candles"]] == [100000.0, 101000.0, 102000.0, 103000.0, 104000.0]
     assert daily_zones == four_hour_zones
+
+
+def test_load_chart_payload_filters_candles_from_start_ms(tmp_path) -> None:
+    db_path = tmp_path / "bot.sqlite"
+    config = AppConfig()
+    step_ms = 14_400_000
+    start_ms = CHART_VISIBLE_START_MS
+    before = start_ms - step_ms
+    after = start_ms + step_ms
+    upsert_candles(
+        db_path,
+        [
+            _candle(open_time=before, close_time=before + step_ms - 1, close=90.0),
+            _candle(open_time=start_ms, close_time=start_ms + step_ms - 1, close=100.0),
+            _candle(open_time=after, close_time=after + step_ms - 1, close=110.0),
+        ],
+        config.exchange,
+        config.symbol,
+        "4h",
+    )
+
+    payload = load_chart_payload(
+        config=config,
+        database_path=db_path,
+        limit=None,
+        timeframe="4h",
+        start_ms=start_ms,
+    )
+
+    assert payload["total_candles"] == 3
+    assert [candle["time"] for candle in payload["candles"]] == [start_ms, after]
 
 
 def _zone(low: float, high: float, touches: int = 1) -> dict:

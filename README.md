@@ -160,7 +160,7 @@ Latest zones on closed 4h candles (unchanged helper chart):
 python3 scripts/serve_chart.py
 ```
 
-Then open `http://127.0.0.1:8000`. For readability it only draws the nearest 4 supports at/below price plus the nearest 2 above; the detector itself is unchanged.
+Then open `http://127.0.0.1:8000`. The default 4H view plots closed candles from **2026-06-01 00:00 UTC** through the latest bar (zones still use full 4h history). The page is `src/chart.html` and uses TradingView Lightweight Charts (same library as the backtest chart): scroll to zoom time, drag the plot to pan, and use the price axis to scale price. Reset viewport fits the full window. Hover a candle for its UTC+7 time and OHLC; hover a support band or internal pivot to append those details. Axis labels, HUD, and hover times are shown in UTC+7; API times stay on UTC milliseconds. For readability it only draws support zones with `low > 57000`, plus at most the nearest 2 supports above current price; the detector itself is unchanged. The chart script is loaded from a CDN, so the browser needs network the first time the page opens.
 
 Backtest chart (1h candles, BUY markers, zones only while each snapshot was valid):
 
