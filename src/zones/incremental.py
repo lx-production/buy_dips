@@ -18,8 +18,6 @@ from .pivots import _append_labeled_structure_pivot, _append_prominent_structure
 
 
 FOUR_HOURS_MS = 14_400_000
-# Detector internals always use one bar on each side, not ZoneConfig.internal_swing_order.
-INTERNAL_BARS_EACH_SIDE = 1
 
 
 class IncrementalZoneDetectorError(ValueError):
@@ -38,6 +36,7 @@ class IncrementalZoneDetectorState:
     # Capture detector knobs and start with empty 4h / daily evidence.
     def __init__(self, zone_config: Any) -> None:
         self._external_bars = max(1, int(zone_config.external_swing_order))
+        self._internal_bars = max(1, int(zone_config.internal_swing_order))
         self._atr_period = int(zone_config.atr_period)
         self._break_atr_mult = float(zone_config.break_atr_mult)
         self._min_swing_atr_mult = float(zone_config.external_min_swing_atr_mult)
@@ -94,8 +93,8 @@ class IncrementalZoneDetectorState:
             period=self._atr_period,
         )
 
-        # Internal center is the previous bar; external center sits `external_swing_order` back.
-        self._confirm_new_4h_center(term="internal", bars_each_side=INTERNAL_BARS_EACH_SIDE)
+        # Internal and external centers sit `bars_each_side` back from the newest bar.
+        self._confirm_new_4h_center(term="internal", bars_each_side=self._internal_bars)
         self._confirm_new_4h_center(term="external", bars_each_side=self._external_bars)
         self._resolve_pending_reclaims(candle.close)
         self._expire_local_internal_pivots()

@@ -1,6 +1,6 @@
 # PRANA Buy the Dips Bot
 
-Local Python bot for a fail-closed Polygon canary flow. It fetches Binance Spot `BTCUSDT` **1h** candles, derives closed **4h** bars, detects support zones with `support_structure_v1` (`src/zones/`), and evaluates one gate-based decision engine: `support_close_v1`. Every live cycle writes a `BUY` or `HOLD` row to the `decisions` table.
+Local Python bot for a fail-closed Polygon canary flow. It fetches Binance Spot `BTCUSDT` **1h** candles, derives closed **4h** bars, detects support zones with `support_structure_v2` (`src/zones/` plus sticky `ZoneTrackState`), and evaluates one gate-based decision engine: `support_close_v2`. Every live cycle writes a `BUY` or `HOLD` row to the `decisions` table.
 
 The hourly CLI path today is **`trade-once --mode observe`**: fetch → zones → decision → persist. Offline **`backtest`** replays the same engine on stored candles and exports BUY CSV / a visual chart. Wallet helpers (`wallet-create`, `trade-check`, `approve-trading`, `revoke-trading`) exist for prep. Quote/simulate/`live` broadcast from the Phase 2 plan are not wired into the runner yet.
 
@@ -9,7 +9,7 @@ The hourly CLI path today is **`trade-once --mode observe`**: fetch → zones �
 - Fetches public Binance Spot `BTCUSDT` **1h** klines into SQLite (`candles`, `timeframe="1h"`).
 - Derives closed Binance-aligned **4h** bars from those 1h candles and stores them as `timeframe="4h"`.
 - Rebuilds support zones only when a newer completed 4h bar appears (scoped `bot_state` watermark).
-- Persists zone fingerprints (`zf1:…`) and evaluates `support_close_v1` on the latest closed 1h candle. BUY requires a **red** trigger candle (`close < open`).
+- Persists zone fingerprints (`zf1:…`, now the sticky `zone_track_id`) and evaluates `support_close_v2` on the latest closed 1h candle. BUY requires a **red** trigger candle (`close < open`).
 - Stores every decision (`BUY` / `HOLD` + `reason_code`) in `decisions`.
 - Offline backtest replays history in memory (no live table writes), prints a BUY summary, writes a BUY CSV, and can serve a 1h chart with time-bounded zones.
 - Creates an encrypted local keystore, checks Polygon contracts/balances, and can grant/revoke a capped USDT router allowance.
@@ -103,7 +103,7 @@ Backtest also needs enough older **4h** history in SQLite for detector warm-up b
 
 ## Offline Backtest
 
-Replay `support_close_v1` on stored closed 1h candles. The engine is the same as observe; already-bought setups and the per-zone 24h cooldown use an in-memory prior-BUY list for that run only (never reads/writes `decisions`, `zones`, `zone_sets`, or `bot_state`).
+Replay `support_close_v2` on stored closed 1h candles. The engine is the same as observe; already-bought setups and the per-zone 24h cooldown use an in-memory prior-BUY list for that run only (never reads/writes `decisions`, `zones`, `zone_sets`, or `bot_state`).
 
 - `--start` is inclusive, `--end` is exclusive. Both must be ISO-8601 with timezone on any UTC hour boundary; 4h alignment is not required.
 - `--end` defaults to after the latest closed 1h candle.
@@ -203,7 +203,7 @@ One cycle:
 1. Fetches recent closed `BTCUSDT` 1h klines into `candles`.
 2. Derives any overdue completed 4h buckets from those 1h rows (aborts if a due 4h bucket is missing 1h constituents).
 3. Rebuilds zones when the 4h watermark advances; otherwise loads the last fingerprinted zone set.
-4. Evaluates `support_close_v1` on the latest closed 1h candle.
+4. Evaluates `support_close_v2` on the latest closed 1h candle.
 5. Persists the decision (`BUY` or `HOLD`) and prints id / decision / reason / zones-rebuilt.
 
 No wallet credentials are required for `observe`.
@@ -229,7 +229,7 @@ python3 -m src.cli approve-trading
 python3 -m src.cli revoke-trading
 ```
 
-## Decision Engine (`support_close_v1`)
+## Decision Engine (`support_close_v2`)
 
 One dip-to-support flow. Output is gate-based (not scored): exactly one `decision` (`BUY` / `HOLD`) and one `reason_code` per cycle.
 
@@ -262,26 +262,28 @@ Reason codes:
 
 Fetch failures, zone-build failures, and an overdue incomplete 4h bucket abort the runner **before** a decision row is written.
 
-## Zone Detection (`support_structure_v1`)
+## Zone Detection (`support_structure_v2`)
 
-Detector lives under `src/zones/` and stays support-oriented. Tune swing sensitivity under `zones:` in `config.yaml`.
+Detector lives under `src/zones/` and stays support-oriented. Tune swing sensitivity under `zones:` in `config.yaml`. After materialize, live refresh and backtest run a causal `ZoneTrackState` so chart and BUY see the same sticky ladder.
 
 High level:
 
-- The public detector extracts features from closed 4h OHLC, then materializes the ladder from that evidence bag. The output contract stays unchanged; materialization also receives the near-price gap-fill knobs documented below.
-- Offline incremental ingest (`IncrementalZoneDetectorState`) is used by cold backtest cache misses. Live `refresh_zones` still uses the stateless full-frame path.
+- The public detector extracts features from closed 4h OHLC, then materializes the ladder from that evidence bag. Materialization also receives the near-price gap-fill knobs documented below.
+- Internal pivots use `internal_swing_order` (default `2` candles each side) in both the stateless extract and `IncrementalZoneDetectorState`.
+- Offline incremental ingest (`IncrementalZoneDetectorState`) is used by cold backtest cache misses. Live `refresh_zones` still uses the stateless full-frame path, then the same sticky-track layer as backtest.
 - High/low/body ranges detect internal and external swing points on closed 4h OHLC.
 - External swings are filtered into prominent pivots with ATR/percent thresholds.
 - Support evidence includes swing lows, reclaimed resistance, wick-floor retests, derived 1D body-support overlays, and **persistent wick floors**.
 - A closed 4H local swing low whose wick hangs at least `2%` of the wick price below the body pins `low = wick`, `high = wick + 500` (`origin=persistent_wick_floor`, one touch). Band height stays `$500`; the `2%` filter is independent so ordinary `$500` wicks are not pinned. Rebuilds re-emit that frozen band from the original source candle so a later deeper low cannot merge or daily-overlay it away.
 - Structural and local families stay side by side until daily, rejection, and persistent overlays finish. A later `$650` gap / `$1000` midpoint pass then keeps one zone per ladder step: persistent floors win first (oldest floor wins among themselves); daily, structural, and local bands compete by score, then touches, then narrower width. Early cross-family suppress is skipped so a short-lived local band cannot erase a farther structural shelf that does not conflict with the floor.
-- After that first spacing pass, any adjacent pair whose edge gap is at least `$1800` (`$500` band + `$650` on each side) can receive one reclaimed-high cluster that sits strictly between them and does not share a ladder slot with either neighbor. Candidates are clustered inside that gap only (no structural macro-merge). If the regular pass finds nothing, only the adjacent gap that crosses current price gets a denser fallback: default `$450` edge clearance, `$850` midpoint spacing, and at least `4` touches. This recovers one nearby stair without making the whole ladder denser. Historical regular gap-fill still applies above current price because the support ladder is historical structure, not just levels below the latest candle.
+- After that first spacing pass, any adjacent pair whose edge gap is at least `$1800` (`$500` band + `$650` on each side) can receive one reclaimed-high cluster that sits strictly between them and does not share a ladder slot with either neighbor. Candidates are clustered inside that gap only (no structural macro-merge). If the regular pass finds nothing, only the adjacent gap that crosses current price may retry the configured near-price profile. Defaults now match regular spacing (`$650` edge, `$1000` midpoint) so that fallback does not densify the current-price gap; it still requires at least `4` touches. Historical regular gap-fill still applies above current price because the support ladder is historical structure, not just levels below the latest candle.
 - Other candidates group into fixed-width (~$500) bands; those swing zones need at least `min_touches` touches.
 - Detector returns `support` / `resistance` / `active` / `all`; `resistance` and `active` stay empty. Hourly trading uses the full `support` list (including zones currently above price) so below-zone entries still work.
+- `ZoneTrackState` then keeps those candidates sticky: a new shelf must appear on 2 consecutive 4h snapshots before it is published; an active shelf stays for 2 misses and retires on the 3rd; a challenger in the same ladder slot must win 2 consecutive snapshots to replace; bounds only move after the new level is confirmed twice. The first snapshot of a run bootstraps so existing shelves are live immediately. Chart and signal both use the active tracks. Cooldown uses `zone_track_id` (copied onto `fingerprint`). Exact-bound `zone_lineage_id` remains for audit.
 
 Default prominent-pivot filter: reversal of at least `max(4.0 * ATR, 2.5% of price)`. Set `external_min_swing_atr_mult: 0.0` and `external_min_swing_pct: 0.0` to use raw local extrema. The chart does not overlay external pivots; optional internal debug markers stay hidden unless `show_internal_pivots: true`.
 
-After each rebuild, `zone_refresh` resolves `source_indexes` → `source_open_times` / `zone_source_time` and attaches two identities: `zone_lineage_id` (stable band + `source_timeframe` + `bounds_style`) and `revision_fingerprint` (includes `source_open_times` for audit/cache). The persisted `fingerprint` used by cooldown, setup identity, and chart segment merge is the lineage, so adding a later touch does not reset the 24h window or split the chart band. The hourly signal path never recomputes these hashes from raw indexes.
+After each rebuild, `zone_refresh` resolves `source_indexes` → `source_open_times` / `zone_source_time` and attaches `zone_lineage_id` (exact band + `source_timeframe` + `bounds_style`) plus `revision_fingerprint` (includes `source_open_times` for audit/cache). Sticky tracks then set persisted `fingerprint` / `zone_track_id` from the first confirmed band of that track, so a later confirmed bound step does not reset the 24h cooldown. The hourly signal path never recomputes these hashes from raw indexes. Backtest cache stores pre-track detector candidates; replay always applies tracks in watermark order. Live persists track JSON in `bot_state` under `zone_track_state:…`. A new detector version invalidates that cache and live watermark.
 
 ## Safety
 
@@ -296,4 +298,4 @@ After each rebuild, `zone_refresh` resolves `source_indexes` → `source_open_ti
 pytest
 ```
 
-`tests/test_incremental_zone_detector.py` locks the current stateless detector as an in-memory prefix oracle and covers the zone-transition fixtures. Extract-then-materialize and `IncrementalZoneDetectorState.advance` must deep-equal that oracle at every golden prefix. Fail-closed tests cover out-of-order, duplicate, gapped, and unclosed 4h candles. Offline backtest uses that incremental state on cache misses. `scripts/benchmark_backtest.py` measures cold/warm snapshot rebuilds on a temporary database copy.
+`tests/test_incremental_zone_detector.py` locks the current stateless detector as an in-memory prefix oracle and covers the zone-transition fixtures. Extract-then-materialize and `IncrementalZoneDetectorState.advance` must deep-equal that oracle at every golden prefix, including `internal_swing_order=2`. Fail-closed tests cover out-of-order, duplicate, gapped, and unclosed 4h candles. `tests/test_zone_tracks.py` locks 2-confirm / 3-miss / bound-hysteresis / challenger replacement. Offline backtest uses incremental state on cache misses, then applies tracks in watermark order. `scripts/benchmark_backtest.py` measures cold/warm snapshot rebuilds on a temporary database copy.

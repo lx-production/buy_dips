@@ -160,7 +160,8 @@ def test_zone_snapshot_and_watermark_commit_together(tmp_path) -> None:
     assert second.rebuilt is False
     assert calls == 1
     assert first.zones[0]["fingerprint"].startswith("zf1:")
-    assert first.zones[0]["fingerprint"] == first.zones[0]["zone_lineage_id"]
+    assert first.zones[0]["fingerprint"] == first.zones[0]["zone_track_id"]
+    assert first.zones[0]["fingerprint"] != first.zones[0]["zone_lineage_id"]
     assert first.zones[0]["revision_fingerprint"].startswith("zf1:")
     with connect(db_path) as conn:
         key = zone_rebuild_watermark_key()

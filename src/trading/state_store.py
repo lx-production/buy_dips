@@ -22,6 +22,19 @@ def zone_rebuild_watermark_key(
     return "zone_rebuild_watermark:" + ":".join(values)
 
 
+def zone_track_state_key(
+    exchange: str = EXCHANGE,
+    symbol: str = SYMBOL,
+    timeframe: str = ZONE_TIMEFRAME,
+    detector_version: str = DETECTOR_VERSION,
+) -> str:
+    """bot_state key for the sticky ZoneTrackState JSON that lives between live 4h rebuilds."""
+    values = (exchange, symbol, timeframe, detector_version)
+    if any(not value or ":" in value for value in values):
+        raise ValueError("Track-state scope values must be non-empty and cannot contain ':'")
+    return "zone_track_state:" + ":".join(values)
+
+
 def get_zone_rebuild_watermark(conn: sqlite3.Connection, key: str) -> int | None:
     row = conn.execute("SELECT value FROM bot_state WHERE key = ?", (key,)).fetchone()
     if row is None:
@@ -48,6 +61,35 @@ def set_zone_rebuild_watermark(
         ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
         """,
         (key, str(int(open_time_ms)), int(updated_at_s)),
+    )
+
+
+def get_zone_track_state_json(conn: sqlite3.Connection, key: str) -> str | None:
+    """Load the sticky-track JSON blob, or None when this detector scope has no prior tracks."""
+    row = conn.execute("SELECT value FROM bot_state WHERE key = ?", (key,)).fetchone()
+    if row is None:
+        return None
+    raw = row["value"] if isinstance(row, sqlite3.Row) else row[0]
+    if not isinstance(raw, str) or not raw:
+        raise StateStoreError(f"Malformed zone track state for {key}")
+    return raw
+
+
+def set_zone_track_state_json(
+    conn: sqlite3.Connection,
+    key: str,
+    payload_json: str,
+    updated_at_s: int,
+) -> None:
+    """Persist sticky-track JSON in the same transaction as the live zone snapshot."""
+    if not payload_json:
+        raise StateStoreError("Zone track state JSON must be non-empty")
+    conn.execute(
+        """
+        INSERT INTO bot_state(key, value, updated_at) VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+        """,
+        (key, payload_json, int(updated_at_s)),
     )
 
 

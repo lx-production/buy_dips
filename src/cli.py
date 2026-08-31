@@ -109,6 +109,7 @@ def _cmd_zones(config: AppConfig, database_path: Path) -> int:
         current_price=float(df.iloc[-1]["close"]),
         buffer_pct=zc.role_buffer_pct,
         external_swing_order=zc.external_swing_order,
+        internal_swing_order=zc.internal_swing_order,
         atr_period=zc.atr_period,
         break_atr_mult=zc.break_atr_mult,
         near_price_gap_fill_edge_clearance=zc.near_price_gap_fill_edge_clearance,

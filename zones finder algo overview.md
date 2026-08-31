@@ -1,6 +1,6 @@
 # Zones Finder Algo Overview
 
-This document explains the current support-zone detector (`support_structure_v1`) as it exists in the repo today. It is the algorithm that draws the price bands the trading engine later buys against. It does **not** decide BUY or HOLD. That is a separate engine (`support_close_v1`).
+This document explains the current support-zone detector (`support_structure_v2`) as it exists in the repo today. Materialize still builds a 4h ladder; live refresh and backtest then run sticky `ZoneTrackState` so chart and BUY share the same published bands. It does **not** decide BUY or HOLD. That is a separate engine (`support_close_v2`).
 
 Read this as: “how do we turn a history of closed 4H candles into a sorted ladder of support bands?”
 
@@ -55,12 +55,13 @@ Live `refresh_zones` still uses the full-frame extract. Offline backtest cache m
 **Config knobs** (from `zones:` in YAML, passed in by the caller):
 
 - `external_swing_order` (default `5`) — candles on each side for an external pivot. On 4H that is 20 hours each side.
+- `internal_swing_order` (default `2`) — candles on each side for internal pivots (local reactions and internal stairs)
 - `atr_period` (default `14`)
 - `external_min_swing_atr_mult` (default `4.0`)
 - `external_min_swing_pct` (default `2.5`) — percent of wick price, not a percent label
 - `min_touches` (default `2`)
-- `near_price_gap_fill_edge_clearance` (default `$450`)
-- `near_price_gap_fill_midpoint_spacing` (default `$850`)
+- `near_price_gap_fill_edge_clearance` (default `$650`, same as regular spacing)
+- `near_price_gap_fill_midpoint_spacing` (default `$1000`, same as regular spacing)
 - `near_price_gap_fill_min_touches` (default `4`)
 - `role_buffer_pct` (default `0.0015` = 0.15%) — only used to label `price_state`
 - `break_atr_mult` (default `0.2`) — how far a close must go through a high to count as “reclaimed”
@@ -168,7 +169,7 @@ ATR is Wilder true range, then a simple rolling mean (`atr_period`, default 14).
 A pivot is a candle whose high (or low) is the **unique** extreme in a window of `bars_each_side` on each side.
 
 - **External:** `bars_each_side = external_swing_order` (default 5). These are the “major” swings.
-- **Internal:** `bars_each_side = 1`. These are the “local” swings used later for reactions, retests, and some stair steps.
+- **Internal:** `bars_each_side = internal_swing_order` (default 2). These are the “local” swings used later for reactions, retests, and some stair steps.
 
 Each pivot stores:
 
@@ -383,11 +384,11 @@ gap that crosses current price may retry with the configured near-price profile:
 
 ```text
 min_fillable_gap = zone_width + 2 * near_price_gap_fill_edge_clearance
-# default: 500 + 2 * 450 = 1,400
+# default: 500 + 2 * 650 = 1,800 (same as the regular profile)
 ```
 
 That fallback requires at least `near_price_gap_fill_min_touches` (default `4`),
-uses `$850` midpoint spacing by default, and inserts at most one recovered stair
+uses `$1000` midpoint spacing by default, and inserts at most one recovered stair
 in that current-price gap. Other gaps keep the regular `$650/$1000` rules.
 
 Then spacing runs **again**. A near-price fallback carries its tighter profile
@@ -432,14 +433,27 @@ Do not filter the trading candidate list by `price_state`. Below-zone entries ne
 
 ## After the detector: identity and rebuild
 
-The public detector is still a full-prefix extract: live rebuilds pass the whole closed-4H history through the target bar and emit a fresh list. Incremental state is only an equivalent way to fill `ZoneDetectorEvidence` as bars arrive; it does not persist zones. Persistence and identity happen in `zone_refresh`, shared by live and backtest.
+The public detector is still a full-prefix extract: live rebuilds pass the whole closed-4H history through the target bar and emit a fresh candidate list. Incremental state is only an equivalent way to fill `ZoneDetectorEvidence` as bars arrive; it does not persist zones. Persistence, identity, and sticky tracks happen in `zone_refresh` / backtest.
+
+**Sticky tracks (`ZoneTrackState`):**
+
+Materialize still rebuilds winners every 4h. A causal track layer then publishes the ladder used by chart and BUY:
+
+1. Match a candidate to an existing track by `source_timeframe`, `bounds_style`, and the `$650` / `$1000` ladder slot.
+2. A brand-new shelf must appear on 2 consecutive snapshots before it activates.
+3. An active track stays published through 2 misses and retires on the 3rd.
+4. A challenger in the same slot (different family) must win 2 consecutive snapshots to replace the incumbent.
+5. Bounds only move after the same new level prints twice; a single touch cannot drag the band.
+6. `zone_track_id` is frozen from the first confirmed band. Cooldown `fingerprint` copies that id. Exact-bound `zone_lineage_id` stays for audit.
+7. The first snapshot of a run bootstraps every current candidate to active so a backtest `start` or first live rebuild after a version bump does not wait two bars. No final snapshot or future watermark is used.
 
 **When it rebuilds (live):**
 
-- Watermark key: `zone_rebuild_watermark:binance:BTCUSDT:4h:support_structure_v1`
+- Watermark key: `zone_rebuild_watermark:binance:BTCUSDT:4h:support_structure_v2`
+- Track-state key: `zone_track_state:binance:BTCUSDT:4h:support_structure_v2`
 - Value: the closed 4H `open_time` (Unix ms) that the current snapshot was built from
 - Same as latest completed 4H → load the stored snapshot, do not re-run
-- Newer completed 4H → rebuild once, persist zones + `zone_sets` manifest + watermark in one transaction
+- Newer completed 4H → rebuild once, persist tracked zones + `zone_sets` manifest + watermark + track JSON in one transaction. Tracks restore only when the previous watermark is exactly one 4h bar earlier; a gap bootstraps.
 - Missing / future / orphaned watermark → fail closed, no decision
 
 While a 4H bucket is still forming, the runner keeps the last snapshot. If the bucket end has passed but a constituent 1H candle is missing, the runner aborts. It does not trade on a stale pre-watermark set.
@@ -451,8 +465,9 @@ For each zone, immediately after detection:
 1. Pick the source frame: daily zones → derived 1D open times; everyone else → the 4H open times. Resolution is integer indexing into those arrays, not per-index `iloc`.
 2. `source_open_times = sorted unique open_time of those source_indexes`
 3. `zone_source_time = max(source_open_times)`
-4. `zone_lineage_id` / persisted `fingerprint` = SHA-256 of band + `source_timeframe` + `bounds_style` + exchange/symbol/detector. **Adding a later touch does not change this.**
+4. `zone_lineage_id` = SHA-256 of exact band + `source_timeframe` + `bounds_style` + exchange/symbol/detector. **Adding a later touch does not change this.**
 5. `revision_fingerprint` = same band plus `source_open_times` (audit / cache)
+6. After tracks: persisted `fingerprint` = `zone_track_id` (first confirmed band of that sticky shelf). Cooldown and chart highlight use this.
 
 The hourly signal must never recompute these from raw indexes. A later, longer candle frame would make the old indexes point at the wrong bars.
 

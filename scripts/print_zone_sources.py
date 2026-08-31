@@ -39,6 +39,7 @@ def main() -> int:
         current_price=float(df.iloc[-1]["close"]),
         buffer_pct=zone_config.role_buffer_pct,
         external_swing_order=zone_config.external_swing_order,
+        internal_swing_order=zone_config.internal_swing_order,
         atr_period=zone_config.atr_period,
         break_atr_mult=zone_config.break_atr_mult,
         near_price_gap_fill_edge_clearance=zone_config.near_price_gap_fill_edge_clearance,

@@ -17,7 +17,7 @@ from .build import _cluster_support_candidates, _has_minimum_unique_touches
 
 # Build variable-width support zones from recent internal pivots (swing lows and reclaimed highs).
 def _build_local_reaction_zones(
-    internal_pivots: list[StructurePivot], # SwingTerm = "internal" (bars_each_side=1)
+        internal_pivots: list[StructurePivot], # SwingTerm = "internal" (bars_each_side from config)
     closes: np.ndarray,
     break_atr_mult: float,
     zone_width: float,

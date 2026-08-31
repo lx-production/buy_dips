@@ -138,6 +138,40 @@ def make_zone_lineage_id(
     return _hash_identity(payload)
 
 
+def make_zone_track_id(
+    *,
+    low: Any,
+    high: Any,
+    source_timeframe: str,
+    bounds_style: Any = "body",
+    exchange: str = EXCHANGE,
+    symbol: str = SYMBOL,
+    detector_version: str = DETECTOR_VERSION,
+) -> str:
+    """Hash a sticky track identity from the first confirmed band, not later bound drift.
+
+    Cooldown and chart highlight use this id. Exact-bound lineage stays on
+    `zone_lineage_id` so a later confirmed bound step can be audited without
+    resetting the track.
+    """
+    if not exchange or not symbol or not detector_version:
+        raise ZoneIdentityError("Fingerprint scope fields must be non-empty")
+    if source_timeframe not in SUPPORTED_SOURCE_TIMEFRAMES:
+        raise ZoneIdentityError(f"Unsupported zone source timeframe: {source_timeframe}")
+    payload = {
+        "bounds_style": canonical_bounds_style(bounds_style),
+        "detector_version": detector_version,
+        "exchange": exchange,
+        "fingerprint_version": FINGERPRINT_VERSION,
+        "high": canonical_price(high),
+        "identity": "track",
+        "low": canonical_price(low),
+        "source_timeframe": source_timeframe,
+        "symbol": symbol,
+    }
+    return _hash_identity(payload)
+
+
 def make_zone_fingerprint(
     *,
     low: Any,

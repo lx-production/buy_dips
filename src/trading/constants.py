@@ -5,8 +5,8 @@ EXCHANGE = "binance"
 SYMBOL = "BTCUSDT"
 HOURLY_TIMEFRAME = "1h"
 ZONE_TIMEFRAME = "4h"
-DETECTOR_VERSION = "support_structure_v1"
-STRATEGY_VERSION = "support_close_v1"
+DETECTOR_VERSION = "support_structure_v2"
+STRATEGY_VERSION = "support_close_v2"
 FINGERPRINT_VERSION = "zf1"
 
 ONE_HOUR_MS = 3_600_000

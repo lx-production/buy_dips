@@ -259,7 +259,9 @@
         const z = hit.item;
         parts.push([
           `zone ${formatPrice(z.low)}-${formatPrice(z.high)}`,
-          `touches ${z.touches}`
+          `origin ${z.origin || 'n/a'} • ${z.bounds_style || 'n/a'}`,
+          `score ${z.score == null || z.score === '' ? 'n/a' : Number(z.score).toFixed(2)} • touches ${z.touches}`,
+          `rev ${z.revision_fingerprint ? String(z.revision_fingerprint).slice(0, 12) : 'n/a'}`
         ].join('\n'));
       } else if (hit && hit.type === 'pivot') {
         const p = hit.item;

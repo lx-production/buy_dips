@@ -575,8 +575,16 @@ def test_near_price_gap_fill_recovers_65300_zone_with_local_spacing_profile() ->
         min_touches=2,
         current_price=64319.84,
         buffer_pct=0.0015,
+        near_price_gap_fill_edge_clearance=450.0,
+        near_price_gap_fill_midpoint_spacing=850.0,
+        near_price_gap_fill_min_touches=4,
     )
-    spaced = _enforce_support_zone_spacing(filled, clear_near_price_gap_fill_marker=True)
+    spaced = _enforce_support_zone_spacing(
+        filled,
+        near_price_gap_fill_edge_clearance=450.0,
+        near_price_gap_fill_midpoint_spacing=850.0,
+        clear_near_price_gap_fill_marker=True,
+    )
 
     assert [(zone["low"], zone["high"], zone["origin"], zone["touches"]) for zone in spaced] == [
         (64085.36, 64370.0, "local_retested_flip_support", 2),
@@ -584,6 +592,40 @@ def test_near_price_gap_fill_recovers_65300_zone_with_local_spacing_profile() ->
         (66082.66, 66582.66, "persistent_wick_floor", 1),
     ]
     assert all("_near_price_gap_fill" not in zone for zone in spaced)
+
+
+def test_default_near_price_profile_matches_regular_spacing_and_skips_1712_gap() -> None:
+    # Default clearance is now $650, so a $1712 gap cannot hold a $500 band plus two clearances.
+    lower = _support_zone(low=64085.36, high=64370.0, source_closes=[64085.36, 64370.0], score=9.0)
+    lower["origin"] = "local_retested_flip_support"
+    lower["bounds_style"] = "local_reaction"
+    lower["price_state"] = "active"
+    upper = _support_zone(low=66082.66, high=66582.66, source_closes=[66082.66], score=2.0)
+    upper["origin"] = "persistent_wick_floor"
+    upper["bounds_style"] = "support_floor"
+    upper["price_state"] = "resistance"
+    pivots = [
+        _high_pivot(index=1, wick_price=65200.0, body_price=65104.02),
+        _high_pivot(index=2, wick_price=65250.0, body_price=65170.0),
+        _high_pivot(index=3, wick_price=65320.0, body_price=65229.03),
+        _high_pivot(index=4, wick_price=65450.0, body_price=65354.02),
+    ]
+
+    filled = _fill_persistent_wick_floor_gaps(
+        zones=[lower, upper],
+        raw_external_pivots=pivots,
+        closes=pd.Series([63000.0] * 5 + [80000.0]).to_numpy(dtype=float),
+        break_atr_mult=0.0,
+        zone_width=500.0,
+        min_touches=2,
+        current_price=64319.84,
+        buffer_pct=0.0015,
+    )
+
+    assert [(zone["low"], zone["high"], zone["origin"]) for zone in filled] == [
+        (64085.36, 64370.0, "local_retested_flip_support"),
+        (66082.66, 66582.66, "persistent_wick_floor"),
+    ]
 
 
 def test_near_price_gap_fill_requires_configured_touch_floor() -> None:

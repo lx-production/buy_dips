@@ -43,6 +43,7 @@ RELAXED_DETECTOR = {
     "external_min_swing_pct": 0.0,
     "min_touches": 1,
     "break_atr_mult": 0.0,
+    "internal_swing_order": 1,
 }
 
 
@@ -98,6 +99,7 @@ def detect_canonical_support_snapshot_from_evidence(df: pd.DataFrame, **detector
     extract_keys = (
         "current_price",
         "external_swing_order",
+        "internal_swing_order",
         "atr_period",
         "break_atr_mult",
         "external_min_swing_atr_mult",
@@ -235,6 +237,15 @@ def test_internal_local_reaction_expires_after_150_bar_lookback() -> None:
     )
     assert oracle[19].zones == detect_canonical_support_snapshot(df.iloc[:20].reset_index(drop=True), **RELAXED_DETECTOR)
     assert oracle[-1].zones == detect_canonical_support_snapshot(df, **RELAXED_DETECTOR)
+
+
+# Config internal_swing_order must change the internal pivot set, not stay hardcoded at 1.
+def test_internal_swing_order_two_finds_fewer_internal_pivots() -> None:
+    df = _local_lookback_expiry_frame()
+    one = extract_zone_detector_evidence(df, **_extract_kwargs({**RELAXED_DETECTOR, "internal_swing_order": 1}))
+    two = extract_zone_detector_evidence(df, **_extract_kwargs({**RELAXED_DETECTOR, "internal_swing_order": 2}))
+    assert one is not None and two is not None
+    assert len(two.internal_pivots) < len(one.internal_pivots)
 
 
 # A confirmed high becomes flipped resistance only after a later close clears its wick.
@@ -509,6 +520,7 @@ def _golden_prefix_frames() -> list[tuple[pd.DataFrame, dict[str, Any]]]:
             dict(RELAXED_DETECTOR),
         ),
         (_local_lookback_expiry_frame(), dict(RELAXED_DETECTOR)),
+        (_local_lookback_expiry_frame(), {**RELAXED_DETECTOR, "internal_swing_order": 2}),
         (
             _ohlc_from_rows(
                 [
@@ -561,6 +573,8 @@ def _zone_config_from_kwargs(kwargs: dict[str, Any]) -> ZoneConfig:
         fields["role_buffer_pct"] = kwargs["buffer_pct"]
     if "external_swing_order" in kwargs:
         fields["external_swing_order"] = kwargs["external_swing_order"]
+    if "internal_swing_order" in kwargs:
+        fields["internal_swing_order"] = kwargs["internal_swing_order"]
     if "atr_period" in kwargs:
         fields["atr_period"] = kwargs["atr_period"]
     if "break_atr_mult" in kwargs:
@@ -583,6 +597,7 @@ def _extract_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
     keys = (
         "current_price",
         "external_swing_order",
+        "internal_swing_order",
         "atr_period",
         "break_atr_mult",
         "external_min_swing_atr_mult",

@@ -247,9 +247,13 @@
         const z = hit.item;
         parts.push([
           `zone ${formatPrice(z.low)}-${formatPrice(z.high)} mid ${formatPrice(z.mid)}`,
+          `origin ${z.origin || 'n/a'} • ${z.bounds_style || 'n/a'}`,
+          `score ${z.score == null || z.score === '' ? 'n/a' : Number(z.score).toFixed(2)} • touches ${z.touches}`,
           `valid ${formatUtc7(z.valid_from)} → ${formatUtc7(z.valid_to)}`,
-          `source ${z.source_timeframe} • touches ${z.touches}`,
-          `fp ${shortFp(z.fingerprint)}`
+          `source ${z.source_timeframe}`,
+          `track ${shortFp(z.zone_track_id || z.fingerprint)}`,
+          `lineage ${shortFp(z.zone_lineage_id)}`,
+          `rev ${shortFp(z.revision_fingerprint)}`
         ].join('\n'));
       }
       tooltip.textContent = parts.join('\n\n');

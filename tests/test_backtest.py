@@ -642,6 +642,11 @@ def test_chart_payload_excludes_hold_and_segments_stop_at_end(tmp_path: Path) ->
         assert {
             "fingerprint",
             "zone_lineage_id",
+            "zone_track_id",
+            "revision_fingerprint",
+            "origin",
+            "bounds_style",
+            "score",
             "low",
             "mid",
             "high",
@@ -662,6 +667,9 @@ def test_zone_segments_merge_when_lineage_stays_and_sources_change() -> None:
                 "fingerprint": lineage,
                 "zone_lineage_id": lineage,
                 "revision_fingerprint": "zf1:rev1",
+                "origin": "structure_swing_low",
+                "bounds_style": "body",
+                "score": 4.0,
                 "low": 90.0,
                 "mid": 95.0,
                 "high": 100.0,
@@ -678,6 +686,9 @@ def test_zone_segments_merge_when_lineage_stays_and_sources_change() -> None:
                 "fingerprint": lineage,
                 "zone_lineage_id": lineage,
                 "revision_fingerprint": "zf1:rev2",
+                "origin": "mixed_structure",
+                "bounds_style": "body",
+                "score": 6.0,
                 "low": 90.0,
                 "mid": 95.0,
                 "high": 100.0,
@@ -694,6 +705,9 @@ def test_zone_segments_merge_when_lineage_stays_and_sources_change() -> None:
     assert segments[0]["valid_to"] == 2 * FOUR
     assert segments[0]["touches"] == 3
     assert segments[0]["zone_lineage_id"] == lineage
+    assert segments[0]["origin"] == "mixed_structure"
+    assert segments[0]["score"] == 6.0
+    assert segments[0]["revision_fingerprint"] == "zf1:rev2"
 
 
 def test_cli_backtest_parser_defaults() -> None:

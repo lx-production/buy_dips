@@ -70,8 +70,8 @@ def _fill_persistent_wick_floor_gaps(
     buffer_pct: float,
     internal_pivots: list[StructurePivot] | None = None,
     first_reclaim_indexes: dict[tuple[SwingTerm, int], int] | None = None,
-    near_price_gap_fill_edge_clearance: float = 450.0,
-    near_price_gap_fill_midpoint_spacing: float = 850.0,
+    near_price_gap_fill_edge_clearance: float = 650.0,
+    near_price_gap_fill_midpoint_spacing: float = 1000.0,
     near_price_gap_fill_min_touches: int = 4,
 ) -> list[dict[str, Any]]:
     """Recover one evidence-backed stair inside each wide adjacent gap.
@@ -420,8 +420,8 @@ def _make_support_zones_distinct(
 def _enforce_support_zone_spacing(
     zones: list[dict[str, Any]],
     *,
-    near_price_gap_fill_edge_clearance: float = 450.0,
-    near_price_gap_fill_midpoint_spacing: float = 850.0,
+    near_price_gap_fill_edge_clearance: float = 650.0,
+    near_price_gap_fill_midpoint_spacing: float = 1000.0,
     clear_near_price_gap_fill_marker: bool = False,
 ) -> list[dict[str, Any]]:
     """Resolve nearby-slot conflicts with one priority order.

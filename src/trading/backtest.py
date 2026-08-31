@@ -19,6 +19,7 @@ from .constants import DETECTOR_VERSION, FOUR_HOURS_MS, HOURLY_TIMEFRAME, ONE_HO
 from .signal import BUY, evaluate_support_close_v1
 from .backtest_zone_cache import ZoneCacheIdentity, build_four_hour_input_hashes, build_zone_cache_identity, load_cached_zone_snapshots, prune_incompatible_zone_cache, store_cached_zone_snapshot
 from .backtest_zone_state import BacktestIncrementalZoneState
+from .zone_tracks import ZoneTrackState
 from .zone_identity import ZoneFingerprintCache
 from .zone_refresh import ZoneRefreshError, build_fingerprinted_support_zones, build_fingerprinted_support_zones_from_evidence
 
@@ -200,6 +201,11 @@ def run_backtest(
     zone_cache_hit_count = 0
     detector_fn = detector
     cooldown_ms = config.strategy.cooldown_hours * ONE_HOUR_MS
+    track_state = ZoneTrackState(
+        exchange=config.exchange,
+        symbol=config.symbol,
+        detector_version=DETECTOR_VERSION,
+    )
 
     for _, row in display.iterrows():
         trigger = row.to_dict()
@@ -272,6 +278,8 @@ def run_backtest(
                         input_hash=input_hash,
                         identity=cache_identity,
                     )
+            # Cache stores detector candidates. Chart and BUY both use the sticky active tracks.
+            zones = track_state.advance(zones, zone_set_as_of=latest_completed)
             current_zones = zones
             watermark = latest_completed
             snapshots.append(ZoneSnapshot(zone_set_as_of=latest_completed, zones=zones))
@@ -371,8 +379,9 @@ def write_buy_csv(path: str | Path, buys: list[dict[str, Any]]) -> Path:
 def build_zone_segments(snapshots: list[ZoneSnapshot], *, end_ms: int) -> list[dict[str, Any]]:
     """Expand snapshots into per-zone validity segments and merge identical consecutive bands.
 
-    Consecutive snapshots of the same `zone_lineage_id` and price band are
-    joined even when a later revision added source candles.
+    Consecutive snapshots of the same sticky `zone_track_id` (or lineage when a
+    unit test omits tracks) and price band are joined even when a later revision
+    added source candles. Origin is copied for the tooltip; it does not split a band.
     """
     raw: list[dict[str, Any]] = []
     ordered = [snap for snap in snapshots if snap.valid_from is not None]
@@ -390,6 +399,11 @@ def build_zone_segments(snapshots: list[ZoneSnapshot], *, end_ms: int) -> list[d
                 {
                     "fingerprint": fingerprint,
                     "zone_lineage_id": str(zone.get("zone_lineage_id") or fingerprint),
+                    "zone_track_id": str(zone.get("zone_track_id") or ""),
+                    "revision_fingerprint": str(zone.get("revision_fingerprint") or ""),
+                    "origin": str(zone.get("origin") or ""),
+                    "bounds_style": str(zone.get("bounds_style") or ""),
+                    "score": float(zone.get("score") or 0.0),
                     "low": float(zone["low"]),
                     "mid": float(zone["mid"]),
                     "high": float(zone["high"]),
@@ -400,16 +414,26 @@ def build_zone_segments(snapshots: list[ZoneSnapshot], *, end_ms: int) -> list[d
                     "zone_set_as_of": int(snap.zone_set_as_of),
                 }
             )
-    raw.sort(key=lambda item: (item["zone_lineage_id"], item["low"], item["high"], item["valid_from"]))
+    raw.sort(
+        key=lambda item: (
+            item["zone_track_id"] or item["zone_lineage_id"],
+            item["low"],
+            item["high"],
+            item["valid_from"],
+        )
+    )
     merged: list[dict[str, Any]] = []
     for segment in raw:
         if not merged:
             merged.append(dict(segment))
             continue
         previous = merged[-1]
-        # Lineage stays put when a later snapshot only adds source evidence.
+        # Track id stays put when a later snapshot only adds source evidence or relabels origin.
+        same_identity = (previous["zone_track_id"] or previous["zone_lineage_id"]) == (
+            segment["zone_track_id"] or segment["zone_lineage_id"]
+        )
         same_band = (
-            previous["zone_lineage_id"] == segment["zone_lineage_id"]
+            same_identity
             and previous["low"] == segment["low"]
             and previous["mid"] == segment["mid"]
             and previous["high"] == segment["high"]
@@ -419,6 +443,10 @@ def build_zone_segments(snapshots: list[ZoneSnapshot], *, end_ms: int) -> list[d
         if same_band:
             previous["valid_to"] = segment["valid_to"]
             previous["touches"] = max(int(previous["touches"]), int(segment["touches"]))
+            previous["score"] = float(segment["score"])
+            previous["origin"] = segment["origin"]
+            previous["bounds_style"] = segment["bounds_style"]
+            previous["revision_fingerprint"] = segment["revision_fingerprint"]
             previous["zone_set_as_of"] = segment["zone_set_as_of"]
         else:
             merged.append(dict(segment))

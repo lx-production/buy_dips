@@ -15,15 +15,19 @@ from ..utils import json_default, utc_seconds
 from ..zones import ZoneDetectorEvidence, aggregate_ohlc_to_daily, detect_support_resistance_zones, materialize_support_zones
 from ..zones.timeframes import ohlc_open_times
 from .constants import DETECTOR_VERSION, EXCHANGE, FOUR_HOURS_MS, SYMBOL, ZONE_TIMEFRAME
+from .zone_tracks import ZoneTrackState
+from .zone_identity import ZoneFingerprintCache, fingerprint_zone
 from .state_store import (
     StateStoreError,
     get_zone_rebuild_watermark,
+    get_zone_track_state_json,
     set_zone_rebuild_watermark,
+    set_zone_track_state_json,
     validate_zone_rebuild_watermark,
     validate_zone_snapshot,
     zone_rebuild_watermark_key,
+    zone_track_state_key,
 )
-from .zone_identity import ZoneFingerprintCache, fingerprint_zone
 
 
 Detector = Callable[..., dict[str, list[dict[str, Any]]]]
@@ -67,6 +71,7 @@ def build_fingerprinted_support_zones(
         current_price=float(eligible.iloc[-1]["close"]),
         buffer_pct=zone_config.role_buffer_pct,
         external_swing_order=zone_config.external_swing_order,
+        internal_swing_order=zone_config.internal_swing_order,
         atr_period=zone_config.atr_period,
         break_atr_mult=zone_config.break_atr_mult,
         near_price_gap_fill_edge_clearance=zone_config.near_price_gap_fill_edge_clearance,
@@ -160,7 +165,7 @@ def _eligible_closed_four_hour_frame(
     if eligible.empty or int(eligible.iloc[-1]["open_time"]) != target:
         raise ZoneRefreshError("4h history does not include the target zone_set_as_of candle")
     if len(eligible) < max(1, int(zone_config.external_swing_order) * 2 + 1):
-        raise ZoneRefreshError("Insufficient closed 4h history for support_structure_v1")
+        raise ZoneRefreshError("Insufficient closed 4h history for the support detector")
     return eligible
 
 
@@ -215,7 +220,7 @@ def refresh_zones(
     detector: Detector = detect_support_resistance_zones,
     now_s: int | None = None,
 ) -> ZoneRefreshResult:
-    """Validate/load or atomically rebuild the latest fingerprinted zone snapshot."""
+    """Validate/load or atomically rebuild the latest fingerprinted sticky-track snapshot."""
     if four_hour_df is None or four_hour_df.empty or "open_time" not in four_hour_df.columns:
         raise ZoneRefreshError("No completed closed 4h candles are available")
     closed = four_hour_df.copy()
@@ -230,6 +235,8 @@ def refresh_zones(
 
     init_db(database_path)
     key = zone_rebuild_watermark_key(exchange, symbol, ZONE_TIMEFRAME, detector_version)
+    track_key = zone_track_state_key(exchange, symbol, ZONE_TIMEFRAME, detector_version)
+    previous_track_json: str | None = None
     with connect(database_path) as conn:
         try:
             watermark = validate_zone_rebuild_watermark(
@@ -247,6 +254,9 @@ def refresh_zones(
             return ZoneRefreshResult(_load_snapshot(conn, exchange, symbol, detector_version, target), target, False)
         if watermark is not None and watermark > target:
             raise ZoneRefreshError("Zone watermark is ahead of completed 4h data")
+        # Only restore tracks when this rebuild is the next 4h bar. A gap bootstraps instead.
+        if watermark is not None and watermark == target - FOUR_HOURS_MS:
+            previous_track_json = get_zone_track_state_json(conn, track_key)
 
     # Shared pure rebuild path keeps live persistence identical to offline backtest fingerprints.
     fingerprinted = build_fingerprinted_support_zones(
@@ -258,6 +268,14 @@ def refresh_zones(
         detector_version=detector_version,
         detector=detector,
     )
+    previous_payload = _load_track_payload(previous_track_json)
+    track_state = ZoneTrackState.from_payload(
+        previous_payload,
+        exchange=exchange,
+        symbol=symbol,
+        detector_version=detector_version,
+    )
+    tracked = track_state.advance(fingerprinted, zone_set_as_of=target)
 
     written_at = utc_seconds() if now_s is None else int(now_s)
     with connect(database_path) as conn:
@@ -287,15 +305,21 @@ def refresh_zones(
                 "DELETE FROM zone_sets WHERE exchange=? AND symbol=? AND timeframe=? AND detector_version=? AND zone_set_as_of=?",
                 (exchange, symbol, ZONE_TIMEFRAME, detector_version, target),
             )
-            _insert_zones(conn, fingerprinted, exchange, symbol, detector_version, target, written_at)
+            _insert_zones(conn, tracked, exchange, symbol, detector_version, target, written_at)
             conn.execute(
                 """
                 INSERT INTO zone_sets(exchange, symbol, timeframe, detector_version, zone_set_as_of, zone_count, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (exchange, symbol, ZONE_TIMEFRAME, detector_version, target, len(fingerprinted), written_at),
+                (exchange, symbol, ZONE_TIMEFRAME, detector_version, target, len(tracked), written_at),
             )
             set_zone_rebuild_watermark(conn, key, target, written_at)
+            set_zone_track_state_json(
+                conn,
+                track_key,
+                json.dumps(track_state.to_payload(), default=json_default, sort_keys=True, separators=(",", ":")),
+                written_at,
+            )
             validate_zone_snapshot(
                 conn,
                 exchange=exchange,
@@ -308,7 +332,20 @@ def refresh_zones(
         except Exception:
             conn.rollback()
             raise
-    return ZoneRefreshResult(fingerprinted, target, True)
+    return ZoneRefreshResult(tracked, target, True)
+
+
+def _load_track_payload(raw_json: str | None) -> dict[str, Any] | None:
+    """Decode persisted track JSON, or return None so the next advance bootstraps."""
+    if raw_json is None:
+        return None
+    try:
+        payload = json.loads(raw_json)
+    except json.JSONDecodeError as exc:
+        raise ZoneRefreshError("Malformed zone track state JSON") from exc
+    if not isinstance(payload, dict):
+        raise ZoneRefreshError("Malformed zone track state JSON")
+    return payload
 
 
 def _insert_zones(

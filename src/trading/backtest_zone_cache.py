@@ -203,6 +203,7 @@ def _detector_implementation_hash() -> str:
             source_root / "trading" / "constants.py",
             source_root / "trading" / "zone_identity.py",
             source_root / "trading" / "zone_refresh.py",
+            source_root / "trading" / "zone_tracks.py",
         ]
     )
     digest = hashlib.sha256()
