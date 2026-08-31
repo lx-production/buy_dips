@@ -66,7 +66,7 @@ def detect_support_resistance_zones_structure_v1(
     near_price_gap_fill_midpoint_spacing: float = 1000.0,
     near_price_gap_fill_min_touches: int = 4,
 ) -> dict[str, list[dict[str, Any]]]:
-    empty = {"support": [], "resistance": [], "active": [], "all": []}
+    empty = {"support": [], "all": []}
     evidence = extract_zone_detector_evidence(
         df,
         current_price=current_price,
@@ -269,4 +269,4 @@ def materialize_support_zones(
     )
 
     support = sorted(zones, key=lambda zone: float(zone["low"]))
-    return {"support": support, "resistance": [], "active": [], "all": support}
+    return {"support": support, "all": support}

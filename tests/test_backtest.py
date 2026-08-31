@@ -126,7 +126,7 @@ def _fake_detector(_df, **_kwargs):
             "source_timeframe": "4h",
         },
     ]
-    return {"support": zones, "all": zones, "resistance": [], "active": []}
+    return {"support": zones, "all": zones}
 
 
 def test_parse_backtest_bound_requires_tz_and_hour_alignment() -> None:

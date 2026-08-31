@@ -35,12 +35,10 @@ from src.zones.build import _build_support_zones, _suppress_nearby_support_zones
 def test_empty_or_insufficient_data_returns_empty_zones() -> None:
     assert detect_support_resistance_zones_structure_v1(pd.DataFrame()) == {
         "support": [],
-        "resistance": [],
-        "active": [],
         "all": [],
     }
     result = detect_support_resistance_zones_structure_v1(_ohlc_from_closes([1, 2, 1], wick=0.1), external_swing_order=2)
-    assert result == {"support": [], "resistance": [], "active": [], "all": []}
+    assert result == {"support": [], "all": []}
     assert extract_zone_detector_evidence(pd.DataFrame()) is None
     assert extract_zone_detector_evidence(_ohlc_from_closes([1, 2, 1], wick=0.1), external_swing_order=2) is None
 
@@ -127,8 +125,6 @@ def test_structure_v1_clusters_external_swing_lows_with_fixed_500_dollar_width()
         current_price=68000,
     )
 
-    assert result["resistance"] == []
-    assert result["active"] == []
     assert result["all"] == result["support"]
     zone = result["support"][0]
     assert zone["origin"] == "structure_swing_low"
@@ -250,8 +246,6 @@ def test_structure_v1_returns_reclaimed_highs_as_support_only() -> None:
         current_price=65000,
     )
 
-    assert result["resistance"] == []
-    assert result["active"] == []
     zone = result["support"][0]
     assert zone["origin"] == "flipped_resistance"
     assert zone["role"] == "support"

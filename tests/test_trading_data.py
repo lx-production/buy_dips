@@ -151,7 +151,7 @@ def test_zone_snapshot_and_watermark_commit_together(tmp_path) -> None:
             "source_closes": [100],
             "source_indexes": [2],
         }
-        return {"support": [zone], "all": [zone], "resistance": [], "active": []}
+        return {"support": [zone], "all": [zone]}
 
     first = refresh_zones(db_path, four_hour, zone_config=ZoneConfig(), detector=detector, now_s=123)
     second = refresh_zones(db_path, four_hour, zone_config=ZoneConfig(), detector=detector, now_s=124)

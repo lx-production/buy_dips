@@ -122,7 +122,7 @@ def load_chart_payload(
 
 def _detect_chart_zones(df: Any, current_price: float, zone_config: Any) -> dict[str, list[dict[str, Any]]]:
     if df.empty:
-        return {"support": [], "resistance": [], "active": [], "all": []}
+        return {"support": [], "all": []}
     return detect_support_resistance_zones(
         df,
         min_touches=zone_config.min_touches,

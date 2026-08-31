@@ -12,7 +12,7 @@ The finder builds that ladder on **closed Binance `BTCUSDT` 4H candles only**. I
 
 The output is a list of support zones, sorted low → high. Zones currently **above** price stay in that list. The detector labels them `price_state = "resistance"` or `"active"`, but trading still uses the full `support` list so a “broken” shelf can still be an entry target from below.
 
-`resistance` and `active` lists in the return value are always empty. Everything lives under `support`.
+The return value is `{ support, all }`. `all` is the same list as `support`.
 
 ## Where the code lives
 
@@ -398,7 +398,7 @@ through that final pass, after which the internal marker is removed from output.
 
 ```text
 support = sorted(zones, key=low)
-return { support, resistance: [], active: [], all: support }
+return { support, all: support }
 ```
 
 ## Origins you will see
