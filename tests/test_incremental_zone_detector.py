@@ -139,16 +139,9 @@ def build_stateless_prefix_oracle(df: pd.DataFrame, **detector_kwargs: Any) -> l
                 zones=detect_canonical_support_snapshot(prefix, **detector_kwargs),
             )
         )
+    # One snapshot per closed candle so later prefix compares stay aligned with df.
+    assert len(snapshots) == len(df)
     return snapshots
-
-
-# Rebuild the oracle twice so later incremental comparisons have a locked stateless baseline.
-def lock_stateless_prefix_oracle(df: pd.DataFrame, **detector_kwargs: Any) -> list[PrefixOracleSnapshot]:
-    first = build_stateless_prefix_oracle(df, **detector_kwargs)
-    second = build_stateless_prefix_oracle(df, **detector_kwargs)
-    assert first == second
-    assert len(first) == len(df)
-    return first
 
 
 # Numpy scalars and unsorted zone lists must not break later deep-equality checks.
@@ -191,7 +184,10 @@ def test_stateless_prefix_oracle_stays_in_memory_and_is_deterministic() -> None:
         ]
     )
 
-    oracle = lock_stateless_prefix_oracle(df, **RELAXED_DETECTOR)
+    first = build_stateless_prefix_oracle(df, **RELAXED_DETECTOR)
+    second = build_stateless_prefix_oracle(df, **RELAXED_DETECTOR)
+    assert first == second
+    oracle = first
 
     assert [snapshot.prefix_len for snapshot in oracle] == list(range(1, 7))
     assert oracle[-1].open_time == ALIGNED_START_MS + 5 * FOUR_HOUR_MS
@@ -210,7 +206,7 @@ def test_external_pivot_is_confirmed_only_after_right_side_bars() -> None:
             (66350, 66500, 66250, 66450),
         ]
     )
-    oracle = lock_stateless_prefix_oracle(df, **RELAXED_DETECTOR)
+    oracle = build_stateless_prefix_oracle(df, **RELAXED_DETECTOR)
 
     before_confirm = _raw_external_pivots(df.iloc[:4], bars_each_side=2)
     after_confirm = _raw_external_pivots(df.iloc[:5], bars_each_side=2)
@@ -225,7 +221,7 @@ def test_external_pivot_is_confirmed_only_after_right_side_bars() -> None:
 # Local reaction evidence must drop once those internals fall outside the 150-bar window.
 def test_internal_local_reaction_expires_after_150_bar_lookback() -> None:
     df = _local_lookback_expiry_frame()
-    oracle = lock_stateless_prefix_oracle(df, **RELAXED_DETECTOR)
+    oracle = build_stateless_prefix_oracle(df, **RELAXED_DETECTOR)
     local_before = _local_reaction_zones_for_prefix(df, prefix_len=20)
     local_after = _local_reaction_zones_for_prefix(df, prefix_len=len(df))
 
@@ -261,7 +257,7 @@ def test_high_pivot_is_reclaimed_by_a_later_closed_candle() -> None:
         ]
     )
     kwargs = {**RELAXED_DETECTOR, "external_swing_order": 1}
-    oracle = lock_stateless_prefix_oracle(df, **kwargs)
+    oracle = build_stateless_prefix_oracle(df, **kwargs)
     high_pivot = next(pivot for pivot in _raw_external_pivots(df.iloc[:3], bars_each_side=1) if pivot.kind == "high")
 
     assert high_pivot.index == 1
@@ -278,7 +274,7 @@ def test_reclaim_that_happens_during_right_bars_is_kept_after_confirmation() -> 
     # freeze the first reclaim index instead of moving it to later closes.
     df = _ohlc_from_rows(_delayed_high_reclaim_rows())
     kwargs = {**RELAXED_DETECTOR, "external_swing_order": 5}
-    oracle = lock_stateless_prefix_oracle(df, **kwargs)
+    oracle = build_stateless_prefix_oracle(df, **kwargs)
     unconfirmed = df.iloc[:10].reset_index(drop=True)
     confirmed = df.iloc[:11].reset_index(drop=True)
     reclaimed = df.iloc[:12].reset_index(drop=True)
@@ -308,7 +304,7 @@ def test_daily_zone_waits_until_a_utc_day_has_six_four_hour_bars() -> None:
     candles.extend(_four_hour_day(3, 58364.97, 62000.0, 59000.0, 61000.0)[:5])
     df = pd.DataFrame(candles)
     kwargs = {**RELAXED_DETECTOR, "external_swing_order": 1}
-    oracle = lock_stateless_prefix_oracle(df, **kwargs)
+    oracle = build_stateless_prefix_oracle(df, **kwargs)
 
     before_sixth = df.iloc[: 3 * 6 + 5].reset_index(drop=True)
     after_sixth = pd.concat(
@@ -317,7 +313,7 @@ def test_daily_zone_waits_until_a_utc_day_has_six_four_hour_bars() -> None:
     )
     complete_after_sixth = aggregate_ohlc_to_daily(after_sixth, min_bars_per_day=DAILY_ZONE_MIN_BARS_PER_DAY)
     complete_before_sixth = aggregate_ohlc_to_daily(before_sixth, min_bars_per_day=DAILY_ZONE_MIN_BARS_PER_DAY)
-    after_oracle = lock_stateless_prefix_oracle(after_sixth, **kwargs)
+    after_oracle = build_stateless_prefix_oracle(after_sixth, **kwargs)
 
     assert len(complete_before_sixth) == 3
     assert len(complete_after_sixth) == 4
@@ -333,7 +329,7 @@ def test_prominent_same_kind_pivot_is_replaced_by_a_more_extreme_one() -> None:
         "external_min_swing_pct": 2.5,
         "external_min_swing_atr_mult": 0.0,
     }
-    oracle = lock_stateless_prefix_oracle(df, **kwargs)
+    oracle = build_stateless_prefix_oracle(df, **kwargs)
     first_low_prefix = df.iloc[:8].reset_index(drop=True)
     replaced_prefix = df.iloc[:11].reset_index(drop=True)
     first_prominent = _prominent_pivots(first_low_prefix, bars_each_side=2, min_swing_pct=2.5)
@@ -363,7 +359,7 @@ def test_overlapping_persistent_wick_floors_keep_the_oldest_shelf() -> None:
             (61800, 62500, 61200, 62200),
         ]
     )
-    oracle = lock_stateless_prefix_oracle(df, **{**RELAXED_DETECTOR, "external_swing_order": 1})
+    oracle = build_stateless_prefix_oracle(df, **{**RELAXED_DETECTOR, "external_swing_order": 1})
     first_floor_prefix = 5
     second_dump_prefix = 8
     first_floors = [zone for zone in oracle[first_floor_prefix - 1].zones if zone["origin"] == "persistent_wick_floor"]
@@ -380,7 +376,7 @@ def test_overlapping_persistent_wick_floors_keep_the_oldest_shelf() -> None:
 def test_split_rejection_retest_appears_only_after_the_higher_low() -> None:
     df = _split_rejection_frame()
     kwargs = {**RELAXED_DETECTOR, "external_swing_order": 1}
-    oracle = lock_stateless_prefix_oracle(df, **kwargs)
+    oracle = build_stateless_prefix_oracle(df, **kwargs)
     before_retest = _split_rejection_pairs(df.iloc[:5].reset_index(drop=True))
     after_retest = _split_rejection_pairs(df.iloc[:6].reset_index(drop=True))
 
@@ -405,7 +401,7 @@ def test_daily_overlay_and_gap_fill_winner_can_change_on_a_new_prefix() -> None:
     candles.extend(_four_hour_day(5, 64000.0, 68000.0, 63000.0, 67000.0))
     df = pd.DataFrame(candles)
     kwargs = {**RELAXED_DETECTOR, "external_swing_order": 1}
-    oracle = lock_stateless_prefix_oracle(df, **kwargs)
+    oracle = build_stateless_prefix_oracle(df, **kwargs)
 
     daily_indexes = [index for index, snapshot in enumerate(oracle) if _has_origin(snapshot.zones, "daily_body_support")]
     assert daily_indexes
@@ -425,7 +421,7 @@ def test_daily_overlay_and_gap_fill_winner_can_change_on_a_new_prefix() -> None:
 # After the extract/materialize split, every golden prefix must still match the stateless detector.
 def test_extract_then_materialize_matches_stateless_oracle_on_golden_prefixes() -> None:
     for df, kwargs in _golden_prefix_frames():
-        oracle = lock_stateless_prefix_oracle(df, **kwargs)
+        oracle = build_stateless_prefix_oracle(df, **kwargs)
         for snapshot in oracle:
             prefix = df.iloc[: snapshot.prefix_len].reset_index(drop=True)
             assert detect_canonical_support_snapshot_from_evidence(prefix, **kwargs) == snapshot.zones
@@ -434,7 +430,7 @@ def test_extract_then_materialize_matches_stateless_oracle_on_golden_prefixes() 
 # After each advance, incremental evidence + materialize must match the stateless prefix oracle.
 def test_incremental_advance_matches_stateless_oracle_on_golden_prefixes() -> None:
     for df, kwargs in _golden_prefix_frames():
-        oracle = lock_stateless_prefix_oracle(df, **kwargs)
+        oracle = build_stateless_prefix_oracle(df, **kwargs)
         state = IncrementalZoneDetectorState(_zone_config_from_kwargs(kwargs))
         for snapshot in oracle:
             row = df.iloc[snapshot.prefix_len - 1]
