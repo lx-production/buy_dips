@@ -14,8 +14,9 @@ class FourHourAggregationError(RuntimeError):
 class OverdueIncompleteFourHourError(FourHourAggregationError):
     pass
 
-
+# trả về thời điểm mở (open_time) của nến 4 giờ đã kết thúc gần nhất
 def latest_overdue_bucket_open_time(now_ms: int) -> int:
+    # // là phép chia lấy phần nguyên (floor division)
     bucket = (int(now_ms) // FOUR_HOURS_MS) * FOUR_HOURS_MS - FOUR_HOURS_MS
     if bucket < 0:
         raise FourHourAggregationError("No completed 4h bucket exists before now_ms")
