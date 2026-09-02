@@ -234,7 +234,7 @@ Pause, cap USDT, gas, quote, allowance **không** đổi BUY thành HOLD. Đó l
 
 ## 7. Ví, swap, rủi ro (plan / helper)
 
-**Polygon / chain 137** — Chain canary. PRANA nhận về ví bot; **chưa có sell / stop-loss**.
+**Polygon / chain 137** — Chain canary. PRANA nhận về ví bot;
 
 **Keystore** — File mã hóa khóa. Dev: `trader-dev.json`. Prod Pi: file riêng, **không** copy sang máy dev. `KEYSTORE_PASSWORD` chỉ từ env / systemd credential, **không** YAML.
 

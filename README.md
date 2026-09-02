@@ -72,10 +72,25 @@ FROM candles_readable
 ORDER BY open_time DESC
 LIMIT 10;
 
-SELECT decision, reason_code, candle_open_time_utc7, selected_source_open_times_json_utc7
+SELECT
+  id,
+  decision,
+  reason_code,
+  candle_open_time_utc7,
+  reference_close,
+  selected_zone_low,
+  selected_zone_high,
+  entry_region,
+  dip_origin_open_time_utc7,
+  zones_rebuilt,
+  mode
 FROM decisions_readable
+WHERE mode = 'observe'
 ORDER BY candle_open_time DESC
-LIMIT 10;
+LIMIT 24;
+
+sqlite3 data/prana_buy_the_dips.sqlite \
+  "SELECT decision, reason_code, candle_open_time_utc7 FROM decisions_readable WHERE mode='observe' ORDER BY candle_open_time DESC LIMIT 24;"
 
 SELECT key, value, value_utc7, updated_at_utc7
 FROM bot_state_readable;
