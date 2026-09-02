@@ -596,14 +596,14 @@ def test_backtest_does_not_mutate_live_tables(tmp_path: Path) -> None:
     with connect(db_path) as conn:
         conn.execute(
             "INSERT INTO bot_state(key, value, updated_at) VALUES (?, ?, ?)",
-            ("zone_rebuild_watermark:binance:BTCUSDT:4h:support_structure_v1", str(start - FOUR), 1),
+            ("zone_rebuild_watermark:binance:BTCUSDT:4h:support_structure_v2", str(start - FOUR), 1),
         )
         conn.execute(
             """
             INSERT INTO zone_sets(exchange, symbol, timeframe, detector_version, zone_set_as_of, zone_count, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            ("binance", "BTCUSDT", "4h", "support_structure_v1", start - FOUR, 0, 1),
+            ("binance", "BTCUSDT", "4h", "support_structure_v2", start - FOUR, 0, 1),
         )
         conn.commit()
     before = live_table_counts(db_path)

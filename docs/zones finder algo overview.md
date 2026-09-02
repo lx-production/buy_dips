@@ -39,7 +39,7 @@ After detection (live + backtest, not inside the detector):
 - `src/trading/zone_refresh.py` — when to rebuild, persist snapshot
 - `src/trading/zone_identity.py` — map `source_indexes` → times + `zf1` hashes
 
-Public entry: `detect_support_resistance_zones()` is a thin alias for `detect_support_resistance_zones_structure_v1()`. That public function still takes a full 4H frame and returns the same zone dicts. Internally it is two steps:
+Public entry: `detect_support_resistance_zones()` is a thin alias for `detect_support_resistance_zones_structure_v2()`. That public function still takes a full 4H frame and returns the same zone dicts. Internally it is two steps:
 
 1. `extract_zone_detector_evidence(df, ...)` — one pass over the frame: coerce OHLC, ATR, raw/prominent/internal pivots, daily pivots, and first reclaim indexes.
 2. `materialize_support_zones(evidence, ...)` — candidates, clustering, rejection, daily/persistent overlay, gap-fill, and spacing. This half does not re-scan the raw frame for pivots.
@@ -475,7 +475,7 @@ Empty / unresolvable indexes, missing source candles, or an unsupported timefram
 
 ## How trading uses the ladder
 
-`support_close_v1` trusts this list. It does not re-check how a band was built.
+`support_close_v2` trusts this list. It does not re-check how a band was built.
 
 It picks the nearest support the current closed 1H close has reached (inside the band, or in the 50%–100% gap toward the next-lower band), then applies dip-origin / approach / cooldown gates. That logic is out of scope here; see the README “Decision Engine” section.
 

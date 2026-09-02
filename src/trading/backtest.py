@@ -16,7 +16,7 @@ from ..utils import ms_to_iso
 from ..zones import IncrementalZoneDetectorError
 from .aggregate_4h import OverdueIncompleteFourHourError, aggregate_four_hour_bucket
 from .constants import DETECTOR_VERSION, FOUR_HOURS_MS, HOURLY_TIMEFRAME, ONE_HOUR_MS, STRATEGY_VERSION, ZONE_TIMEFRAME
-from .signal import BUY, evaluate_support_close_v1
+from .signal import BUY, evaluate_support_close_v2
 from .backtest_zone_cache import ZoneCacheIdentity, build_four_hour_input_hashes, build_zone_cache_identity, load_cached_zone_snapshots, prune_incompatible_zone_cache, store_cached_zone_snapshot
 from .backtest_zone_state import BacktestIncrementalZoneState
 from .zone_tracks import ZoneTrackState
@@ -111,7 +111,7 @@ def run_backtest(
     end_ms: int | None = None,
     detector: Callable[..., dict[str, list[dict[str, Any]]]] | None = None,
 ) -> BacktestResult:
-    """Replay support_close_v1 over closed 1h candles without touching live tables.
+    """Replay support_close_v2 over closed 1h candles without touching live tables.
 
     Cache misses ingest 4h history once through incremental detector state. Injected
     detectors keep the previous full-frame rebuild path so existing tests stay valid.
@@ -293,7 +293,7 @@ def run_backtest(
         ):
             snapshots[-1].valid_from = trigger_open
 
-        decision = evaluate_support_close_v1(
+        decision = evaluate_support_close_v2(
             trigger,
             hourly,
             current_zones,

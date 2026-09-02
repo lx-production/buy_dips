@@ -24,7 +24,7 @@ from src.zones import (
     _overlay_split_rejection_zones,
     _support_floor_candidates,
     aggregate_ohlc_to_daily,
-    detect_support_resistance_zones_structure_v1,
+    detect_support_resistance_zones_structure_v2,
     extract_zone_detector_evidence,
     materialize_support_zones,
 )
@@ -33,11 +33,11 @@ from src.zones.build import _build_support_zones, _suppress_nearby_support_zones
 
 
 def test_empty_or_insufficient_data_returns_empty_zones() -> None:
-    assert detect_support_resistance_zones_structure_v1(pd.DataFrame()) == {
+    assert detect_support_resistance_zones_structure_v2(pd.DataFrame()) == {
         "support": [],
         "all": [],
     }
-    result = detect_support_resistance_zones_structure_v1(_ohlc_from_closes([1, 2, 1], wick=0.1), external_swing_order=2)
+    result = detect_support_resistance_zones_structure_v2(_ohlc_from_closes([1, 2, 1], wick=0.1), external_swing_order=2)
     assert result == {"support": [], "all": []}
     assert extract_zone_detector_evidence(pd.DataFrame()) is None
     assert extract_zone_detector_evidence(_ohlc_from_closes([1, 2, 1], wick=0.1), external_swing_order=2) is None
@@ -60,7 +60,7 @@ def test_extract_then_materialize_matches_public_detector() -> None:
         "buffer_pct": 0.0015,
     }
 
-    expected = detect_support_resistance_zones_structure_v1(df, **kwargs)
+    expected = detect_support_resistance_zones_structure_v2(df, **kwargs)
     evidence = extract_zone_detector_evidence(
         df,
         current_price=kwargs["current_price"],
@@ -109,13 +109,13 @@ def test_extract_records_first_reclaim_index_for_reclaimed_highs() -> None:
     assert any(pivot.index == 1 for pivot in high_pivots)
 
 
-def test_structure_v1_clusters_external_swing_lows_with_fixed_500_dollar_width() -> None:
+def test_structure_v2_clusters_external_swing_lows_with_fixed_500_dollar_width() -> None:
     df = _ohlc_from_closes(
         [67000, 66500, 66000, 66800, 67500, 66900, 66400, 66380, 67000, 67600],
         wick=25,
     )
 
-    result = detect_support_resistance_zones_structure_v1(
+    result = detect_support_resistance_zones_structure_v2(
         df,
         external_swing_order=2,
         atr_period=3,
@@ -226,7 +226,7 @@ def test_body_floor_bridge_preserves_complete_zone_metadata() -> None:
     ]
 
 
-def test_structure_v1_returns_reclaimed_highs_as_support_only() -> None:
+def test_structure_v2_returns_reclaimed_highs_as_support_only() -> None:
     df = pd.DataFrame(
         {
             "open": [66000, 66900, 66500, 67200, 66800],
@@ -236,7 +236,7 @@ def test_structure_v1_returns_reclaimed_highs_as_support_only() -> None:
         }
     )
 
-    result = detect_support_resistance_zones_structure_v1(
+    result = detect_support_resistance_zones_structure_v2(
         df,
         external_swing_order=1,
         external_min_swing_atr_mult=0.0,
@@ -254,7 +254,7 @@ def test_structure_v1_returns_reclaimed_highs_as_support_only() -> None:
     assert zone["high"] == 66950.0
 
 
-def test_structure_v1_adds_retested_long_wick_support_floor() -> None:
+def test_structure_v2_adds_retested_long_wick_support_floor() -> None:
     raw_external_pivots = [
         StructurePivot(index=1, kind="low", wick_price=72945.50, body_price=74935.00, atr=1910.03, term="external"),
         StructurePivot(index=2, kind="low", wick_price=74821.57, body_price=75023.43, atr=1047.59, term="external"),
@@ -356,7 +356,7 @@ def test_local_reaction_zone_can_use_local_low_wick_to_body_bounds() -> None:
     ]
 
 
-def test_structure_v1_fills_large_support_gap_with_reclaimed_high_clusters() -> None:
+def test_structure_v2_fills_large_support_gap_with_reclaimed_high_clusters() -> None:
     zones = [
         _support_zone(low=65510.93, high=66010.93, source_closes=[65971.20, 66010.93], score=4.0),
         _support_zone(low=73301.80, high=73801.80, source_closes=[73611.10, 73801.80], score=5.0),
@@ -399,7 +399,7 @@ def test_structure_v1_fills_large_support_gap_with_reclaimed_high_clusters() -> 
     ]
 
 
-def test_structure_v1_fills_staircase_gap_to_next_active_boundary() -> None:
+def test_structure_v2_fills_staircase_gap_to_next_active_boundary() -> None:
     zones = [
         _support_zone(low=65510.93, high=66010.93, source_closes=[65971.20, 66010.93], score=4.0),
         _support_zone(low=73301.80, high=73801.80, source_closes=[73611.10, 73801.80], score=5.0),
@@ -443,7 +443,7 @@ def test_structure_v1_fills_staircase_gap_to_next_active_boundary() -> None:
     ]
 
 
-def test_structure_v1_uses_internal_reclaimed_high_cluster_to_fill_large_gap() -> None:
+def test_structure_v2_uses_internal_reclaimed_high_cluster_to_fill_large_gap() -> None:
     zones = [
         _support_zone(low=46559.99, high=47059.99, source_closes=[46700.0, 46900.0, 47059.99], score=7.0),
         _support_zone(low=51894.04, high=52394.04, source_closes=[52000.0, 52100.0, 52200.0, 52394.04], score=9.0),
@@ -1301,7 +1301,7 @@ def test_detector_keeps_structural_after_persistent_drops_nearby_local(monkeypat
         lambda *_args, **kwargs: list(kwargs.get("zones") or _args[0]),
     )
 
-    result = detect_support_resistance_zones_structure_v1(
+    result = detect_support_resistance_zones_structure_v2(
         df,
         external_swing_order=2,
         atr_period=3,
@@ -1345,7 +1345,7 @@ def test_detector_keeps_mar5_style_wick_floor_after_later_lower_low() -> None:
         }
     )
 
-    result = detect_support_resistance_zones_structure_v1(
+    result = detect_support_resistance_zones_structure_v2(
         df,
         external_swing_order=1,
         atr_period=3,
@@ -1448,9 +1448,9 @@ def test_structure_pivot_labels_are_preserved_for_chart_debugging() -> None:
     assert [pivot.structure_role for pivot in pivots] == ["L", "H", "HL", "HH"]
 
 
-def test_structure_v1_output_has_complete_zone_fields() -> None:
+def test_structure_v2_output_has_complete_zone_fields() -> None:
     df = _ohlc_from_closes([110, 105, 100, 106, 112, 108, 101, 107, 113, 109], wick=0.5)
-    result = detect_support_resistance_zones_structure_v1(
+    result = detect_support_resistance_zones_structure_v2(
         df,
         external_swing_order=1,
         external_min_swing_atr_mult=0.0,

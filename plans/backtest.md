@@ -30,7 +30,7 @@
   - Mỗi zone snapshot được cache theo watermark cùng hash config detector, source code và prefix dữ liệu 4h. Cache stale/hỏng tự rebuild và overwrite; range mở rộng chỉ build watermark mới. Replay bulk-load cache hits bằng một SQLite connection. `DETECTOR_VERSION` / detector source hash / zone config hash invalidates cache.
   - Khởi tạo zone snapshot tại cây trigger đầu tiên, sau đó rebuild trong memory đúng lúc một 4h mới hoàn tất.
   - Helper thuần dùng chung với live zone refresh: `build_fingerprinted_support_zones` (stateless / injected detector) và `build_fingerprinted_support_zones_from_evidence` (incremental backtest).
-  - Gọi `evaluate_support_close_v1(..., mode="backtest")`; mode này có trong pure engine nhưng không thêm vào schema `decisions`.
+  - Gọi `evaluate_support_close_v2(..., mode="backtest")`; mode này có trong pure engine nhưng không thêm vào schema `decisions`.
   - Setup đã BUY là danh sách in-memory theo `zone_track_id` (`fingerprint`) + `dip_origin_open_time` (và `trigger_open_time` cho cooldown 24h), bắt đầu rỗng tại `start`; không persist kết quả. Track id không đổi khi zone thêm touch hoặc bounds được confirm sau 2 snapshot, nên cooldown/chart không reset chỉ vì evidence mới. Trong 24h cùng zone bị chặn dù có dip origin mới. Sau 24h zone chỉ reset khi có dip origin mới (close trên `internal_range_midpoint`).
   - Trả về `BacktestResult` gồm nến trong khoảng hiển thị, danh sách BUY, zone snapshot/segment và thống kê `evaluated_candles`, `zone_snapshot_count`, `zone_cache_hit_count`, `zone_rebuild_count`, `zone_state_ingested_candles`, `zone_full_history_scans`, `buy_count`.
 

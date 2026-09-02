@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from src.trading.signal import evaluate_support_close_v1
+from src.trading.signal import evaluate_support_close_v2
 
 
 HOUR = 3_600_000
@@ -54,7 +54,7 @@ def test_inside_zone_uses_nearest_qualifying_prior_close() -> None:
     )
     zones = [_zone(80, 85, "lower"), _zone(90, 100, "selected"), _zone(110, 120, "higher")]
 
-    decision = evaluate_support_close_v1(
+    decision = evaluate_support_close_v2(
         candles.iloc[-1].to_dict(), candles, zones, zone_set_as_of=96 * HOUR
     )
 
@@ -70,7 +70,7 @@ def test_below_zone_uses_50_to_100_percent_band() -> None:
     candles = _hourly(trigger_time, [(trigger_time - HOUR, 106)], 89)
     zones = [_zone(80, 85, "lower"), _zone(90, 100, "selected"), _zone(110, 120, "higher")]
 
-    decision = evaluate_support_close_v1(
+    decision = evaluate_support_close_v2(
         candles.iloc[-1].to_dict(), candles, zones, zone_set_as_of=96 * HOUR
     )
 
@@ -86,7 +86,7 @@ def test_below_zone_at_50_percent_is_buy() -> None:
     candles = _hourly(trigger_time, [(trigger_time - HOUR, 106)], 87.5)
     zones = [_zone(80, 85, "lower"), _zone(90, 100, "selected"), _zone(110, 120, "higher")]
 
-    decision = evaluate_support_close_v1(
+    decision = evaluate_support_close_v2(
         candles.iloc[-1].to_dict(), candles, zones, zone_set_as_of=96 * HOUR
     )
 
@@ -101,7 +101,7 @@ def test_below_zone_below_50_percent_is_hold() -> None:
     candles = _hourly(trigger_time, [(trigger_time - HOUR, 106)], 87)
     zones = [_zone(80, 85, "lower"), _zone(90, 100, "selected"), _zone(110, 120, "higher")]
 
-    decision = evaluate_support_close_v1(
+    decision = evaluate_support_close_v2(
         candles.iloc[-1].to_dict(), candles, zones, zone_set_as_of=96 * HOUR
     )
 
@@ -116,14 +116,14 @@ def test_same_setup_is_bought_once_other_zone_allowed() -> None:
     candles = _hourly(trigger_time, [(trigger_time - HOUR, 106)], 92)
     zones = [_zone(90, 100, "selected"), _zone(110, 120, "higher")]
 
-    same_setup = evaluate_support_close_v1(
+    same_setup = evaluate_support_close_v2(
         candles.iloc[-1].to_dict(),
         candles,
         zones,
         zone_set_as_of=96 * HOUR,
         setup_already_bought=lambda fingerprint, _origin: fingerprint == "zf1:selected",
     )
-    other_zone = evaluate_support_close_v1(
+    other_zone = evaluate_support_close_v2(
         candles.iloc[-1].to_dict(),
         candles,
         zones,
@@ -142,7 +142,7 @@ def test_inside_at_80_percent_is_buy() -> None:
     candles = _hourly(trigger_time, [(trigger_time - HOUR, 106)], 98)
     zones = [_zone(90, 100, "selected"), _zone(110, 120, "higher")]
 
-    decision = evaluate_support_close_v1(
+    decision = evaluate_support_close_v2(
         candles.iloc[-1].to_dict(), candles, zones, zone_set_as_of=96 * HOUR
     )
 
@@ -157,7 +157,7 @@ def test_inside_at_zone_high_is_buy() -> None:
     candles = _hourly(trigger_time, [(trigger_time - HOUR, 106)], 100)
     zones = [_zone(90, 100, "selected"), _zone(110, 120, "higher")]
 
-    decision = evaluate_support_close_v1(
+    decision = evaluate_support_close_v2(
         candles.iloc[-1].to_dict(), candles, zones, zone_set_as_of=96 * HOUR
     )
 
@@ -171,7 +171,7 @@ def test_mar5_floor_78_percent_close_is_buy() -> None:
     candles = _hourly(trigger_time, [(trigger_time - HOUR, 61000)], 59395.99)
     zones = [_zone(59005.0, 59505.0, "mar5"), _zone(60123.73, 60623.73, "higher")]
 
-    decision = evaluate_support_close_v1(
+    decision = evaluate_support_close_v2(
         candles.iloc[-1].to_dict(), candles, zones, zone_set_as_of=96 * HOUR
     )
 
@@ -191,7 +191,7 @@ def test_green_trigger_candle_holds_before_zone_gates() -> None:
     )
     zones = [_zone(80, 85, "lower"), _zone(90, 100, "selected"), _zone(110, 120, "higher")]
 
-    decision = evaluate_support_close_v1(
+    decision = evaluate_support_close_v2(
         candles.iloc[-1].to_dict(), candles, zones, zone_set_as_of=96 * HOUR
     )
 
@@ -207,7 +207,7 @@ def test_doji_trigger_candle_is_hold() -> None:
     candles = _hourly(trigger_time, [(trigger_time - HOUR, 106)], 92, trigger_open=92)
     zones = [_zone(90, 100, "selected"), _zone(110, 120, "higher")]
 
-    decision = evaluate_support_close_v1(
+    decision = evaluate_support_close_v2(
         candles.iloc[-1].to_dict(), candles, zones, zone_set_as_of=96 * HOUR
     )
 
@@ -221,7 +221,7 @@ def test_inside_zone_max_pct_rejects_close_above_cap() -> None:
     candles = _hourly(trigger_time, [(trigger_time - HOUR, 106)], 100)
     zones = [_zone(90, 100, "selected"), _zone(110, 120, "higher")]
 
-    decision = evaluate_support_close_v1(
+    decision = evaluate_support_close_v2(
         candles.iloc[-1].to_dict(),
         candles,
         zones,
@@ -240,7 +240,7 @@ def test_inside_zone_max_pct_allows_close_at_cap() -> None:
     candles = _hourly(trigger_time, [(trigger_time - HOUR, 106)], 98)
     zones = [_zone(90, 100, "selected"), _zone(110, 120, "higher")]
 
-    decision = evaluate_support_close_v1(
+    decision = evaluate_support_close_v2(
         candles.iloc[-1].to_dict(),
         candles,
         zones,
@@ -258,7 +258,7 @@ def test_below_zone_min_pct_comes_from_argument() -> None:
     candles = _hourly(trigger_time, [(trigger_time - HOUR, 106)], 87.5)
     zones = [_zone(80, 85, "lower"), _zone(90, 100, "selected"), _zone(110, 120, "higher")]
 
-    decision = evaluate_support_close_v1(
+    decision = evaluate_support_close_v2(
         candles.iloc[-1].to_dict(),
         candles,
         zones,
@@ -281,7 +281,7 @@ def test_dip_lookback_hours_limits_origin_scan() -> None:
     )
     zones = [_zone(80, 85, "lower"), _zone(90, 100, "selected"), _zone(110, 120, "higher")]
 
-    decision = evaluate_support_close_v1(
+    decision = evaluate_support_close_v2(
         candles.iloc[-1].to_dict(),
         candles,
         zones,
@@ -310,7 +310,7 @@ def test_setup_lookup_uses_fingerprint_and_dip_origin() -> None:
         recent.append(fingerprint)
         return False
 
-    decision = evaluate_support_close_v1(
+    decision = evaluate_support_close_v2(
         candles.iloc[-1].to_dict(),
         candles,
         zones,
@@ -338,7 +338,7 @@ def test_approach_from_below_holds_even_with_valid_dip_origin() -> None:
     )
     zones = [_zone(80, 85, "lower"), _zone(90, 100, "selected"), _zone(110, 120, "higher")]
 
-    decision = evaluate_support_close_v1(
+    decision = evaluate_support_close_v2(
         candles.iloc[-1].to_dict(), candles, zones, zone_set_as_of=96 * HOUR
     )
 
@@ -360,7 +360,7 @@ def test_inside_candles_are_skipped_when_finding_last_outside() -> None:
     )
     zones = [_zone(90, 100, "selected"), _zone(110, 120, "higher")]
 
-    decision = evaluate_support_close_v1(
+    decision = evaluate_support_close_v2(
         candles.iloc[-1].to_dict(), candles, zones, zone_set_as_of=96 * HOUR
     )
 
@@ -382,7 +382,7 @@ def test_new_dip_origin_allows_same_zone_after_cooldown() -> None:
     )
     zones = [_zone(90, 100, "selected"), _zone(110, 120, "higher")]
 
-    decision = evaluate_support_close_v1(
+    decision = evaluate_support_close_v2(
         candles.iloc[-1].to_dict(),
         candles,
         zones,
@@ -412,7 +412,7 @@ def test_new_dip_origin_within_24h_is_blocked() -> None:
     )
     zones = [_zone(90, 100, "selected"), _zone(110, 120, "higher")]
 
-    decision = evaluate_support_close_v1(
+    decision = evaluate_support_close_v2(
         candles.iloc[-1].to_dict(),
         candles,
         zones,
@@ -437,7 +437,7 @@ def test_recent_buy_in_24h_blocks_before_same_setup() -> None:
     candles = _hourly(trigger_time, [(trigger_time - HOUR, 106)], 92)
     zones = [_zone(90, 100, "selected"), _zone(110, 120, "higher")]
 
-    decision = evaluate_support_close_v1(
+    decision = evaluate_support_close_v2(
         candles.iloc[-1].to_dict(),
         candles,
         zones,
@@ -457,7 +457,7 @@ def test_recent_buy_in_24h_does_not_block_other_zone() -> None:
     candles = _hourly(trigger_time, [(trigger_time - HOUR, 106)], 92)
     zones = [_zone(90, 100, "selected"), _zone(110, 120, "higher")]
 
-    decision = evaluate_support_close_v1(
+    decision = evaluate_support_close_v2(
         candles.iloc[-1].to_dict(),
         candles,
         zones,

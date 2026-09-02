@@ -23,7 +23,7 @@ from src.trading.constants import FOUR_HOURS_MS, ONE_HOUR_MS
 from src.zones.ohlc import _average_true_range, _coerce_ohlc
 from src.zones.types import STRUCTURE_LOCAL_REACTION_LOOKBACK_BARS
 from src.zones.rejections import _build_split_rejection_zone_pairs
-from src.zones.detector import detect_support_resistance_zones_structure_v1, extract_zone_detector_evidence, materialize_support_zones
+from src.zones.detector import detect_support_resistance_zones_structure_v2, extract_zone_detector_evidence, materialize_support_zones
 from src.zones.incremental import IncrementalZoneDetectorError, IncrementalZoneDetectorState
 from src.zones.candidates import _first_reclaim_index, _high_is_confirmed_reclaimed
 from src.zones.pivots import _filter_prominent_structure_pivots, _find_structure_pivots
@@ -90,7 +90,7 @@ def canonicalize_zone_snapshot(zones: list[dict[str, Any]] | None) -> list[dict[
 
 # Run the current stateless detector and return a canonical support snapshot.
 def detect_canonical_support_snapshot(df: pd.DataFrame, **detector_kwargs: Any) -> list[dict[str, Any]]:
-    result = detect_support_resistance_zones_structure_v1(df, **detector_kwargs)
+    result = detect_support_resistance_zones_structure_v2(df, **detector_kwargs)
     return canonicalize_zone_snapshot(result.get("support") or [])
 
 

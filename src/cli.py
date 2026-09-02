@@ -64,7 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     trade_once.add_argument("--mode", choices=("observe",), default="observe")
     backtest = subparsers.add_parser(
         "backtest",
-        help="Offline support_close_v1 replay; writes BUY CSV only (no live table writes).",
+        help="Offline support_close_v2 replay; writes BUY CSV only (no live table writes).",
     )
     backtest.add_argument("--start", required=True, help="Inclusive ISO-8601 start on a UTC hour boundary.")
     backtest.add_argument("--end", default=None, help="Exclusive ISO-8601 end on a UTC hour boundary.")

@@ -21,7 +21,7 @@ _INDEX_HTML_PATH = Path(__file__).with_name("backtest_chart.html")
 
 def build_parser() -> argparse.ArgumentParser:
     # Mirror the CLI backtest window so the chart always shows the same replay.
-    parser = argparse.ArgumentParser(description="Serve a local backtest chart for support_close_v1 BUYs.")
+    parser = argparse.ArgumentParser(description="Serve a local backtest chart for support_close_v2 BUYs.")
     parser.add_argument("--config", default=None, help="Path to config YAML. Defaults to CONFIG_PATH or config.yaml.")
     parser.add_argument("--start", required=True, help="Inclusive ISO-8601 start on a UTC hour boundary.")
     parser.add_argument("--end", default=None, help="Exclusive ISO-8601 end on a UTC hour boundary.")

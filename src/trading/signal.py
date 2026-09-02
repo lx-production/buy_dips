@@ -36,7 +36,7 @@ class DecisionInputError(ValueError):
     pass
 
 
-def evaluate_support_close_v1(
+def evaluate_support_close_v2(
     trigger_candle: Mapping[str, Any],
     hourly_candles: pd.DataFrame,
     zones: Iterable[Mapping[str, Any]],
@@ -322,7 +322,7 @@ def _set_adjacent(payload: dict[str, Any], prefix: str, zone: Mapping[str, Any])
 
 def _finish(payload: dict[str, Any], decision: str, reason_code: str) -> dict[str, Any]:
     if reason_code not in REASON_CODES:
-        raise AssertionError(f"Unknown support_close_v1 reason: {reason_code}")
+        raise AssertionError(f"Unknown support_close_v2 reason: {reason_code}")
     payload["decision"] = decision
     payload["reason_code"] = reason_code
     return payload

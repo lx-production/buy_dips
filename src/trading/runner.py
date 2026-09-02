@@ -1,24 +1,21 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
+from dataclasses import dataclass
+
 from typing import Any
 
-from ..binance_client import BinanceSpotClient
-from ..config import AppConfig
-from ..db import connect, init_db, load_candles_df, upsert_candles
 from ..utils import utc_ms
-from .aggregate_4h import (
-    aggregate_four_hour_bucket,
-    aggregate_overdue_buckets,
-    latest_overdue_bucket_open_time,
-)
+from ..config import AppConfig
+from .signal import evaluate_support_close_v2
+from ..binance_client import BinanceSpotClient
 from .binance_hourly import fetch_closed_hourly_candles
-from .constants import DETECTOR_VERSION, HOURLY_TIMEFRAME, ZONE_TIMEFRAME
-from .signal import evaluate_support_close_v1
-from .state_store import get_zone_rebuild_watermark, zone_rebuild_watermark_key
-from .store import has_recent_zone_buy, has_setup_buy, insert_decision
 from .zone_refresh import ZoneRefreshResult, refresh_zones
+from ..db import connect, init_db, load_candles_df, upsert_candles
+from .constants import DETECTOR_VERSION, HOURLY_TIMEFRAME, ZONE_TIMEFRAME
+from .store import has_recent_zone_buy, has_setup_buy, insert_decision
+from .state_store import get_zone_rebuild_watermark, zone_rebuild_watermark_key
+from .aggregate_4h import aggregate_four_hour_bucket, aggregate_overdue_buckets, latest_overdue_bucket_open_time
 
 
 class TradingCycleError(RuntimeError):
@@ -108,7 +105,7 @@ def run_trade_once(
         symbol=config.symbol,
     )
     with connect(database_path) as conn:
-        decision = evaluate_support_close_v1(
+        decision = evaluate_support_close_v2(
             trigger,
             hourly,
             refresh.zones,

@@ -33,7 +33,7 @@ def detect_support_resistance_zones(
     external_min_swing_atr_mult: float = 4.0, # might be too strict, could be reduced if fine-tuning
     external_min_swing_pct: float = 2.5,
 ) -> dict[str, list[dict[str, Any]]]:
-    return detect_support_resistance_zones_structure_v1(
+    return detect_support_resistance_zones_structure_v2(
         df,
         min_touches=min_touches,
         current_price=current_price,
@@ -51,7 +51,7 @@ def detect_support_resistance_zones(
 
 
 # Extract features from the full frame, then materialize the support ladder from that evidence.
-def detect_support_resistance_zones_structure_v1(
+def detect_support_resistance_zones_structure_v2(
     df: pd.DataFrame,
     external_swing_order: int = 5,
     internal_swing_order: int = 2,

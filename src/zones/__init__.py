@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .candidates import _support_floor_candidates
 from .daily import _build_daily_body_support_zones, _overlay_daily_support_zones
-from .detector import detect_support_resistance_zones, detect_support_resistance_zones_structure_v1, extract_zone_detector_evidence, materialize_support_zones
+from .detector import detect_support_resistance_zones, detect_support_resistance_zones_structure_v2, extract_zone_detector_evidence, materialize_support_zones
 from .factory import _fixed_support_zone_bounds
 from .incremental import IncrementalZoneDetectorError, IncrementalZoneDetectorState
 from .ohlc import _average_true_range, _coerce_ohlc
@@ -21,7 +21,7 @@ __all__ = [
     "IncrementalZoneDetectorError",
     "IncrementalZoneDetectorState",
     "detect_support_resistance_zones",
-    "detect_support_resistance_zones_structure_v1",
+    "detect_support_resistance_zones_structure_v2",
     "extract_zone_detector_evidence",
     "materialize_support_zones",
     "_average_true_range",
