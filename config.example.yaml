@@ -25,7 +25,16 @@ execution:
 
 risk:
   trade_amount_usdt: "1"
+  max_trades_per_utc_day: 3
   max_cumulative_usdt: "10"
+  min_pol_reserve: "0.01" # retained after the conservative approval + swap gas budget
+  pause_file: data/PAUSE_TRADING # create this file to skip dry_run/live execution
+
+logging:
+  level: INFO
+  file_path: data/logs/trading.jsonl # JSON Lines; redacted and size-rotated
+  max_bytes: 2000000
+  backup_count: 5
 
 zones: # values ending in _pct are fractions of price, not percent labels
   min_touches: 2

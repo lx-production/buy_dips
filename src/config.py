@@ -7,7 +7,6 @@ from typing import Any, Literal
 from pathlib import Path
 from urllib.parse import urlparse
 
-from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .trading.constants import POLYGON_CHAIN_ID, SWAP_ROUTER_02_ADDRESSES
@@ -116,7 +115,19 @@ class RiskConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     trade_amount_usdt: Decimal = Decimal("1")
-    max_cumulative_usdt: Decimal = Decimal("10")
+    max_trades_per_utc_day: int = Field(default=3, ge=1, le=3)
+    max_cumulative_usdt: Decimal = Field(default=Decimal("10"), ge=0, le=Decimal("10"))
+    min_pol_reserve: Decimal = Field(default=Decimal("0.01"), ge=0)
+    pause_file: str = "data/PAUSE_TRADING"
+
+
+class LoggingConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    file_path: str = "data/logs/trading.jsonl"
+    max_bytes: int = Field(default=2_000_000, gt=0)
+    backup_count: int = Field(default=5, ge=1)
 
 
 class AppConfig(BaseModel):
@@ -131,6 +142,7 @@ class AppConfig(BaseModel):
     wallet: WalletConfig = Field(default_factory=WalletConfig)
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     risk: RiskConfig = Field(default_factory=RiskConfig)
+    logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
     @model_validator(mode="after")
     def validate_wallet_execution_safety(self) -> "AppConfig":
@@ -139,10 +151,10 @@ class AppConfig(BaseModel):
             raise ValueError(f"execution.chain_id must be {POLYGON_CHAIN_ID}")
         if self.risk.trade_amount_usdt != Decimal("1"):
             raise ValueError("risk.trade_amount_usdt must be exactly 1")
-        if self.risk.max_cumulative_usdt < Decimal("0"):
-            raise ValueError("risk.max_cumulative_usdt must not be negative")
-        if self.risk.max_cumulative_usdt > Decimal("10"):
-            raise ValueError("risk.max_cumulative_usdt must not exceed 10")
+        if not self.risk.pause_file.strip():
+            raise ValueError("risk.pause_file must not be empty")
+        if not self.logging.file_path.strip():
+            raise ValueError("logging.file_path must not be empty")
         if self.environment == "dev":
             if "trader-prod" in str(Path(self.wallet.keystore_path)).lower():
                 raise ValueError("A dev config cannot use a trader-prod keystore")
@@ -155,8 +167,7 @@ class AppConfig(BaseModel):
 
 
 def load_config(path: str | Path | None = None) -> AppConfig:
-    # Load non-secret YAML settings after optional local environment variables.
-    load_dotenv()
+    # Load only non-secret YAML; secrets must already be in the process environment or credentials.
     config_path = Path(path or os.getenv("CONFIG_PATH", "config.yaml"))
     payload: dict[str, Any] = {}
     if config_path.exists():

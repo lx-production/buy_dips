@@ -159,6 +159,57 @@ def get_trade_execution(
     return None if row is None else dict(row)
 
 
+def has_other_in_flight_execution(
+    conn: sqlite3.Connection,
+    execution_id: int,
+) -> bool:
+    """Block a second execution while any earlier non-terminal lifecycle is unresolved."""
+    row = conn.execute(
+        """
+        SELECT 1 FROM trade_executions
+        WHERE id != ?
+          AND status IN ('started', 'risk_checked', 'quoted', 'allowance_ready', 'signed', 'broadcast', 'pending')
+        LIMIT 1
+        """,
+        (int(execution_id),),
+    ).fetchone()
+    return row is not None
+
+
+def get_live_exposure(
+    conn: sqlite3.Connection,
+    *,
+    now_s: int,
+    exclude_execution_id: int | None = None,
+) -> dict[str, int]:
+    """Count conservative live attempts for UTC-day and cumulative canary limits.
+
+    An execution counts from `signed` onward, including reverted attempts,
+    because a locally signed intent may have reached the network and should not
+    free budget automatically.
+    """
+    day_start = int(now_s) - int(now_s) % 86_400
+    excluded = -1 if exclude_execution_id is None else int(exclude_execution_id)
+    row = conn.execute(
+        """
+        SELECT
+          COALESCE(SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END), 0) AS utc_day_trade_count,
+          COALESCE(SUM(CASE WHEN created_at >= ? THEN amount_in_raw ELSE 0 END), 0) AS utc_day_spend_raw,
+          COALESCE(SUM(amount_in_raw), 0) AS cumulative_spend_raw
+        FROM trade_executions
+        WHERE id != ?
+          AND mode = 'live'
+          AND status IN ('signed', 'broadcast', 'pending', 'confirmed', 'reverted')
+        """,
+        (day_start, day_start, excluded),
+    ).fetchone()
+    return {
+        "utc_day_trade_count": int(row["utc_day_trade_count"]),
+        "utc_day_spend_raw": int(row["utc_day_spend_raw"]),
+        "cumulative_spend_raw": int(row["cumulative_spend_raw"]),
+    }
+
+
 def update_trade_execution(
     conn: sqlite3.Connection,
     execution_id: int,

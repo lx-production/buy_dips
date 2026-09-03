@@ -13,7 +13,7 @@ todos:
     status: completed
   - id: audit-risk
     content: Wire decisions/executions persistence, structured redacted logs, duplicate prevention, pause switch, and canary risk limits.
-    status: pending
+    status: completed
   - id: tests
     content: Replace paper-signal tests with the unified dip-origin/support-entry gates, including nearest qualifying 48h close, inside/below-zone entry regions, and per-zone 24h no-buy (same zone blocked; deeper zone still allowed); cover 1h fetch, 1h-to-4h, zone watermark, risk, storage, in-house quote response validation, runner, and tx lifecycle.
     status: pending

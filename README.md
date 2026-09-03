@@ -18,7 +18,6 @@ The hourly CLI path is **`trade-once`**. `observe` stops after decision persiste
 
 ## What It Does Not Do (yet)
 
-- The separate audit-risk step (pause switch and daily/cumulative execution limits) is not complete; keep `execution.live_enabled: false` until it is reviewed.
 - No systemd units installed by this repo (Pi rollout stays operator-owned).
 - No sell / stop-loss logic.
 - Backtest is signal-only: no PnL, sell, quote, slippage, gas, or wallet simulation.
@@ -40,6 +39,8 @@ Copy secrets into the environment only (never into YAML):
 - `POLYGON_RPC_URL` — Polygon JSON-RPC endpoint for wallet/contract commands
 - `LIVE_TRADING_CONFIRMATION` — live-only value `polygon:137:<checksum wallet address>`
 
+The bot does not auto-load `.env` files. Export dev values into the current process, or use systemd credentials in production.
+
 Default config is **dev**: `wallet.keystore_path: data/wallet/trader-dev.json` and `execution.quote_base_url: https://prana.triethocduongpho.net`. Prod expects a separate keystore and loopback quote host `http://127.0.0.1:4173`.
 
 ## Initialize The Database
@@ -54,7 +55,7 @@ Default database path:
 data/prana_buy_the_dips.sqlite
 ```
 
-`init_db` creates `candles`, `zones`, `zone_sets`, `backtest_zone_cache`, `decisions`, `trade_executions`, and `bot_state`, and drops any leftover Phase 1 `signals` table. It also creates read-only UTC+7 views for convenient inspection. Existing databases are upgraded automatically on the next command that initializes or reads the database; do not delete the database or backfill existing rows.
+`init_db` creates `candles`, `zones`, `zone_sets`, `backtest_zone_cache`, `decisions`, `trade_executions`, and `bot_state`, and drops any leftover Phase 1 `signals` table. It also creates read-only UTC+7 views for convenient inspection. `decisions` has one idempotent row per mode/strategy/closed hour; each BUY decision can own only one `trade_executions` row, and transaction hashes are unique. Existing databases are upgraded automatically on the next command that initializes or reads the database; do not delete the database or backfill existing rows.
 
 ### Read Database Times In UTC+7
 
@@ -227,7 +228,9 @@ One cycle:
 3. Rebuilds zones when the 4h watermark advances; otherwise loads the last fingerprinted zone set.
 4. Evaluates `support_close_v2` on the latest closed 1h candle.
 5. Persists the decision (`BUY` or `HOLD`) and prints id / decision / reason / zones-rebuilt.
-6. For a BUY in `dry_run` or `live`, creates one idempotent `trade_executions` row and validates a fresh `POST /api/swap/quote` response.
+6. For a BUY in `dry_run` or `live`, creates one idempotent `trade_executions` row and checks the pause file plus any unresolved execution.
+7. For `live`, also enforces at most 3 attempts per UTC day and at most 10 USDT cumulative reserved/attempted spend. Signed, broadcast, pending, confirmed, and reverted attempts count conservatively.
+8. Checks USDT/POL balances and a conservative gas reserve before approval or signing, then validates a fresh `POST /api/swap/quote` response.
 
 No wallet credentials are required for `observe`.
 
@@ -235,7 +238,7 @@ The quote must echo `USDT`→`PRANA`, `amountIn="1"`, the signer recipient, conf
 
 `dry_run` performs `eth_call` and `estimate_gas`, then stores `simulated` without approval, signing, or broadcast. `live` additionally requires `environment: prod`, the loopback quote host, `live_enabled: true`, the pinned wallet, and matching `LIVE_TRADING_CONFIRMATION`. It tops up only the quote amount when allowance is low, commits nonce/hash before broadcasting once, decodes received PRANA from the receipt, and reconciles that same hash on rerun.
 
-Keep live disabled until the pending audit-risk controls are implemented and reviewed.
+Keep live disabled until the backtest, observe, dry-run, wallet funding, capped approval, and operator review rollout gates are complete.
 
 ## Wallet And Contract Helpers
 
@@ -297,7 +300,43 @@ Fetch failures, zone-build failures, and an overdue incomplete 4h bucket abort t
 - Live trading requires `execution.live_enabled`, a pinned wallet address, the prod loopback quote host, and wallet-specific confirmation.
 - Quote verification tokens, calldata, signed transaction bytes, passwords, and RPC URLs are never stored in `trade_executions`.
 - Keystores and `.env` are gitignored; never commit passwords, private keys, signed txs, or RPC URLs with API keys.
-- Canary intent: **1 USDT** per trade, **10 USDT** cumulative cap, capped router approval (not unlimited).
+- Canary intent: exactly **1 USDT** per trade, at most **3 attempts per UTC day**, **10 USDT** cumulative cap, and capped router approval (not unlimited).
+- `risk.min_pol_reserve` remains untouched after a conservative approval/swap gas budget.
+- A non-terminal execution blocks every later execution. This prevents a second quote/sign/broadcast path while an earlier lifecycle is unresolved.
+
+## Audit, Pause, And Recovery
+
+Every trading cycle writes structured JSON events to stdout and the size-rotating `logging.file_path` (default `data/logs/trading.jsonl`). Events include a per-cycle correlation ID, decision/execution IDs, zone watermark, fingerprint version, available selected/adjacent zone fingerprints, and each no-trade, skip, quote, simulation, signing, broadcast, and receipt transition.
+
+The logger recursively redacts passwords, decrypted/private keys, RPC URLs, raw/signed transaction bytes, calldata, API keys, and quote verification tokens. SQLite stores only safe summaries and stable reason codes; it never stores raw calldata, signed transaction payloads, or verification tokens.
+
+To stop `dry_run` and `live` execution while continuing candle/decision collection, create the configured pause file:
+
+```bash
+touch data/PAUSE_TRADING
+```
+
+Remove it only after reviewing the reason for the pause:
+
+```bash
+rm data/PAUSE_TRADING
+```
+
+A BUY remains a BUY when execution is blocked. Inspect the downstream result separately:
+
+```sql
+SELECT id, decision_id, mode, status, reason, transaction_hash, updated_at_utc7
+FROM trade_executions_readable
+ORDER BY id DESC
+LIMIT 20;
+
+SELECT mode, status, COUNT(*) AS attempts, SUM(COALESCE(amount_in_raw, 0)) AS amount_in_raw
+FROM trade_executions
+GROUP BY mode, status
+ORDER BY mode, status;
+```
+
+Do not manually clear a `signed`, `broadcast`, or `pending` row. Re-run the same cycle to reconcile its stored transaction hash. A pre-broadcast row left in `started`, `risk_checked`, `quoted`, or `allowance_ready` after a crash intentionally blocks later execution; inspect it and mark it failed only after confirming that no transaction or approval remains unresolved.
 
 ## Tests
 

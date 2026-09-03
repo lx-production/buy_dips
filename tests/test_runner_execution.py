@@ -63,7 +63,9 @@ def _checked() -> SimpleNamespace:
     return SimpleNamespace(
         wallet_address=WALLET,
         usdt_balance_raw=10_000_000,
-        web3=SimpleNamespace(),
+        pol_balance_raw=10**18,
+        allowance_raw=10_000_000,
+        web3=SimpleNamespace(eth=SimpleNamespace(gas_price=1_000_000_000)),
     )
 
 
@@ -175,3 +177,41 @@ def test_dry_run_stops_after_quote_and_simulation(monkeypatch, tmp_path) -> None
         row = conn.execute("SELECT status, transaction_hash FROM trade_executions").fetchone()
     assert row["status"] == "simulated"
     assert row["transaction_hash"] is None
+
+
+def test_pause_file_persists_execution_skip_before_wallet_access(monkeypatch, tmp_path) -> None:
+    """A paused BUY must persist a skip reason without loading a wallet or calling Polygon."""
+    database_path = tmp_path / "bot.sqlite"
+    decision_id = _insert_decision(database_path)
+    pause_file = tmp_path / "PAUSE_TRADING"
+    pause_file.touch()
+    config = AppConfig(
+        risk={"pause_file": str(pause_file)},
+        logging={"file_path": str(tmp_path / "trading.jsonl")},
+    )
+
+    def forbidden(*_args, **_kwargs):
+        """Fail if a pre-execution pause crosses the wallet/RPC boundary."""
+        raise AssertionError("paused execution touched wallet or Polygon")
+
+    monkeypatch.setattr("src.trading.runner.run_contract_checks", forbidden)
+
+    execution_id, status = _run_execution(
+        config,
+        database_path,
+        decision_id,
+        mode="live",
+        password=None,
+        web3=None,
+        quote_session=None,
+        live_confirmation=None,
+    )
+
+    with connect(database_path) as conn:
+        decision = conn.execute("SELECT decision, reason_code FROM decisions WHERE id=?", (decision_id,)).fetchone()
+        execution = conn.execute("SELECT status, reason FROM trade_executions WHERE id=?", (execution_id,)).fetchone()
+    assert decision["decision"] == "BUY"
+    assert decision["reason_code"] == "BUY_GATES_PASSED"
+    assert execution["status"] == "skipped"
+    assert execution["reason"] == "PAUSE_FILE_PRESENT"
+    assert status == "skipped"

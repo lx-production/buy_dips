@@ -252,13 +252,17 @@ Pause, cap USDT, gas, quote, allowance **không** đổi BUY thành HOLD. Đó l
 
 **Quote verification** — Bot yêu cầu version 2, token không rỗng và `expiresAt` còn đủ thời gian, nhưng không persist token.
 
-**`data/PAUSE_TRADING`** — Kill switch (plan live).
+**`data/PAUSE_TRADING`** — Kill switch mặc định. Khi file tồn tại, BUY decision vẫn được giữ nhưng execution là `skipped`.
 
 **LoadCredential** — Pi: systemd nhét password vào `/run/credentials/…`. Repo không cài unit.
 
 **Idempotent cycle** — Chạy lại cùng giờ không nhân lệnh. Nonce/hash được commit trước broadcast; rerun reconcile đúng hash đó và không gửi replacement.
 
-**Audit-risk còn pending** — Pause switch và daily/cumulative execution cap chưa hoàn tất; giữ `live_enabled: false` cho tới khi phần đó được review.
+**Canary risk** — Mỗi lệnh đúng 1 USDT, tối đa 3 attempt/ngày UTC và 10 USDT cumulative. Các trạng thái từ `signed` trở đi được tính bảo thủ, kể cả pending/reverted.
+
+**In-flight lock** — Một execution chưa terminal (`started` → `pending`) chặn execution mới. Trạng thái skip/fail nằm ở `trade_executions`, không đổi BUY thành HOLD.
+
+**Structured audit log** — JSON Lines ra stdout và rotating file, có correlation ID/fingerprint/trạng thái; password, key, RPC URL, calldata, signed bytes và verification token bị redacted.
 
 ---
 
