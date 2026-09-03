@@ -1,25 +1,35 @@
 from __future__ import annotations
 
-import pandas as pd
 import pytest
+import pandas as pd
 
 from src.config import AppConfig, ZoneConfig
-from src.db import connect, init_db, upsert_candles
-from src.trading.aggregate_4h import OverdueIncompleteFourHourError, aggregate_four_hour_bucket
-from src.trading.state_store import (
-    get_zone_rebuild_watermark,
-    set_zone_rebuild_watermark,
-    validate_zone_rebuild_watermark,
-    zone_rebuild_watermark_key,
-)
 from src.trading.runner import run_trade_once
-from src.trading.zone_identity import fingerprint_zone, make_zone_fingerprint, make_zone_lineage_id
 from src.trading.zone_refresh import refresh_zones
 from src.zones.timeframes import aggregate_ohlc_to_daily
+from src.db import connect, init_db, load_candles_df, upsert_candles
+from src.trading.binance_hourly import HourlyFeedError, fetch_closed_hourly_candles
+from src.trading.aggregate_4h import OverdueIncompleteFourHourError, aggregate_four_hour_bucket
+from src.trading.zone_identity import fingerprint_zone, make_zone_fingerprint, make_zone_lineage_id
+from src.trading.state_store import get_zone_rebuild_watermark, set_zone_rebuild_watermark, validate_zone_rebuild_watermark, zone_rebuild_watermark_key
 
 
 HOUR = 3_600_000
 FOUR_HOURS = 4 * HOUR
+
+
+class _HourlyClient:
+    """Return fixed Binance rows and record the requested market parameters."""
+
+    def __init__(self, rows: list[dict[str, object]]) -> None:
+        """Store deterministic rows for an isolated hourly-feed test."""
+        self.rows = rows
+        self.calls: list[dict[str, object]] = []
+
+    def fetch_klines(self, **kwargs: object) -> list[dict[str, object]]:
+        """Capture the fetch arguments and return the configured rows."""
+        self.calls.append(kwargs)
+        return self.rows
 
 
 def _hourly(bucket: int, count: int = 4) -> pd.DataFrame:
@@ -56,6 +66,32 @@ def _four_hour_history(count: int = 12) -> pd.DataFrame:
             for index in range(count)
         ]
     )
+
+
+def test_hourly_fetch_requests_only_1h_and_persists_only_closed_rows(tmp_path) -> None:
+    """The live feed must request 1h BTCUSDT data and discard the open candle."""
+    closed = _hourly(0, count=1).iloc[0].to_dict()
+    open_candle = _hourly(HOUR, count=1).iloc[0].to_dict()
+    open_candle["is_closed"] = 0
+    client = _HourlyClient([closed, open_candle])
+    db_path = tmp_path / "bot.sqlite"
+
+    inserted = fetch_closed_hourly_candles(db_path, limit=72, client=client)
+    stored = load_candles_df(db_path, "binance", "BTCUSDT", "1h", only_closed=False)
+
+    assert client.calls == [{"symbol": "BTCUSDT", "interval": "1h", "limit": 72}]
+    assert inserted == 1
+    assert stored["open_time"].tolist() == [0]
+    assert stored["timeframe"].tolist() == ["1h"]
+
+
+def test_hourly_fetch_fails_closed_when_binance_returns_no_closed_rows(tmp_path) -> None:
+    """An open-only response must not create candle rows or permit a stale cycle."""
+    open_candle = _hourly(0, count=1).iloc[0].to_dict()
+    open_candle["is_closed"] = 0
+
+    with pytest.raises(HourlyFeedError, match="no closed 1h"):
+        fetch_closed_hourly_candles(tmp_path / "bot.sqlite", client=_HourlyClient([open_candle]))
 
 
 def test_aggregate_closed_four_hour_bucket() -> None:

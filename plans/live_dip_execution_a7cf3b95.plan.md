@@ -16,7 +16,7 @@ todos:
     status: completed
   - id: tests
     content: Replace paper-signal tests with the unified dip-origin/support-entry gates, including nearest qualifying 48h close, inside/below-zone entry regions, and per-zone 24h no-buy (same zone blocked; deeper zone still allowed); cover 1h fetch, 1h-to-4h, zone watermark, risk, storage, in-house quote response validation, runner, and tx lifecycle.
-    status: pending
+    status: completed
   - id: backtest
     content: Offline support_close_v2 replay in src/trading/backtest.py with isolated in-memory prior-BUY state; CLI backtest --start/--end/--csv (BUY-only summary+CSV); shared build_fingerprinted_support_zones helper; serve_backtest_chart.py with GET /api/backtest (no HOLD).
     status: completed
