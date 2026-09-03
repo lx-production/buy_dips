@@ -22,6 +22,8 @@ The hourly CLI path is **`trade-once`**. `observe` stops after decision persiste
 - No sell / stop-loss logic.
 - Backtest is signal-only: no PnL, sell, quote, slippage, gas, or wallet simulation.
 
+For an operator-owned Pi deployment, follow the Vietnamese [Pi rollout runbook](docs/pi-rollout-runbook.md). It covers the dedicated service user, permissions, systemd credentials, hourly service/timer templates, and the observe-to-dry-run dev-canary rollout.
+
 ## Install
 
 Requires Python 3.10+ (3.11 recommended).
