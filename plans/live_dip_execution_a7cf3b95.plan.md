@@ -10,7 +10,7 @@ todos:
     status: pending
   - id: quote-execute
     content: Add a thin in-house swap quote adapter (prod local route server; dev https://prana.triethocduongpho.net); validate quote/transaction/deadline/verification; approve router if needed; simulate, execute, and reconcile swaps.
-    status: pending
+    status: completed
   - id: audit-risk
     content: Wire decisions/executions persistence, structured redacted logs, duplicate prevention, pause switch, and canary risk limits.
     status: pending

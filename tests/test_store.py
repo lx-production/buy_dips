@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 from src.db import connect, init_db
-from src.trading.store import has_recent_zone_buy, has_setup_buy
+from src.trading.store import create_trade_execution, get_trade_execution, has_recent_zone_buy, has_setup_buy, update_trade_execution
 
 
 HOUR = 3_600_000
@@ -64,3 +64,35 @@ def test_has_setup_buy_ignores_time_and_other_origins(tmp_path) -> None:
         assert has_setup_buy(conn, "zf1:selected", origin, trigger) is True
         assert has_setup_buy(conn, "zf1:selected", origin + HOUR, trigger) is False
         assert has_setup_buy(conn, "zf1:other", origin, trigger) is False
+
+
+def test_trade_execution_is_idempotent_and_stores_only_redacted_fields(tmp_path) -> None:
+    """One decision gets one execution row whose safe lifecycle fields can be updated."""
+    db_path = tmp_path / "bot.sqlite"
+    init_db(db_path)
+    with connect(db_path) as conn:
+        _insert_buy(conn, 100 * HOUR, "zf1:selected", 90 * HOUR)
+        decision_id = int(conn.execute("SELECT id FROM decisions").fetchone()["id"])
+        execution_id, created = create_trade_execution(conn, decision_id, "live", created_at=1)
+        duplicate_id, duplicate_created = create_trade_execution(conn, decision_id, "live", created_at=2)
+        update_trade_execution(
+            conn,
+            execution_id,
+            updated_at=3,
+            status="signed",
+            nonce=7,
+            transaction_hash="0x" + "ab" * 32,
+            approval_transaction_hashes_json=["0xapproval"],
+        )
+        conn.commit()
+        execution = get_trade_execution(conn, execution_id)
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(trade_executions)")}
+
+    assert created is True
+    assert duplicate_created is False
+    assert duplicate_id == execution_id
+    assert execution["status"] == "signed"
+    assert execution["nonce"] == 7
+    assert "raw_calldata" not in columns
+    assert "signed_transaction" not in columns
+    assert "verification_token" not in columns

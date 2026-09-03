@@ -144,6 +144,33 @@ ON decisions(decision, selected_zone_fingerprint, candle_open_time);
 CREATE INDEX IF NOT EXISTS decisions_buy_setup
 ON decisions(decision, selected_zone_fingerprint, dip_origin_open_time);
 
+CREATE TABLE IF NOT EXISTS trade_executions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  decision_id INTEGER NOT NULL UNIQUE,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  mode TEXT NOT NULL CHECK(mode IN ('dry_run', 'live')),
+  status TEXT NOT NULL,
+  reason TEXT,
+  quote_router TEXT,
+  amount_in_raw INTEGER,
+  quoted_amount_out TEXT,
+  minimum_amount_out TEXT,
+  quote_deadline INTEGER,
+  verification_version INTEGER,
+  approval_transaction_hashes_json TEXT,
+  gas_estimate INTEGER,
+  nonce INTEGER,
+  transaction_hash TEXT UNIQUE,
+  block_number INTEGER,
+  gas_used INTEGER,
+  actual_prana_output_raw INTEGER,
+  FOREIGN KEY(decision_id) REFERENCES decisions(id)
+);
+
+CREATE INDEX IF NOT EXISTS trade_executions_status
+ON trade_executions(status);
+
 CREATE TABLE IF NOT EXISTS bot_state (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
@@ -209,6 +236,14 @@ SELECT
   datetime(dip_origin_open_time / 1000.0, 'unixepoch', '+7 hours') || ' +07:00'
     AS dip_origin_open_time_utc7
 FROM decisions;
+
+CREATE VIEW IF NOT EXISTS trade_executions_readable AS
+SELECT
+  trade_executions.*,
+  datetime(created_at, 'unixepoch', '+7 hours') || ' +07:00' AS created_at_utc7,
+  datetime(updated_at, 'unixepoch', '+7 hours') || ' +07:00' AS updated_at_utc7,
+  datetime(quote_deadline, 'unixepoch', '+7 hours') || ' +07:00' AS quote_deadline_utc7
+FROM trade_executions;
 
 CREATE VIEW IF NOT EXISTS bot_state_readable AS
 SELECT

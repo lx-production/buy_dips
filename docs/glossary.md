@@ -2,7 +2,7 @@
 
 Từ điển ngắn cho các khái niệm trong repo. Engine hiện tại: detector `support_structure_v2`, quyết định `support_close_v2` (`evaluate_support_close_v2` trong `src/trading/signal.py`).
 
-Bot **không** tự bán. Hiện CLI live chỉ có `observe`: lấy nến → zones → BUY/HOLD → ghi DB. Quote / simulate / broadcast DEX chưa gắn vào runner.
+Bot **không** tự bán. CLI dùng cùng một cycle cho `observe`, `dry_run`, và `live`; chỉ BUY ở hai mode sau mới đi tiếp sang quote/execution.
 
 ---
 
@@ -16,9 +16,9 @@ Bot **không** tự bán. Hiện CLI live chỉ có `observe`: lấy nến → z
 
 **Observe / dry_run / live** — Cùng một engine quyết định; khác nhau **sau** khi ra BUY:
 
-- `observe` — chỉ ghi `decisions` (đường đang dùng).
-- `dry_run` — thêm quote + simulate, không ký (plan, chưa expose CLI).
-- `live` — ký + broadcast khi risk pass (plan, chưa expose CLI).
+- `observe` — chỉ ghi `decisions`, không mở ví/RPC.
+- `dry_run` — thêm quote + `eth_call` + `estimate_gas`, không approve/ký/broadcast.
+- `live` — có thể approve đúng amount quote, ký và broadcast sau khi qua live guard.
 
 **Backtest** — Replay cùng engine trên nến đã lưu. Chỉ kiểm tra tín hiệu (BUY CSV + chart). Không PnL, không ví, không ghi `decisions` / `zones` / `bot_state` live.
 
@@ -216,13 +216,13 @@ Pause, cap USDT, gas, quote, allowance **không** đổi BUY thành HOLD. Đó l
 
 **`zones` / `zone_sets` / `decisions` / `bot_state`** — Snapshot live, manifest, mọi BUY/HOLD, key-value (watermark, tracks).
 
-**`trade_executions`** — Plan: kết quả quote/sign/broadcast. Chưa phải đường observe hiện tại.
+**`trade_executions`** — Trạng thái redacted của BUY sau decision: quote, simulate, nonce/hash, broadcast và receipt. Không lưu calldata, signed bytes hoặc verification token.
 
 **Views `*_readable`** — Cột gốc + hiển thị UTC+7. Trading vẫn dùng ms UTC.
 
 **`init-db`** — Tạo schema, drop `signals` cũ, view UTC+7.
 
-**`trade-once --mode observe`** — Một cycle hourly: fetch 1h → derive 4h → refresh zones nếu watermark chạy → evaluate → persist.
+**`trade-once --mode observe|dry_run|live`** — Một cycle hourly dùng chung signal; mode chỉ thay đổi bước sau BUY.
 
 **`backfill`** — Kéo kline lịch sử (Binance tối đa 1000/lần). Upsert an toàn.
 
@@ -232,7 +232,7 @@ Pause, cap USDT, gas, quote, allowance **không** đổi BUY thành HOLD. Đó l
 
 ---
 
-## 7. Ví, swap, rủi ro (plan / helper)
+## 7. Ví, swap, rủi ro
 
 **Polygon / chain 137** — Chain canary. PRANA nhận về ví bot;
 
@@ -250,11 +250,15 @@ Pause, cap USDT, gas, quote, allowance **không** đổi BUY thành HOLD. Đó l
 
 **`deadline`** — Quote hết hạn ~3 phút. Không ký sau deadline.
 
+**Quote verification** — Bot yêu cầu version 2, token không rỗng và `expiresAt` còn đủ thời gian, nhưng không persist token.
+
 **`data/PAUSE_TRADING`** — Kill switch (plan live).
 
 **LoadCredential** — Pi: systemd nhét password vào `/run/credentials/…`. Repo không cài unit.
 
-**Idempotent cycle** — Chạy lại cùng giờ không nhân lệnh. Nonce/hash dành trước khi broadcast (plan); không replace pending, không mở trade thứ hai khi chưa xong.
+**Idempotent cycle** — Chạy lại cùng giờ không nhân lệnh. Nonce/hash được commit trước broadcast; rerun reconcile đúng hash đó và không gửi replacement.
+
+**Audit-risk còn pending** — Pause switch và daily/cumulative execution cap chưa hoàn tất; giữ `live_enabled: false` cho tới khi phần đó được review.
 
 ---
 

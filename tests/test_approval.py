@@ -9,6 +9,7 @@ from src.trading.approval import (
     ApprovalBroadcastTimeout,
     ApprovalError,
     approve_trading,
+    ensure_swap_allowance,
     revoke_trading,
 )
 from src.trading.constants import CANARY_ALLOWANCE_USDT_RAW
@@ -223,3 +224,14 @@ def test_approval_rejects_gas_estimate_above_configured_limit(monkeypatch) -> No
 
     assert signer.transactions == []
     assert checked.web3.eth.broadcasts == 0
+
+
+def test_swap_allowance_tops_up_only_the_quote_amount() -> None:
+    """Automatic live approval must grant 1 USDT, not the broader manual canary cap."""
+    checked, contract, _signer = _checked(0)
+
+    result = ensure_swap_allowance(AppConfig(), checked, ROUTER, 1_000_000)
+
+    assert result.action == "topped-up"
+    assert result.current_allowance_raw == 1_000_000
+    assert contract.requested == [1_000_000]

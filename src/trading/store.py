@@ -120,7 +120,92 @@ def insert_decision(
     return int(row["id"] if isinstance(row, sqlite3.Row) else row[0])
 
 
+def create_trade_execution(
+    conn: sqlite3.Connection,
+    decision_id: int,
+    mode: str,
+    *,
+    status: str = "started",
+    created_at: int | None = None,
+) -> tuple[int, bool]:
+    """Create one idempotent execution row for a BUY decision and report whether it was new."""
+    if mode not in {"dry_run", "live"}:
+        raise ValueError("Trade execution mode must be dry_run or live")
+    timestamp = utc_seconds() if created_at is None else int(created_at)
+    cursor = conn.execute(
+        """
+        INSERT INTO trade_executions(decision_id, created_at, updated_at, mode, status)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(decision_id) DO NOTHING
+        """,
+        (int(decision_id), timestamp, timestamp, mode, status),
+    )
+    row = conn.execute(
+        "SELECT id FROM trade_executions WHERE decision_id=?",
+        (int(decision_id),),
+    ).fetchone()
+    return int(row["id"] if isinstance(row, sqlite3.Row) else row[0]), cursor.rowcount == 1
+
+
+def get_trade_execution(
+    conn: sqlite3.Connection,
+    execution_id: int,
+) -> dict[str, Any] | None:
+    """Load one redacted execution row for idempotency or reconciliation."""
+    row = conn.execute(
+        "SELECT * FROM trade_executions WHERE id=?",
+        (int(execution_id),),
+    ).fetchone()
+    return None if row is None else dict(row)
+
+
+def update_trade_execution(
+    conn: sqlite3.Connection,
+    execution_id: int,
+    *,
+    updated_at: int | None = None,
+    **fields: Any,
+) -> None:
+    """Update only allowlisted redacted execution fields, never calldata or verification tokens."""
+    allowed = {
+        "status",
+        "reason",
+        "quote_router",
+        "amount_in_raw",
+        "quoted_amount_out",
+        "minimum_amount_out",
+        "quote_deadline",
+        "verification_version",
+        "approval_transaction_hashes_json",
+        "gas_estimate",
+        "nonce",
+        "transaction_hash",
+        "block_number",
+        "gas_used",
+        "actual_prana_output_raw",
+    }
+    unknown = set(fields) - allowed
+    if unknown:
+        raise ValueError(f"Unsupported trade execution fields: {sorted(unknown)}")
+    if not fields:
+        return
+    values = dict(fields)
+    if "approval_transaction_hashes_json" in values and not isinstance(
+        values["approval_transaction_hashes_json"], str
+    ):
+        values["approval_transaction_hashes_json"] = _json(
+            values["approval_transaction_hashes_json"]
+        )
+    values["updated_at"] = utc_seconds() if updated_at is None else int(updated_at)
+    assignments = ",".join(f"{column}=?" for column in values)
+    conn.execute(
+        f"UPDATE trade_executions SET {assignments} WHERE id=?",
+        (*values.values(), int(execution_id)),
+    )
+
+
 def _json(value: Any) -> str | None:
+    """Serialize compact deterministic JSON for SQLite payload columns."""
     if value is None:
         return None
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)

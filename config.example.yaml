@@ -16,6 +16,10 @@ execution:
   router_allowlist:
     - "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"
   live_enabled: false
+  slippage_bps: 50 # 0.5%; accepted range is 1-500
+  quote_timeout_seconds: 10
+  quote_min_deadline_seconds: 30 # reject quotes with too little time left
+  max_swap_gas: 750000
   max_approval_gas: 100000
   receipt_timeout_seconds: 120
 

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+
 from typing import Any
+
+from web3 import Web3
 
 from ..config import AppConfig
 from .constants import CANARY_ALLOWANCE_USDT_RAW, POLYGON_CHAIN_ID
@@ -76,17 +79,48 @@ def revoke_trading(
         raise ApprovalError("Revocation failed; inspect the current allowance before retrying") from exc
 
 
+def ensure_swap_allowance(
+    config: AppConfig,
+    checked: ContractCheckResult,
+    router_address: str,
+    amount_raw: int,
+) -> ApprovalResult:
+    """Top up only the validated quote amount, using USDT's zero-reset flow when required."""
+    router = Web3.to_checksum_address(router_address)
+    allowed = {Web3.to_checksum_address(address) for address in config.execution.router_allowlist}
+    if router not in allowed:
+        raise ApprovalError("Quote router is outside the configured allowlist")
+    if amount_raw <= 0 or amount_raw > CANARY_ALLOWANCE_USDT_RAW:
+        raise ApprovalError("Swap approval amount is outside the canary cap")
+    previous = _read_allowance(checked, router)
+    if previous >= amount_raw:
+        return ApprovalResult("already-sufficient", previous, previous, ())
+
+    transaction_hashes: list[str] = []
+    if previous != 0:
+        transaction_hashes.append(_send_approval_transaction(config, checked, 0, router))
+        if _read_allowance(checked, router) != 0:
+            raise ApprovalError("USDT allowance did not reset to zero")
+    transaction_hashes.append(_send_approval_transaction(config, checked, amount_raw, router))
+    current = _read_allowance(checked, router)
+    if current < amount_raw:
+        raise ApprovalError("USDT allowance remains below the quote amount")
+    return ApprovalResult("topped-up", previous, current, tuple(transaction_hashes))
+
+
 def _send_approval_transaction(
     config: AppConfig,
     checked: ContractCheckResult,
     amount_raw: int,
+    router_address: str | None = None,
 ) -> str:
     # Simulate, estimate, locally sign, broadcast once, and require a successful mined receipt.
-    if amount_raw not in {0, CANARY_ALLOWANCE_USDT_RAW}:
+    if amount_raw < 0 or amount_raw > CANARY_ALLOWANCE_USDT_RAW:
         raise ApprovalError("Approval amount is outside the permitted canary values")
     if checked.chain_id != POLYGON_CHAIN_ID:
         raise ApprovalError("Refusing to sign an approval for the wrong chain")
-    function = checked.usdt_contract.functions.approve(checked.router_address, amount_raw)
+    router = checked.router_address if router_address is None else Web3.to_checksum_address(router_address)
+    function = checked.usdt_contract.functions.approve(router, amount_raw)
     transaction_context = {"from": checked.wallet_address}
     function.call(transaction_context)
     estimated_gas = int(function.estimate_gas(transaction_context))
@@ -126,12 +160,16 @@ def _send_approval_transaction(
     return rendered_hash
 
 
-def _read_allowance(checked: ContractCheckResult) -> int:
+def _read_allowance(
+    checked: ContractCheckResult,
+    router_address: str | None = None,
+) -> int:
     # Re-read the canonical USDT allowance after each mined state transition.
+    router = checked.router_address if router_address is None else Web3.to_checksum_address(router_address)
     return int(
         checked.usdt_contract.functions.allowance(
             checked.wallet_address,
-            checked.router_address,
+            router,
         ).call()
     )
 

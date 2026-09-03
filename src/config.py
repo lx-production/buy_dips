@@ -72,6 +72,10 @@ class ExecutionConfig(BaseModel):
     quote_base_url: str = "https://prana.triethocduongpho.net"
     router_allowlist: list[str] = Field(default_factory=lambda: sorted(SWAP_ROUTER_02_ADDRESSES))
     live_enabled: bool = False
+    slippage_bps: int = Field(default=50, ge=1, le=500)
+    quote_timeout_seconds: int = 10
+    quote_min_deadline_seconds: int = 30
+    max_swap_gas: int = 750_000
     max_approval_gas: int = 100_000
     receipt_timeout_seconds: int = 120
 
@@ -93,10 +97,16 @@ class ExecutionConfig(BaseModel):
                 normalized.append(checksum)
         return normalized
 
-    @field_validator("max_approval_gas", "receipt_timeout_seconds")
+    @field_validator(
+        "quote_timeout_seconds",
+        "quote_min_deadline_seconds",
+        "max_swap_gas",
+        "max_approval_gas",
+        "receipt_timeout_seconds",
+    )
     @classmethod
     def validate_positive_execution_limits(cls, value: int) -> int:
-        # Fail closed on limits that would disable gas or receipt-timeout protection.
+        # Fail closed on limits that would disable timeout, deadline, or gas protection.
         if value <= 0:
             raise ValueError("Execution limits must be positive")
         return value

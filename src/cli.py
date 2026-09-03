@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import argparse
 
@@ -52,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    # Expose wallet maintenance separately while the execution runner remains observe-only.
+    # Expose one decision runner whose mode controls only downstream swap behavior.
     parser = argparse.ArgumentParser(description="PRANA Buy the Dips bot")
     parser.add_argument("--config", default=None, help="Path to config YAML. Defaults to CONFIG_PATH or config.yaml.")
     subparsers = parser.add_subparsers(dest="command")
@@ -61,7 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
     backfill.add_argument("--timeframe", choices=("1h", "4h"), default=None)
     subparsers.add_parser("zones", help="Print support zones detected from closed 4h candles.")
     trade_once = subparsers.add_parser("trade-once", help="Run one fetch/zone/decision cycle.")
-    trade_once.add_argument("--mode", choices=("observe",), default="observe")
+    trade_once.add_argument("--mode", choices=("observe", "dry_run", "live"), default="observe")
     backtest = subparsers.add_parser(
         "backtest",
         help="Offline support_close_v2 replay; writes BUY CSV only (no live table writes).",
@@ -127,9 +128,14 @@ def _cmd_zones(config: AppConfig, database_path: Path) -> int:
 
 
 def _cmd_trade_once(config: AppConfig, database_path: Path, mode: str) -> int:
-    # Run the existing observe-only hourly decision cycle without loading wallet credentials.
+    # Run the shared decision cycle and load wallet credentials only for BUY execution modes.
     try:
-        result = run_trade_once(config, database_path, mode=mode)
+        result = run_trade_once(
+            config,
+            database_path,
+            mode=mode,
+            live_confirmation=os.getenv("LIVE_TRADING_CONFIRMATION"),
+        )
     except Exception as exc:
         print(f"Trade cycle aborted: {exc}")
         return 2
@@ -137,6 +143,9 @@ def _cmd_trade_once(config: AppConfig, database_path: Path, mode: str) -> int:
     print(f"Decision: {result.decision['decision']}")
     print(f"Reason: {result.decision['reason_code']}")
     print(f"Zones rebuilt: {result.decision['zones_rebuilt']}")
+    if result.execution_id is not None:
+        print(f"Execution row id: {result.execution_id}")
+        print(f"Execution status: {result.execution_status}")
     return 0
 
 
