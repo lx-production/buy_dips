@@ -477,7 +477,7 @@ Theo dõi hằng ngày, đề xuất ít nhất 3–7 ngày:
 
 ```bash
 sudo systemctl status prana-buy-dips@observe.timer --no-pager
-sudo journalctl -u prana-buy-dips@observe.service --since '24 hours ago' --no-pager
+sudo journalctl -u prana-buy-dips@observe.service --since '24 hours ago' --no-pager -o cat | jq -C -R 'fromjson? // .'
 sudo -u botuser sqlite3 /home/botuser/buy_dips/data/canary.sqlite \
   "SELECT decision, reason_code, candle_open_time_utc7 FROM decisions_readable WHERE mode='observe' ORDER BY candle_open_time DESC LIMIT 48;"
 ```

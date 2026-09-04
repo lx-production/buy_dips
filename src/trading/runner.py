@@ -11,7 +11,7 @@ from typing import Any
 from ..binance_client import BinanceSpotClient
 from ..config import AppConfig
 from ..db import connect, init_db, load_candles_df, upsert_candles
-from ..utils import utc_ms, utc_seconds
+from ..utils import ms_to_utc7, utc_ms, utc_seconds
 from .aggregate_4h import aggregate_four_hour_bucket, aggregate_overdue_buckets, latest_overdue_bucket_open_time
 from .approval import ApprovalError, ensure_swap_allowance
 from .audit_logging import configure_audit_logger, log_event
@@ -199,6 +199,7 @@ def _run_trade_once(
         decision=decision["decision"],
         reason_code=decision["reason_code"],
         zone_set_as_of=decision["zone_set_as_of"],
+        zone_set_as_of_utc7=ms_to_utc7(int(decision["zone_set_as_of"])),
         fingerprint_version=decision["fingerprint_version"],
         selected_zone_fingerprint=decision.get("selected_zone_fingerprint"),
         higher_zone_fingerprint=decision.get("higher_zone_fingerprint"),

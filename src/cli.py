@@ -9,7 +9,7 @@ from pathlib import Path
 from .db import init_db, load_candles_df
 from .config import AppConfig, load_config
 from .candles import backfill_12_months
-from .utils import ms_to_iso, resolve_path
+from .utils import ms_to_iso, ms_to_utc7, resolve_path
 from .trading.runner import run_trade_once
 from .trading.constants import USDT_DECIMALS
 from .zones import detect_support_resistance_zones
@@ -143,6 +143,7 @@ def _cmd_trade_once(config: AppConfig, database_path: Path, mode: str) -> int:
     print(f"Decision: {result.decision['decision']}")
     print(f"Reason: {result.decision['reason_code']}")
     print(f"Zones rebuilt: {result.decision['zones_rebuilt']}")
+    print(f"Zone set as of: {ms_to_utc7(int(result.decision['zone_set_as_of']))}")
     if result.execution_id is not None:
         print(f"Execution row id: {result.execution_id}")
         print(f"Execution status: {result.execution_status}")
