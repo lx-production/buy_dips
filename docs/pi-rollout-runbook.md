@@ -610,31 +610,41 @@ Live guard còn bắt buộc đúng chain 137, wallet pinned, local quote host, 
 
 ## 18. Cập nhật repo về sau
 
-Trước khi update:
+Script update trong repo tự làm tuần tự các bước an toàn sau:
+
+- Chặn hai lần deploy chạy đồng thời và từ chối chạy nếu timer `live` đang active/enabled.
+- Ghi nhớ timer canary đang enabled, tắt timer đó và chờ oneshot đang chạy kết thúc; script không kill cycle giữa lúc ghi DB.
+- Tạo SQLite backup nhất quán có timestamp trong `data/backups/`, rồi chạy `PRAGMA quick_check`.
+- Dừng nếu tracked file có local change; pull chỉ bằng `git pull --ff-only`.
+- Tạm trao ownership repo cho `botuser`; chỉ chạy pip khi `requirements.txt` thực sự thay đổi; chạy full pytest.
+- Khóa lại source/config/venv theo mục **Khóa quyền repo**, nhưng giữ `data/` writable cho `botuser`.
+- Cập nhật bản script root-owned, chạy một observe cycle thủ công, rồi bật lại đúng timer đã enabled trước deploy.
+
+Cài command root-owned một lần sau khi repo đã có file script:
 
 ```bash
-sudo systemctl disable --now prana-buy-dips@observe.timer
-sudo systemctl disable --now prana-buy-dips@dry_run.timer
-sudo -u botuser mkdir -p /home/botuser/buy_dips/data/backups
-sudo -u botuser cp \
-  /home/botuser/buy_dips/data/canary.sqlite \
-  /home/botuser/buy_dips/data/backups/canary-before-update.sqlite
+sudo install -o root -g root -m 0750 \
+  /home/botuser/buy_dips/scripts/prana-buy-dips-update \
+  /usr/local/sbin/prana-buy-dips-update
 ```
 
-Cho `botuser` tạm quyền update repo, pull fast-forward và chạy test:
+Những lần update sau chỉ cần:
 
 ```bash
-sudo chown -R botuser:botuser /home/botuser/buy_dips
-sudo -u botuser -H bash -c '
-  set -e
-  cd /home/botuser/buy_dips
-  git pull --ff-only
-  .venv/bin/python -m pip install -r requirements.txt
-  .venv/bin/pytest -q
-'
+sudo /usr/local/sbin/prana-buy-dips-update
 ```
 
-Sau đó lặp lại toàn bộ bước **Khóa quyền repo**, chạy một observe cycle thủ công và chỉ bật lại đúng một timer.
+Hoặc gọi từ Mac:
+
+```bash
+ssh -t rp5 'sudo /usr/local/sbin/prana-buy-dips-update'
+```
+
+Script hiện dành riêng cho canary DB/config và timer `observe`/`dry_run` trong runbook này. Nó chủ động từ chối update khi timer `live` active/enabled; deployment live về sau cần script riêng gắn đúng prod config, DB và rollback policy.
+
+Nếu không có timer nào enabled trước update, script chạy verify observe nhưng vẫn để tất cả timer disabled. Nếu bất kỳ bước nào fail, script cố khóa lại quyền repo và **không bật lại timer**; nó không tự rollback Git commit, vì vậy phải đọc lỗi và kiểm tra code/ownership/service trước khi bật timer thủ công. Script không sửa config, credential, pause file hoặc systemd unit, vì vậy không cần `daemon-reload`.
+
+Các backup có timestamp không bị tự xóa để tránh script tự quyết định retention. Theo dõi dung lượng `data/backups/` và chỉ xóa các bản cũ sau khi đã xác nhận bản deploy mới ổn định.
 
 ## 19. Checklist cuối
 

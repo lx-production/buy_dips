@@ -69,6 +69,14 @@ def _checked() -> SimpleNamespace:
     )
 
 
+def _execution_config(tmp_path) -> AppConfig:
+    """Isolate execution tests from real pause and audit-log paths in the working tree."""
+    return AppConfig(
+        risk={"pause_file": str(tmp_path / "missing-pause")},
+        logging={"file_path": str(tmp_path / "trading.jsonl")},
+    )
+
+
 def test_live_execution_reserves_hash_before_broadcast_and_is_idempotent(monkeypatch, tmp_path) -> None:
     """Live mode must commit the local hash first and never broadcast again on rerun."""
     database_path = tmp_path / "bot.sqlite"
@@ -113,7 +121,7 @@ def test_live_execution_reserves_hash_before_broadcast_and_is_idempotent(monkeyp
             actual_prana_output_raw=12_500_000_000,
         ),
     )
-    config = AppConfig()
+    config = _execution_config(tmp_path)
 
     execution_id, status = _run_execution(
         config,
@@ -162,7 +170,7 @@ def test_dry_run_stops_after_quote_and_simulation(monkeypatch, tmp_path) -> None
     monkeypatch.setattr("src.trading.runner.broadcast_signed_swap", forbidden)
 
     _execution_id, status = _run_execution(
-        AppConfig(),
+        _execution_config(tmp_path),
         database_path,
         decision_id,
         mode="dry_run",

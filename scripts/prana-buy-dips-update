@@ -1,0 +1,309 @@
+#!/usr/bin/env bash
+
+# Safely update the Pi canary checkout, verify it, and restore its previous timer.
+set -Eeuo pipefail
+umask 0077
+
+readonly REPO_DIR="/home/botuser/buy_dips"
+readonly BOT_USER="botuser"
+readonly BOT_GROUP="botuser"
+readonly CONFIG_PATH="${REPO_DIR}/config.canary.yaml"
+readonly DB_PATH="${REPO_DIR}/data/canary.sqlite"
+readonly BACKUP_DIR="${REPO_DIR}/data/backups"
+readonly INSTALLED_SCRIPT="/usr/local/sbin/prana-buy-dips-update"
+readonly WAIT_TIMEOUT_SECONDS=900
+readonly -a CANARY_TIMERS=(
+  "prana-buy-dips@observe.timer"
+  "prana-buy-dips@dry_run.timer"
+)
+readonly -a CYCLE_SERVICES=(
+  "prana-buy-dips@observe.service"
+  "prana-buy-dips@dry_run.service"
+  "prana-buy-dips@live.service"
+)
+readonly LIVE_TIMER="prana-buy-dips@live.timer"
+
+enabled_timer=""
+enabled_timer_state=""
+permissions_unlocked=0
+
+# Print one timestamped deployment message.
+log() {
+  printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S %z')" "$*"
+}
+
+# Stop immediately unless the script is running as root through sudo.
+require_root() {
+  if (( EUID != 0 )); then
+    printf 'Run this updater with sudo: sudo %s\n' "${INSTALLED_SCRIPT}" >&2
+    exit 1
+  fi
+}
+
+# Confirm the fixed canary paths and required commands exist before changing system state.
+validate_environment() {
+  local command_name
+
+  for command_name in flock git install journalctl runuser sha256sum sqlite3 systemctl; do
+    if ! command -v "${command_name}" >/dev/null 2>&1; then
+      printf 'Required command is missing: %s\n' "${command_name}" >&2
+      exit 1
+    fi
+  done
+
+  if [[ ! -d "${REPO_DIR}/.git" ]]; then
+    printf 'Git checkout not found: %s\n' "${REPO_DIR}" >&2
+    exit 1
+  fi
+  if [[ ! -x "${REPO_DIR}/.venv/bin/python" ]]; then
+    printf 'Virtualenv Python is missing or not executable: %s\n' "${REPO_DIR}/.venv/bin/python" >&2
+    exit 1
+  fi
+  if [[ ! -f "${CONFIG_PATH}" ]]; then
+    printf 'Canary config not found: %s\n' "${CONFIG_PATH}" >&2
+    exit 1
+  fi
+  if [[ ! -f "${DB_PATH}" ]]; then
+    printf 'Canary database not found: %s\n' "${DB_PATH}" >&2
+    exit 1
+  fi
+}
+
+# Refuse overlapping updater runs so ownership and timer restoration cannot race.
+acquire_deploy_lock() {
+  exec 9>"/run/lock/prana-buy-dips-update.lock"
+  if ! flock -n 9; then
+    printf 'Another prana-buy-dips update is already running.\n' >&2
+    exit 1
+  fi
+}
+
+# Remember the single enabled canary timer so only that timer is restored.
+detect_timer_state() {
+  local state
+  local timer
+  local enabled_count=0
+
+  state="$(systemctl is-enabled "${LIVE_TIMER}" 2>/dev/null || true)"
+  if [[ "${state}" == "enabled" || "${state}" == "enabled-runtime" ]] || systemctl is-active --quiet "${LIVE_TIMER}"; then
+    printf 'Live timer is enabled or active; this canary updater will not modify a live deployment.\n' >&2
+    exit 1
+  fi
+
+  for timer in "${CANARY_TIMERS[@]}"; do
+    state="$(systemctl is-enabled "${timer}" 2>/dev/null || true)"
+    if [[ "${state}" == "enabled" || "${state}" == "enabled-runtime" ]]; then
+      enabled_timer="${timer}"
+      enabled_timer_state="${state}"
+      ((enabled_count += 1))
+    fi
+  done
+
+  if (( enabled_count > 1 )); then
+    printf 'More than one canary timer is enabled; fix the unsafe timer state manually.\n' >&2
+    exit 1
+  fi
+}
+
+# Disable the remembered timer and stop any manually started canary timer.
+stop_canary_timers() {
+  local timer
+
+  if [[ -n "${enabled_timer}" ]]; then
+    log "Disabling ${enabled_timer} during deployment"
+    if [[ "${enabled_timer_state}" == "enabled-runtime" ]]; then
+      systemctl disable --runtime --now "${enabled_timer}"
+    else
+      systemctl disable --now "${enabled_timer}"
+    fi
+  fi
+
+  for timer in "${CANARY_TIMERS[@]}"; do
+    if systemctl is-active --quiet "${timer}"; then
+      systemctl stop "${timer}"
+    fi
+  done
+}
+
+# Wait for an in-flight oneshot to finish instead of terminating it during a DB write.
+wait_for_cycle_services() {
+  local service
+  local running
+  local started_at="${SECONDS}"
+
+  while true; do
+    running=0
+    for service in "${CYCLE_SERVICES[@]}"; do
+      if systemctl is-active --quiet "${service}"; then
+        running=1
+        break
+      fi
+    done
+
+    if (( running == 0 )); then
+      return
+    fi
+    if (( SECONDS - started_at >= WAIT_TIMEOUT_SECONDS )); then
+      printf 'A trading cycle is still active after %s seconds; timer remains disabled.\n' "${WAIT_TIMEOUT_SECONDS}" >&2
+      exit 1
+    fi
+
+    log "Waiting for ${service} to finish safely"
+    sleep 2
+  done
+}
+
+# Create a consistent, timestamped SQLite backup and verify that it can be read.
+backup_database() {
+  local backup_path
+  local quick_check
+  local timestamp
+
+  timestamp="$(date -u '+%Y%m%dT%H%M%SZ')"
+  backup_path="${BACKUP_DIR}/canary-before-update-${timestamp}.sqlite"
+  runuser -u "${BOT_USER}" -- mkdir -p "${BACKUP_DIR}"
+  runuser -u "${BOT_USER}" -- sqlite3 "${DB_PATH}" ".backup '${backup_path}'"
+  quick_check="$(runuser -u "${BOT_USER}" -- sqlite3 "${backup_path}" 'PRAGMA quick_check;')"
+  if [[ "${quick_check}" != "ok" ]]; then
+    printf 'SQLite backup verification failed: %s\n' "${backup_path}" >&2
+    exit 1
+  fi
+  log "Verified database backup ${backup_path}"
+}
+
+# Reject tracked local edits because an automated deploy must not merge or overwrite them.
+require_clean_tracked_files() {
+  if ! git -c "safe.directory=${REPO_DIR}" -C "${REPO_DIR}" diff --quiet --ignore-submodules -- || ! git -c "safe.directory=${REPO_DIR}" -C "${REPO_DIR}" diff --cached --quiet --ignore-submodules --; then
+    printf 'Tracked local changes exist in %s; deployment stopped before pull.\n' "${REPO_DIR}" >&2
+    exit 1
+  fi
+}
+
+# Temporarily let the unprivileged deploy user update Git and the virtualenv.
+unlock_repo_permissions() {
+  chown -R "${BOT_USER}:${BOT_GROUP}" "${REPO_DIR}"
+  permissions_unlocked=1
+}
+
+# Restore runtime ownership: code is root-owned/read-only, while data remains writable.
+lock_repo_permissions() {
+  local failed=0
+
+  chown -R "root:${BOT_GROUP}" "${REPO_DIR}" || failed=1
+  find "${REPO_DIR}" -type d -exec chmod 0750 {} + || failed=1
+  find "${REPO_DIR}" -type f -exec chmod 0640 {} + || failed=1
+  find "${REPO_DIR}/.venv/bin" -type f -exec chmod 0750 {} + || failed=1
+
+  chown -R "${BOT_USER}:${BOT_GROUP}" "${REPO_DIR}/data" || failed=1
+  chmod 0700 "${REPO_DIR}/data" || failed=1
+  chmod 0700 "${REPO_DIR}/data/wallet" || failed=1
+  chmod 0700 "${REPO_DIR}/data/logs" || failed=1
+  find "${REPO_DIR}/data/wallet" -maxdepth 1 -type f -exec chmod 0600 {} + || failed=1
+  chmod 0640 "${CONFIG_PATH}" || failed=1
+
+  return "${failed}"
+}
+
+# Pull only a fast-forward update, install changed dependencies, and run the full suite.
+update_and_test() {
+  local new_commit
+  local old_commit
+  local requirements_after
+  local requirements_before
+
+  old_commit="$(git -c "safe.directory=${REPO_DIR}" -C "${REPO_DIR}" rev-parse --short HEAD)"
+  requirements_before="$(sha256sum "${REPO_DIR}/requirements.txt" | cut -d ' ' -f 1)"
+
+  runuser -u "${BOT_USER}" -- env HOME="/home/${BOT_USER}" git -C "${REPO_DIR}" pull --ff-only
+
+  requirements_after="$(sha256sum "${REPO_DIR}/requirements.txt" | cut -d ' ' -f 1)"
+  if [[ "${requirements_before}" != "${requirements_after}" ]]; then
+    log "requirements.txt changed; synchronizing the virtualenv"
+    runuser -u "${BOT_USER}" -- "${REPO_DIR}/.venv/bin/python" -m pip install -r "${REPO_DIR}/requirements.txt"
+  else
+    log "requirements.txt unchanged; keeping the existing virtualenv"
+  fi
+
+  runuser -u "${BOT_USER}" -- env HOME="/home/${BOT_USER}" bash -c 'cd "$1" && exec .venv/bin/python -m pytest -q' _ "${REPO_DIR}"
+  new_commit="$(git -c "safe.directory=${REPO_DIR}" -C "${REPO_DIR}" rev-parse --short HEAD)"
+  log "Verified code update ${old_commit} -> ${new_commit}"
+}
+
+# Atomically refresh the root-owned command for the next deployment.
+install_latest_updater() {
+  local source_path="${REPO_DIR}/scripts/prana-buy-dips-update"
+  local temporary_path="${INSTALLED_SCRIPT}.new"
+
+  install -o root -g root -m 0750 "${source_path}" "${temporary_path}"
+  mv -f "${temporary_path}" "${INSTALLED_SCRIPT}"
+}
+
+# Run one safe observe cycle after tests to verify the deployed systemd path.
+verify_observe_cycle() {
+  log "Running one observe cycle with the updated code"
+  systemctl start "prana-buy-dips@observe.service"
+  journalctl -u "prana-buy-dips@observe.service" -n 15 --no-pager
+}
+
+# Re-enable exactly the timer that was enabled before deployment.
+restore_timer() {
+  if [[ -z "${enabled_timer}" ]]; then
+    log "No canary timer was enabled before deployment; leaving timers disabled"
+    return
+  fi
+
+  if [[ "${enabled_timer_state}" == "enabled-runtime" ]]; then
+    systemctl enable --runtime --now "${enabled_timer}"
+  else
+    systemctl enable --now "${enabled_timer}"
+  fi
+  log "Restored ${enabled_timer}"
+}
+
+# Re-lock the checkout after failures and deliberately leave trading timers disabled.
+cleanup_on_exit() {
+  local status="${1}"
+
+  trap - EXIT INT TERM
+  if (( status != 0 )); then
+    set +e
+    if (( permissions_unlocked == 1 )); then
+      log "Update failed; restoring locked repository permissions"
+      if lock_repo_permissions; then
+        permissions_unlocked=0
+      else
+        printf 'CRITICAL: repository permission recovery failed; inspect %s manually.\n' "${REPO_DIR}" >&2
+      fi
+    fi
+    printf 'Update failed. Trading timers were not restored; review the error before enabling one.\n' >&2
+  fi
+
+  exit "${status}"
+}
+
+# Execute the guarded deployment workflow in a fail-closed order.
+main() {
+  require_root
+  validate_environment
+  acquire_deploy_lock
+  require_clean_tracked_files
+  detect_timer_state
+  trap 'cleanup_on_exit "$?"' EXIT INT TERM
+
+  stop_canary_timers
+  wait_for_cycle_services
+  backup_database
+  unlock_repo_permissions
+  update_and_test
+
+  log "Restoring locked repository permissions"
+  lock_repo_permissions
+  permissions_unlocked=0
+
+  install_latest_updater
+  verify_observe_cycle
+  restore_timer
+  log "Deployment completed successfully"
+}
+
+main "$@"
