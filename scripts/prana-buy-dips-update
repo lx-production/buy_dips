@@ -22,6 +22,9 @@ readonly -a CYCLE_SERVICES=(
   "prana-buy-dips@live.service"
 )
 readonly LIVE_TIMER="prana-buy-dips@live.timer"
+# Slowest suite test: rebuilds the stateless detector on every prefix of ~170-bar golden frames.
+# Dev/CI still run it; Pi deploy skips it because that parity is already proven before merge.
+readonly SKIP_PYTEST_NODEID="tests/test_incremental_zone_detector.py::test_incremental_advance_matches_stateless_oracle_on_golden_prefixes"
 
 enabled_timer=""
 enabled_timer_state=""
@@ -204,7 +207,7 @@ lock_repo_permissions() {
   return "${failed}"
 }
 
-# Pull only a fast-forward update, install changed dependencies, and run the full suite.
+# Pull only a fast-forward update, install changed dependencies, and run pytest except the skipped node.
 update_and_test() {
   local new_commit
   local old_commit
@@ -224,7 +227,7 @@ update_and_test() {
     log "requirements.txt unchanged; keeping the existing virtualenv"
   fi
 
-  runuser -u "${BOT_USER}" -- env HOME="/home/${BOT_USER}" bash -c 'cd "$1" && exec .venv/bin/python -m pytest -q' _ "${REPO_DIR}"
+  runuser -u "${BOT_USER}" -- env HOME="/home/${BOT_USER}" bash -c 'cd "$1" && exec .venv/bin/python -m pytest -q --deselect "$2"' _ "${REPO_DIR}" "${SKIP_PYTEST_NODEID}"
   new_commit="$(git -c "safe.directory=${REPO_DIR}" -C "${REPO_DIR}" rev-parse --short HEAD)"
   log "Verified code update ${old_commit} -> ${new_commit}"
 }
