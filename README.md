@@ -300,7 +300,7 @@ Fetch failures, zone-build failures, and an overdue incomplete 4h bucket abort t
 
 ## Audit, Pause, And Recovery
 
-Every trading cycle writes structured JSON events to stdout and the size-rotating `logging.file_path` (default `data/logs/trading.jsonl`). Events include a per-cycle correlation ID, decision/execution IDs, zone watermark (`zone_set_as_of` Unix ms plus `zone_set_as_of_utc7` as `YYYY-MM-DD HH:MM:SS +07:00`), fingerprint version, available selected/adjacent zone fingerprints, and each no-trade, skip, quote, simulation, signing, broadcast, and receipt transition.
+Every trading cycle writes structured JSON events to stdout and the size-rotating `logging.file_path` (default `data/logs/trading.jsonl`). Event `timestamp` is UTC+7 (`YYYY-MM-DD HH:MM:SS +07:00`). Events include a per-cycle correlation ID, decision/execution IDs, zone watermark (`zone_set_as_of` Unix ms plus `zone_set_as_of_utc7` in the same UTC+7 format), fingerprint version, selected/adjacent zone low/high bounds, and each no-trade, skip, quote, simulation, signing, broadcast, and receipt transition. Fingerprints stay in SQLite for setup identity; they are not written to the decision audit event.
 
 The logger recursively redacts passwords, decrypted/private keys, RPC URLs, raw/signed transaction bytes, calldata, API keys, and quote verification tokens. SQLite stores only safe summaries and stable reason codes; it never stores raw calldata, signed transaction payloads, or verification tokens.
 

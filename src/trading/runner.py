@@ -201,9 +201,13 @@ def _run_trade_once(
         zone_set_as_of=decision["zone_set_as_of"],
         zone_set_as_of_utc7=ms_to_utc7(int(decision["zone_set_as_of"])),
         fingerprint_version=decision["fingerprint_version"],
-        selected_zone_fingerprint=decision.get("selected_zone_fingerprint"),
-        higher_zone_fingerprint=decision.get("higher_zone_fingerprint"),
-        next_lower_zone_fingerprint=decision.get("next_lower_zone_fingerprint"),
+        # Fingerprints stay in SQLite; logs only show each zone's price bounds.
+        selected_zone_low=decision.get("selected_zone_low"),
+        selected_zone_high=decision.get("selected_zone_high"),
+        higher_zone_low=decision.get("higher_zone_low"),
+        higher_zone_high=decision.get("higher_zone_high"),
+        next_lower_zone_low=decision.get("next_lower_zone_low"),
+        next_lower_zone_high=decision.get("next_lower_zone_high"),
         zones_rebuilt=decision["zones_rebuilt"],
     )
     if decision["decision"] != "BUY" or mode == "observe":

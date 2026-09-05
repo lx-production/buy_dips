@@ -262,7 +262,7 @@ Pause, cap USDT, gas, quote, allowance **không** đổi BUY thành HOLD. Đó l
 
 **In-flight lock** — Một execution chưa terminal (`started` → `pending`) chặn execution mới. Trạng thái skip/fail nằm ở `trade_executions`, không đổi BUY thành HOLD.
 
-**Structured audit log** — JSON Lines ra stdout và rotating file, có correlation ID/fingerprint/trạng thái; password, key, RPC URL, calldata, signed bytes và verification token bị redacted.
+**Structured audit log** — JSON Lines ra stdout và rotating file. `timestamp` là UTC+7 (`YYYY-MM-DD HH:MM:SS +07:00`). Event `decision_persisted` log low/high của selected, higher, và next-lower zone (không log fingerprint). Có correlation ID và trạng thái; password, key, RPC URL, calldata, signed bytes và verification token bị redacted.
 
 ---
 

@@ -6,11 +6,12 @@ import json
 import logging
 
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 
 from typing import Any
 
+from ..utils import UTC_PLUS_7
 from ..config import LoggingConfig
 
 
@@ -40,7 +41,8 @@ class _JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         """Serialize only standard audit fields plus an already-sanitized payload."""
         payload = {
-            "timestamp": datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
+            # Operator-facing clock: same UTC+7 string as `*_utc7` / `ms_to_utc7`.
+            "timestamp": datetime.fromtimestamp(record.created, UTC_PLUS_7).strftime("%Y-%m-%d %H:%M:%S +07:00"),
             "level": record.levelname,
             "event": record.getMessage(),
             **getattr(record, "audit_fields", {}),

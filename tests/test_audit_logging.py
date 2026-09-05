@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 
+from datetime import datetime
+
+from src.utils import UTC_PLUS_7
 from src.config import LoggingConfig
 from src.trading.audit_logging import REDACTED, configure_audit_logger, log_event
 
@@ -44,6 +47,8 @@ def test_structured_logger_redacts_secret_fields_from_stdout_and_file(capsys, tm
     assert payload["selected_zone_fingerprint"] == "zf1:selected"
     assert payload["token_in_symbol"] == "USDT"
     assert payload["secrets"]["password"] == REDACTED
+    parsed = datetime.strptime(payload["timestamp"], "%Y-%m-%d %H:%M:%S +07:00").replace(tzinfo=UTC_PLUS_7)
+    assert parsed.tzinfo == UTC_PLUS_7
 
 
 def test_structured_logger_does_not_duplicate_owned_handlers(tmp_path) -> None:
