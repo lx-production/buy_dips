@@ -224,7 +224,7 @@ Pause, cap USDT, gas, quote, allowance **không** đổi BUY thành HOLD. Đó l
 
 **`trade-once --mode observe|dry_run|live`** — Một cycle hourly dùng chung signal; mode chỉ thay đổi bước sau BUY.
 
-**`backfill`** — Kéo kline lịch sử (Binance tối đa 1000/lần). Upsert an toàn.
+**`backfill`** — Kéo kline lịch sử (Binance tối đa 1000/lần). `--days` chọn cửa sổ (mặc định 365). Upsert an toàn.
 
 **`zones` (CLI)** — In ladder support từ 4h đóng trong DB.
 

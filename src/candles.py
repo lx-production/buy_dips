@@ -74,15 +74,19 @@ def backfill_range(
     }
 
 
-def backfill_12_months(
+def backfill_days(
     database_path: str | Path,
     exchange: str = "binance",
     symbol: str = "BTCUSDT",
     timeframe: str = "4h",
+    days: int = 365,
     client: BinanceSpotClient | None = None,
 ) -> dict[str, Any]:
+    """Fetch and upsert closed klines for the last `days` days up to now."""
+    if days <= 0:
+        raise ValueError("days must be a positive integer")
     end_time = utc_ms()
-    start_time = int((datetime.now(tz=timezone.utc) - timedelta(days=365)).timestamp() * 1000)
+    start_time = int((datetime.now(tz=timezone.utc) - timedelta(days=days)).timestamp() * 1000)
     # Inclusive "now": treat current ms as exclusive upper bound by adding 1.
     return backfill_range(
         database_path=database_path,
@@ -91,6 +95,24 @@ def backfill_12_months(
         timeframe=timeframe,
         start_time=start_time,
         end_time=end_time + 1,
+        client=client,
+    )
+
+
+def backfill_12_months(
+    database_path: str | Path,
+    exchange: str = "binance",
+    symbol: str = "BTCUSDT",
+    timeframe: str = "4h",
+    client: BinanceSpotClient | None = None,
+) -> dict[str, Any]:
+    """Fetch and upsert roughly the last 12 months of closed klines."""
+    return backfill_days(
+        database_path=database_path,
+        exchange=exchange,
+        symbol=symbol,
+        timeframe=timeframe,
+        days=365,
         client=client,
     )
 

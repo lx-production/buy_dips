@@ -6,9 +6,9 @@ import argparse
 
 from pathlib import Path
 
+from .candles import backfill_days
 from .db import init_db, load_candles_df
 from .config import AppConfig, load_config
-from .candles import backfill_12_months
 from .utils import ms_to_iso, ms_to_utc7, resolve_path
 from .trading.runner import run_trade_once
 from .trading.constants import USDT_DECIMALS
@@ -31,7 +31,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Initialized database: {database_path}")
         return 0
     if args.command == "backfill":
-        return _cmd_backfill(config, database_path, args.timeframe or config.timeframe)
+        return _cmd_backfill(config, database_path, args.timeframe or config.timeframe, args.days)
     if args.command == "zones":
         return _cmd_zones(config, database_path)
     if args.command == "trade-once":
@@ -58,8 +58,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", default=None, help="Path to config YAML. Defaults to CONFIG_PATH or config.yaml.")
     subparsers = parser.add_subparsers(dest="command")
     subparsers.add_parser("init-db", help="Create SQLite tables.")
-    backfill = subparsers.add_parser("backfill", help="Backfill approximately 12 months of BTCUSDT candles.")
+    backfill = subparsers.add_parser("backfill", help="Backfill BTCUSDT candles for a lookback window.")
     backfill.add_argument("--timeframe", choices=("1h", "4h"), default=None)
+    backfill.add_argument("--days", type=int, default=365, help="Lookback window in days. Defaults to 365.")
     subparsers.add_parser("zones", help="Print support zones detected from closed 4h candles.")
     trade_once = subparsers.add_parser("trade-once", help="Run one fetch/zone/decision cycle.")
     trade_once.add_argument("--mode", choices=("observe", "dry_run", "live"), default="observe")
@@ -78,14 +79,15 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _cmd_backfill(config: AppConfig, database_path: Path, timeframe: str) -> int:
+def _cmd_backfill(config: AppConfig, database_path: Path, timeframe: str, days: int) -> int:
     # Backfill the requested supported candle timeframe and summarize the stored range.
     try:
-        result = backfill_12_months(
+        result = backfill_days(
             database_path=database_path,
             exchange=config.exchange,
             symbol=config.symbol,
             timeframe=timeframe,
+            days=days,
         )
     except Exception as exc:
         print(f"Backfill failed: {exc}")

@@ -104,11 +104,11 @@ FROM bot_state_readable;
 
 ## Backfill Candles
 
-Backfill roughly the last 12 months. Binance caps each request at 1000 klines; the client pages through the range. Rows are upserted, so re-runs are safe.
+Backfill a lookback window of closed candles (`--days`, default 365). Binance caps each request at 1000 klines; the client pages through the range. Rows are upserted, so re-runs are safe.
 
 ```bash
-# ~12 months of 1h candles (needed for observe + backtest)
-python3 -m src.cli backfill --timeframe 1h
+# ~1 month of 1h candles (needed for observe + backtest)
+python3 -m src.cli backfill --timeframe 1h --days 30
 
 # ~12 months of 4h candles (optional warm-up; live cycles also derive 4h from 1h)
 python3 -m src.cli backfill --timeframe 4h
