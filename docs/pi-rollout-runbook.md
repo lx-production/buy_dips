@@ -616,7 +616,7 @@ Script update trong repo tự làm tuần tự các bước an toàn sau:
 - Ghi nhớ timer canary đang enabled, tắt timer đó và chờ oneshot đang chạy kết thúc; script không kill cycle giữa lúc ghi DB.
 - Tạo SQLite backup nhất quán có timestamp trong `data/backups/`, rồi chạy `PRAGMA quick_check`.
 - Dừng nếu tracked file có local change; pull chỉ bằng `git pull --ff-only`.
-- Tạm trao ownership repo cho `botuser`; chỉ chạy pip khi `requirements.txt` thực sự thay đổi; chạy pytest, tắt cache (repo khóa không ghi `.pytest_cache`), và skip hai test golden-prefix parity: `test_incremental_advance_matches_stateless_oracle_on_golden_prefixes` và `test_extract_then_materialize_matches_stateless_oracle_on_golden_prefixes` (đã cover trên dev/CI).
+- Tạm trao ownership repo cho `botuser`; chỉ chạy pip khi `requirements.txt` thực sự thay đổi. Updater không chạy pytest (suite ở dev); Pi verify bằng một observe cycle sau khi khóa quyền.
 - Khóa lại source/config/venv theo mục **Khóa quyền repo**, nhưng giữ `data/` writable cho `botuser`.
 - Cập nhật bản script root-owned, chạy một observe cycle thủ công, rồi bật lại đúng timer đã enabled trước deploy.
 
@@ -653,7 +653,7 @@ Các backup có timestamp không bị tự xóa để tránh script tự quyết
 - [ ] Keystore là `0600`, wallet/log/data directories là `0700`.
 - [ ] Credential source là root-owned `0600`; không có secret trong YAML, unit hoặc `.env`.
 - [ ] `config.canary.yaml` dùng `environment: dev`, public dev quote URL và `live_enabled: false`.
-- [ ] Pytest pass trên Pi (updater skip hai test golden-prefix parity).
+- [ ] Pytest pass trên dev trước khi deploy; updater Pi không chạy suite.
 - [ ] 1h và 4h history đã backfill.
 - [ ] Chỉ một trong `observe.timer` / `dry_run.timer` được enable.
 - [ ] Observe ổn định nhiều ngày trước dry-run.
