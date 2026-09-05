@@ -379,8 +379,10 @@ Keep a candidate only when it does not share a ladder slot with either boundary 
 
 This pass allows zones above current price. The support list is a historical ladder; overhead shelves stay in it.
 
-If the regular `$650/$1000` profile cannot insert a candidate, the one adjacent
-gap that crosses current price may retry with the configured near-price profile:
+If the regular `$650/$1000` profile cannot insert a candidate, each adjacent
+gap whose lower boundary is `support` or `active` may retry with the configured
+near-price profile. This includes gaps below current price, so a rally above the
+upper boundary does not remove a strong shelf before a later retest:
 
 ```text
 min_fillable_gap = zone_width + 2 * near_price_gap_fill_edge_clearance
@@ -389,7 +391,9 @@ min_fillable_gap = zone_width + 2 * near_price_gap_fill_edge_clearance
 
 That fallback requires at least `near_price_gap_fill_min_touches` (default `4`),
 uses `$1000` midpoint spacing by default, and inserts at most one recovered stair
-in that current-price gap. Other gaps keep the regular `$650/$1000` rules.
+per eligible gap. Gaps whose lower boundary is `resistance` keep the regular
+`$650/$1000` rules. The existing `near_price_gap_fill_*` config names are retained.
+Pivot/reclaim confirmation and the two-snapshot track activation requirement are unchanged.
 
 Then spacing runs **again**. A near-price fallback carries its tighter profile
 through that final pass, after which the internal marker is removed from output.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 import pandas as pd
 
 import src.zones.detector as detector_module
@@ -542,17 +543,23 @@ def test_final_ladder_gap_fill_recovers_zone_between_local_flip_and_persistent_f
     ]
 
 
-def test_near_price_gap_fill_recovers_65300_zone_with_local_spacing_profile() -> None:
+@pytest.mark.parametrize("current_price, lower_state, upper_state", [
+    (64319.84, "active", "resistance"),
+    (65500.0, "support", "resistance"),
+    (66300.0, "support", "active"),
+    (68000.0, "support", "support"),
+])
+def test_near_price_gap_fill_recovers_65300_zone_with_local_spacing_profile(current_price: float, lower_state: str, upper_state: str) -> None:
     # Aug 7-style pair: the $1712.66 edge gap is below the regular $1800
     # minimum but can hold a strong reclaimed-high stair with $450 clearance.
     lower = _support_zone(low=64085.36, high=64370.0, source_closes=[64085.36, 64370.0], score=9.0)
     lower["origin"] = "local_retested_flip_support"
     lower["bounds_style"] = "local_reaction"
-    lower["price_state"] = "active"
+    lower["price_state"] = lower_state
     upper = _support_zone(low=66082.66, high=66582.66, source_closes=[66082.66], score=2.0)
     upper["origin"] = "persistent_wick_floor"
     upper["bounds_style"] = "support_floor"
-    upper["price_state"] = "resistance"
+    upper["price_state"] = upper_state
     pivots = [
         _high_pivot(index=1, wick_price=65200.0, body_price=65104.02),
         _high_pivot(index=2, wick_price=65250.0, body_price=65170.0),
@@ -567,7 +574,7 @@ def test_near_price_gap_fill_recovers_65300_zone_with_local_spacing_profile() ->
         break_atr_mult=0.0,
         zone_width=500.0,
         min_touches=2,
-        current_price=64319.84,
+        current_price=current_price,
         buffer_pct=0.0015,
         near_price_gap_fill_edge_clearance=450.0,
         near_price_gap_fill_midpoint_spacing=850.0,
@@ -622,29 +629,39 @@ def test_default_near_price_profile_matches_regular_spacing_and_skips_1712_gap()
     ]
 
 
-def test_near_price_gap_fill_requires_configured_touch_floor() -> None:
-    # Three reclaimed highs meet regular min_touches=2 but not the safer local fallback floor of four.
+@pytest.mark.parametrize("current_price, lower_state, upper_state, touch_count", [
+    (64319.84, "active", "resistance", 3),
+    (68000.0, "support", "support", 3),
+    (63000.0, "resistance", "resistance", 4),
+])
+def test_near_price_gap_fill_preserves_touch_floor_and_excludes_overhead_gaps(current_price: float, lower_state: str, upper_state: str, touch_count: int) -> None:
+    # Reject weak shelves even below price, and do not relax spacing for wholly overhead gaps.
     lower = _support_zone(low=64085.36, high=64370.0, source_closes=[64085.36, 64370.0], score=9.0)
     lower["origin"] = "local_retested_flip_support"
-    lower["price_state"] = "active"
+    lower["price_state"] = lower_state
     upper = _support_zone(low=66082.66, high=66582.66, source_closes=[66082.66], score=2.0)
     upper["origin"] = "persistent_wick_floor"
-    upper["price_state"] = "resistance"
+    upper["price_state"] = upper_state
     pivots = [
         _high_pivot(index=1, wick_price=65200.0, body_price=65104.02),
         _high_pivot(index=2, wick_price=65250.0, body_price=65170.0),
         _high_pivot(index=3, wick_price=65450.0, body_price=65354.02),
     ]
+    if touch_count == 4:
+        pivots.append(_high_pivot(index=4, wick_price=65400.0, body_price=65300.0))
 
     filled = _fill_persistent_wick_floor_gaps(
         zones=[lower, upper],
         raw_external_pivots=pivots,
-        closes=pd.Series([63000.0] * 4 + [80000.0]).to_numpy(dtype=float),
+        closes=pd.Series([63000.0] * 5 + [80000.0]).to_numpy(dtype=float),
         break_atr_mult=0.0,
         zone_width=500.0,
         min_touches=2,
-        current_price=64319.84,
+        current_price=current_price,
         buffer_pct=0.0015,
+        near_price_gap_fill_edge_clearance=450.0,
+        near_price_gap_fill_midpoint_spacing=850.0,
+        near_price_gap_fill_min_touches=4,
     )
 
     assert [(zone["low"], zone["high"], zone["origin"]) for zone in filled] == [

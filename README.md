@@ -153,14 +153,6 @@ BUY CSV columns:
 
 Zero BUYs still writes a CSV with only the header row. Same inputs/config must produce identical BUY timestamps and CSV rows.
 
-Benchmark cold vs warm zone-snapshot rebuilds on a **temporary copy** of the source SQLite file. The script never reads `.env`, wallet files, or logs, and it never writes `backtest_zone_cache` on the source database. Default range matches the incremental-detector baseline (`2026-06-01T00:00:00Z` → `2026-08-13T06:00:00Z`):
-
-```bash
-python3 scripts/benchmark_backtest.py \
-  --database data/prana_buy_the_dips.sqlite \
-  --json data/backtest_zone_benchmark.json
-```
-
 Stdout prints elapsed time, snapshot count, detector builds, cache hits, incremental ingest/scan counts, as text plus JSON. `--config` is optional YAML for zone/strategy settings only.
 
 Golden tests in `tests/test_incremental_zone_detector.py` lock current stateless detector snapshots at every 4h prefix (in memory, not committed). `IncrementalZoneDetectorState` must deep-equal that oracle after each `advance`. Extract-then-materialize stays the live-path reference.

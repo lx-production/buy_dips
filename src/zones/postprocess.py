@@ -80,7 +80,7 @@ def _fill_persistent_wick_floor_gaps(
     resolver, so the boundaries can be any surviving origins — not only two
     persistent floors. A gap is fillable when its edge distance can hold one
     `zone_width` band plus `$650` clearance on both sides. If that regular pass
-    finds nothing, the single gap crossing current price may use its configured
+    finds nothing, gaps whose lower boundary is support/active may use configured
     tighter clearance and stronger touch floor. Candidates are clustered inside
     that gap only; the full structural factory is skipped because its `$2000`
     macro-merge can swallow a middle cluster into a band that then shares a slot
@@ -119,7 +119,7 @@ def _fill_persistent_wick_floor_gaps(
         if (
             selected is None
             and gap >= near_price_min_fillable_gap
-            and _is_near_price_ladder_gap(lower_zone, upper_zone, current_price, buffer_pct)
+            and _allows_configured_gap_fill(lower_zone, current_price, buffer_pct)
         ):
             selected = _best_reclaimed_high_gap_fill(
                 priced_sets=priced_sets,
@@ -195,16 +195,15 @@ def _best_reclaimed_high_gap_fill(
     return dict(min(eligible, key=lambda zone: _stair_step_gap_rank(zone, lower_zone, upper_zone)))
 
 
-# True only for the adjacent ladder pair that transitions from current/below price to resistance.
-def _is_near_price_ladder_gap(
+# Keep strong shelves eligible below price as well as in the gap crossing price.
+def _allows_configured_gap_fill(
     lower_zone: dict[str, Any],
-    upper_zone: dict[str, Any],
     current_price: float,
     buffer_pct: float,
 ) -> bool:
     lower_state = _coerce_price_state(lower_zone, current_price, buffer_pct)
-    upper_state = _coerce_price_state(upper_zone, current_price, buffer_pct)
-    return lower_state in ("support", "active") and upper_state == "resistance"
+    # A rally above the upper boundary must not remove evidence needed for a later retest.
+    return lower_state in ("support", "active")
 
 
 # Choose the best reclaimed-high zone across all regular support gaps.
