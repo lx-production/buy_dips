@@ -201,6 +201,8 @@ def _run_trade_once(
         zone_set_as_of=decision["zone_set_as_of"],
         zone_set_as_of_utc7=ms_to_utc7(int(decision["zone_set_as_of"])),
         fingerprint_version=decision["fingerprint_version"],
+        # Close of the latest closed 1h candle — the price compared against the zones.
+        reference_close=decision.get("reference_close"),
         # Fingerprints stay in SQLite; logs only show each zone's price bounds.
         selected_zone_low=decision.get("selected_zone_low"),
         selected_zone_high=decision.get("selected_zone_high"),

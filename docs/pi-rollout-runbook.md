@@ -473,7 +473,7 @@ sudo systemctl enable --now prana-buy-dips@observe.timer
 systemctl list-timers 'prana-buy-dips@*'
 ```
 
-Theo dõi hằng ngày, đề xuất ít nhất 3–7 ngày. Audit JSON dùng `timestamp` UTC+7; event `decision_persisted` in low/high của selected / higher / next-lower zone, không in fingerprint.
+Theo dõi hằng ngày, đề xuất ít nhất 3–7 ngày. Audit JSON dùng `timestamp` UTC+7; event `decision_persisted` in `reference_close` (close nến 1h vừa đóng) và low/high của selected / higher / next-lower zone, không in fingerprint.
 
 ```bash
 sudo systemctl status prana-buy-dips@observe.timer --no-pager
