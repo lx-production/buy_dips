@@ -105,28 +105,29 @@ def _zone_from_local_reaction_cluster(
     if len({candidate.index for candidate in lows}) < int(min_touches) or not reclaimed_highs:
         return None
     
-    # Among all the swing lows in the cluster, pick the low pivot with the highest price (body price); 
-    # if two share that price, pick the one with the smaller index (earlier in time).
-    upper_anchor = max(lows, key=lambda candidate: (candidate.price, -candidate.index))
-    
-    # Find all the reclaimed highs that came before the upper_anchor and are below its price.
-    # Resistance was there first, price later tested that area from above and held with repeated lows
-    prior_reclaimed_highs = [
-        candidate
-        for candidate in reclaimed_highs
-        if candidate.index < upper_anchor.index and candidate.price < upper_anchor.price
-    ]
-
-    if prior_reclaimed_highs:
-        low = max(candidate.price for candidate in prior_reclaimed_highs) # body price
-    else:
-        low = float(low_pivots_by_index[upper_anchor.index].wick_price)
-    
-    high = float(upper_anchor.price)
-
-    width = high - low
-    if width <= 0.0 or width > float(zone_width):
+    # Prefer the highest low body, but fall back when its nearest lower reclaim
+    # would create a band that the local cleanup immediately rejects as too thin.
+    min_width = float(zone_width) * 0.2
+    bounds: tuple[float, float, float] | None = None
+    for upper_anchor in sorted(lows, key=lambda candidate: (-candidate.price, candidate.index)):
+        # Resistance must predate this anchor and sit below its body to define the lower edge.
+        prior_reclaimed_highs = [
+            candidate
+            for candidate in reclaimed_highs
+            if candidate.index < upper_anchor.index and candidate.price < upper_anchor.price
+        ]
+        if prior_reclaimed_highs:
+            low = max(candidate.price for candidate in prior_reclaimed_highs)
+        else:
+            low = float(low_pivots_by_index[upper_anchor.index].wick_price)
+        high = float(upper_anchor.price)
+        width = high - low
+        if min_width <= width <= float(zone_width):
+            bounds = (low, high, width)
+            break
+    if bounds is None:
         return None
+    low, high, width = bounds
     
     # candidate.price is always the body price
     cluster = sorted(cluster, key=lambda candidate: (candidate.price, candidate.index, candidate.origin))
@@ -238,7 +239,7 @@ def _first_retest_low(
 # Filter and dedupe local zones: drop thin zones and keep one winner per nearby ladder slot.
 def _select_local_reaction_zones(zones: list[Zone], zone_width: float) -> list[Zone]:
     selected: list[Zone] = []
-    min_width = float(zone_width) * 0.2 # 500 * 0.2 = $100
+    min_width = float(zone_width) * 0.2 # Defensive check; builders already reject thinner bands.
     adjacent_gap = float(zone_width) * 1.3 # 500 * 1.3 = $650
     midpoint_spacing = float(zone_width) * 2 # 500 * 2 = $1000
     for zone in sorted(zones, key=lambda item: float(item["low"])): #zone["low"] is the lower edge of the price band

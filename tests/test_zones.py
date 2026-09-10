@@ -357,6 +357,28 @@ def test_local_reaction_zone_can_use_local_low_wick_to_body_bounds() -> None:
     ]
 
 
+# A new high-body low must not erase an older valid band when its own bounds are too thin.
+def test_local_reaction_zone_falls_back_from_too_thin_highest_anchor() -> None:
+    pivots = [
+        _pivot(index=1, kind="high", wick_price=104.0, body_price=104.0),
+        _pivot(index=2, kind="low", wick_price=99.0, body_price=101.0),
+        _pivot(index=3, kind="low", wick_price=100.0, body_price=102.0),
+        _pivot(index=5, kind="low", wick_price=103.0, body_price=105.0),
+    ]
+
+    zones = _build_local_reaction_zones(
+        internal_pivots=pivots,
+        closes=pd.Series([100.0, 104.0, 105.0, 102.0, 106.0, 105.0]).to_numpy(dtype=float),
+        break_atr_mult=0.0,
+        zone_width=10.0,
+        min_touches=2,
+        current_price=110.0,
+        buffer_pct=0.0015,
+    )
+
+    assert [(zone["low"], zone["high"]) for zone in zones] == [(100.0, 102.0)]
+
+
 def test_structure_v2_fills_large_support_gap_with_reclaimed_high_clusters() -> None:
     zones = [
         _support_zone(low=65510.93, high=66010.93, source_closes=[65971.20, 66010.93], score=4.0),

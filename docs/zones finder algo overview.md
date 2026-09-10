@@ -254,9 +254,9 @@ Clusters still need `min_touches` unique pairs, but a cluster only becomes a zon
 
 Bounds are **variable width**, not a forced `$500`:
 
-- `high` = the highest low-body in the cluster (earlier index wins a tie)
+- `high` starts with the highest low-body in the cluster (earlier index wins a tie). If that anchor would produce a band thinner than `$100` or wider than `$500`, try the next lower low-body instead of dropping the cluster
 - `low` = the highest **prior** reclaimed-high body that is below that high; if none, the wick of that upper-anchor low
-- width must be `> 0` and `≤ $500`
+- width must be between `$100` (`0.2 × $500`) and `$500`, inclusive
 
 Origin: `local_reaction_support`.
 
