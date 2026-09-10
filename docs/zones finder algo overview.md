@@ -266,7 +266,10 @@ Local cleanup (`_select_local_reaction_zones`):
 
 - drop bands thinner than `$100` (`0.2 × $500`)
 - one zone per local ladder slot (edge gap `< $650` or midpoint gap `< $1000`)
+- build the ordinary local ladder first using its lower-band preference; reject a retested-flip candidate that shares slots with two or more distinct surviving ordinary shelves. A middle flip cannot collapse both boundaries into one step (for example, 78.4k replacing separate 78k and 79.5k shelves).
 - prefer `local_retested_flip_support`, then the lower band, then higher score
+
+This protects two currently valid ordinary shelves, not their age or a fixed price level. A flip competing with only one ordinary shelf still uses the existing priority. Ordinary shelves can still disappear when their evidence leaves the local lookback or another detector rule removes them.
 
 ### 7. Concatenate, then collapse overlaps
 

@@ -132,6 +132,7 @@ Replay `support_close_v2` on stored closed 1h candles. The engine is the same as
 - Zone snapshots are cached in the separate `backtest_zone_cache` table. The first run builds them; later runs reuse matching snapshots and build only new or stale 4h watermarks.
 - Cold rebuilds ingest each closed 4h candle once into `IncrementalZoneDetectorState`, then materialize/fingerprint at each cache miss. A fully warm run never creates that state.
 - Cache validity includes zone config, detector source code, and a cumulative hash of the exact 4h candle input. Config/code edits and historical candle changes invalidate affected snapshots automatically.
+- Local zone selection preserves two distinct ordinary shelves when a middle retested-flip candidate conflicts with both. A flip can still replace one competing shelf; this rule applies to live detection and backtest and does not pin old zones forever.
 - Output is BUY-only: CLI summary + CSV. HOLD is computed for correct replay but not printed or exported.
 
 ```bash

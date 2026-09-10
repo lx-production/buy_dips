@@ -64,3 +64,19 @@ Check and update docs that describe the behavior you changed, for example:
 - Other repo docs that mention the feature, flag, or command you touched
 
 If a code change affects how someone runs or configures the bot, the docs should reflect that before you finish the task.
+
+## Running tests
+
+This workspace already has a project virtualenv at `.venv/` (see README Install). The agent shell does **not** auto-activate it: `python3` / `pytest` on `PATH` are not the project env.
+
+Always run tests with the venv interpreter:
+
+```bash
+.venv/bin/pytest -q
+```
+
+or `.venv/bin/python -m pytest -q`.
+
+Do **not** `pip install -r requirements.txt` into `/tmp` or any throwaway venv just to run tests. That duplicates the existing env and is slow.
+
+If `.venv` or `.venv/bin/pytest` is missing, stop and tell the user. Recreate `.venv` only if they ask.

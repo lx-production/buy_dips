@@ -2,16 +2,10 @@ from __future__ import annotations
 
 import numpy as np
 
-from .types import (
-    STRUCTURE_LOCAL_REACTION_LOOKBACK_BARS,
-    StructurePivot,
-    SupportCandidate,
-    SwingTerm,
-)
-
 from .candidates import _reclaim_index_for_pivot
 from .factory import Zone, _latest_defined, _make_support_zone
 from .build import _cluster_support_candidates, _has_minimum_unique_touches
+from .types import STRUCTURE_LOCAL_REACTION_LOOKBACK_BARS, StructurePivot, SupportCandidate, SwingTerm
 
 
 
@@ -242,8 +236,21 @@ def _select_local_reaction_zones(zones: list[Zone], zone_width: float) -> list[Z
     min_width = float(zone_width) * 0.2 # Defensive check; builders already reject thinner bands.
     adjacent_gap = float(zone_width) * 1.3 # 500 * 1.3 = $650
     midpoint_spacing = float(zone_width) * 2 # 500 * 2 = $1000
-    for zone in sorted(zones, key=lambda item: float(item["low"])): #zone["low"] is the lower edge of the price band
-        if float(zone["width"]) < min_width:
+    eligible = sorted((zone for zone in zones if float(zone["width"]) >= min_width), key=lambda item: float(item["low"]))
+    # Establish the ordinary ladder first, using its existing lower-band preference.
+    ordinary: list[Zone] = []
+    for zone in eligible:
+        if str(zone.get("origin")) == "local_retested_flip_support":
+            continue
+        if not ordinary or not _local_zones_share_ladder_slot(ordinary[-1], zone, adjacent_gap, midpoint_spacing):
+            ordinary.append(zone)
+
+    for zone in eligible:
+        # A middle flip must not collapse two independently valid support steps into one.
+        if str(zone.get("origin")) == "local_retested_flip_support" and sum(
+            _local_zones_share_ladder_slot(zone, shelf, adjacent_gap, midpoint_spacing)
+            for shelf in ordinary
+        ) >= 2:
             continue
         if selected and _local_zones_share_ladder_slot(selected[-1], zone, adjacent_gap, midpoint_spacing):
             if _local_zone_rank(zone) < _local_zone_rank(selected[-1]):
@@ -261,6 +268,7 @@ def _local_zones_share_ladder_slot(
     adjacent_gap: float,
     midpoint_spacing: float,
 ) -> bool:
+    first, second = sorted((first, second), key=lambda item: float(item["low"]))
     gap = float(second["low"]) - float(first["high"])
     midpoint_gap = float(second["mid"]) - float(first["mid"])
     return gap < adjacent_gap or midpoint_gap < midpoint_spacing
