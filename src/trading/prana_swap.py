@@ -116,9 +116,11 @@ def validate_swap_quote(
 
     amount_out = _positive_decimal(payload.get("amountOut"), "amountOut")
     amount_out_raw = _positive_int(payload.get("amountOutRaw"), "amountOutRaw")
-    minimum_amount_out = _positive_decimal(payload.get("minimumAmountOut"), "minimumAmountOut")
-    if minimum_amount_out > amount_out:
-        raise QuoteError("minimumAmountOut cannot exceed amountOut")
+    minimum_amount_out = _parse_minimum_amount_out(
+        payload.get("minimumAmountOut"),
+        amount_out=amount_out,
+        amount_out_raw=amount_out_raw,
+    )
 
     deadline = _unix_seconds(payload.get("deadline"), "deadline")
     minimum_usable_time = int(now_s) + config.execution.quote_min_deadline_seconds
@@ -177,6 +179,52 @@ def _checksum_address(value: Any, field: str) -> str:
     if not isinstance(value, str) or not Web3.is_address(value):
         raise QuoteError(f"Quote {field} is not a valid address")
     return Web3.to_checksum_address(value)
+
+
+def _parse_minimum_amount_out(
+    value: Any,
+    *,
+    amount_out: Decimal,
+    amount_out_raw: int,
+) -> Decimal:
+    """Return human-unit minimumAmountOut, including the live API's raw-integer form.
+
+    The documented contract is a human decimal string (``"12.4"`` next to
+    ``amountOut: "12.5"``). The public quote host instead returns the raw
+    token amount (``10475991373`` next to ``10.528…``). Compare in human
+    units either way; only treat a value as raw when it is a whole number in
+    the same magnitude as ``amountOutRaw`` so a slightly-too-high human
+    integer cannot be misread as a tiny raw amount.
+    """
+    parsed = _minimum_amount_out_number(value)
+    if parsed <= amount_out:
+        return parsed
+    if _is_raw_minimum(parsed, amount_out_raw):
+        human = parsed / (Decimal(amount_out_raw) / amount_out)
+        if human <= 0 or human > amount_out:
+            raise QuoteError("minimumAmountOut cannot exceed amountOut")
+        return human
+    raise QuoteError("minimumAmountOut cannot exceed amountOut")
+
+
+def _minimum_amount_out_number(value: Any) -> Decimal:
+    """Parse minimumAmountOut from a decimal string or a JSON integer."""
+    if isinstance(value, bool):
+        raise QuoteError("Quote minimumAmountOut must be a decimal string")
+    if isinstance(value, int):
+        if value <= 0:
+            raise QuoteError("Quote minimumAmountOut must be positive")
+        return Decimal(value)
+    return _positive_decimal(value, "minimumAmountOut")
+
+
+def _is_raw_minimum(parsed: Decimal, amount_out_raw: int) -> bool:
+    """True when parsed looks like token raw units, not a human PRANA amount."""
+    if parsed != parsed.to_integral_value():
+        return False
+    raw = int(parsed)
+    # At least half of the quoted raw output (50 bps min is ~99.5% of raw).
+    return raw <= amount_out_raw and raw * 2 >= amount_out_raw
 
 
 def _validate_calldata(value: Any) -> str:

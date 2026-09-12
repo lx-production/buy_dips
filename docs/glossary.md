@@ -240,7 +240,7 @@ Pause, cap USDT, gas, quote, allowance **không** đổi BUY thành HOLD. Đó l
 
 **`quote_base_url`** — Host `POST /api/swap/quote`. Dev: public `https://prana.triethocduongpho.net`. Prod: loopback `http://127.0.0.1:4173` (route server local, bot không tự start).
 
-**USDT → PRANA, `amountIn="1"`** — Canary luôn 1 USDT. `slippageBps` 50 = 0.5%.
+**USDT → PRANA, `amountIn="1"`** — Canary luôn 1 USDT. `slippageBps` 50 = 0.5%. `minimumAmountOut` có thể là số human hoặc raw cùng scale với `amountOutRaw`; bot lưu human và vẫn reject nếu min > `amountOut`.
 
 **Router allowlist** — Thường Uniswap SwapRouter02. Fail-closed nếu quote trỏ chỗ khác.
 

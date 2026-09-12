@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from decimal import Decimal
 
 import pytest
 
@@ -116,6 +117,53 @@ def test_validate_quote_rejects_mismatched_execution_fields(path, value, message
         payload[path[0]][path[1]] = value
 
     with pytest.raises(QuoteError, match=message):
+        validate_swap_quote(payload, AppConfig(), WALLET, now_s=NOW)
+
+
+def test_validate_quote_accepts_raw_integer_minimum_amount_out() -> None:
+    """The live quote host returns minimumAmountOut in raw token units."""
+    payload = deepcopy(_payload())
+    payload["minimumAmountOut"] = 12_400_000_000
+
+    quote = validate_swap_quote(payload, AppConfig(), WALLET, now_s=NOW)
+
+    assert quote.minimum_amount_out == Decimal("12.4")
+
+
+def test_validate_quote_accepts_raw_digit_string_minimum_amount_out() -> None:
+    """A JSON string of the raw minimum is the same live-API shape."""
+    payload = deepcopy(_payload())
+    payload["minimumAmountOut"] = "12400000000"
+
+    quote = validate_swap_quote(payload, AppConfig(), WALLET, now_s=NOW)
+
+    assert quote.minimum_amount_out == Decimal("12.4")
+
+
+def test_validate_quote_rejects_human_minimum_above_amount_out() -> None:
+    """A human minimum larger than amountOut must still fail closed."""
+    payload = deepcopy(_payload())
+    payload["minimumAmountOut"] = "12.6"
+
+    with pytest.raises(QuoteError, match="minimumAmountOut"):
+        validate_swap_quote(payload, AppConfig(), WALLET, now_s=NOW)
+
+
+def test_validate_quote_rejects_small_integer_above_amount_out() -> None:
+    """A human integer just above amountOut is not treated as raw units."""
+    payload = deepcopy(_payload())
+    payload["minimumAmountOut"] = "13"
+
+    with pytest.raises(QuoteError, match="minimumAmountOut"):
+        validate_swap_quote(payload, AppConfig(), WALLET, now_s=NOW)
+
+
+def test_validate_quote_rejects_raw_minimum_above_amount_out_raw() -> None:
+    """Raw minimum above the quoted raw output is still invalid."""
+    payload = deepcopy(_payload())
+    payload["minimumAmountOut"] = 12_600_000_000
+
+    with pytest.raises(QuoteError, match="minimumAmountOut"):
         validate_swap_quote(payload, AppConfig(), WALLET, now_s=NOW)
 
 

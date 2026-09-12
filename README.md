@@ -229,7 +229,7 @@ One cycle:
 
 No wallet credentials are required for `observe`.
 
-The quote must echo `USDT`→`PRANA`, `amountIn="1"`, the signer recipient, configured slippage, and chain ID 137. The router and `transaction.to` must match the allowlist, calldata must be non-empty, ERC-20 `value` must be zero, and both deadline and verification expiry must have enough time remaining. The adapter sends only `Content-Type: application/json`; it does not send `Origin`.
+The quote must echo `USDT`→`PRANA`, `amountIn="1"`, the signer recipient, configured slippage, and chain ID 137. The router and `transaction.to` must match the allowlist, calldata must be non-empty, ERC-20 `value` must be zero, and both deadline and verification expiry must have enough time remaining. `minimumAmountOut` may be a human decimal string or the same token's raw integer (same magnitude as `amountOutRaw`); the adapter stores it in human units and still rejects a minimum above `amountOut`. The adapter sends only `Content-Type: application/json`; it does not send `Origin`.
 
 `dry_run` performs `eth_call` and `estimate_gas`, then stores `simulated` without approval, signing, or broadcast. `live` additionally requires `environment: prod`, the loopback quote host, `live_enabled: true`, the pinned wallet, and matching `LIVE_TRADING_CONFIRMATION`. It tops up only the quote amount when allowance is low, commits nonce/hash before broadcasting once, decodes received PRANA from the receipt, and reconciles that same hash on rerun.
 
