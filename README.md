@@ -22,7 +22,7 @@ The hourly CLI path is **`trade-once`**. `observe` stops after decision persiste
 - No sell / stop-loss logic.
 - Backtest is signal-only: no PnL, sell, quote, slippage, gas, or wallet simulation.
 
-For an operator-owned Pi deployment, follow the Vietnamese [Pi rollout runbook](docs/pi-rollout-runbook.md). It covers the dedicated service user, permissions, systemd credentials, hourly service/timer templates, the observe-to-dry-run dev-canary rollout, and installation of the guarded one-command canary updater.
+For an operator-owned Pi deployment, follow the Vietnamese [Pi rollout runbook](docs/pi-rollout-runbook.md). It covers the dedicated service user, permissions, systemd credentials, hourly service/timer templates, the observe-to-dry-run dev-canary rollout, and installation of the guarded one-command canary updater. To promote an already-tested canary from `dry_run` to production `live`, follow the separate [dry-run to live production guide](docs/dry-run-to-live-prod.md).
 
 ## Install
 
