@@ -182,7 +182,9 @@ def get_live_exposure(
     now_s: int,
     exclude_execution_id: int | None = None,
 ) -> dict[str, int]:
-    """Count conservative live attempts for UTC-day and cumulative canary limits.
+    """Count conservative live attempts for the one-BUY UTC-day cap.
+
+    Cumulative spend is reported for audit only and does not block another trade.
 
     An execution counts from `signed` onward, including reverted attempts,
     because a locally signed intent may have reached the network and should not

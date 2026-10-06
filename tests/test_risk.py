@@ -7,8 +7,9 @@ import pytest
 
 from src.config import AppConfig
 from src.db import connect, init_db
-from src.trading.risk import RiskCheckError, check_gas_reserve, check_pre_execution_risk, check_wallet_funds
+from src.trading.constants import TRADE_AMOUNT_USDT_RAW
 from src.trading.store import create_trade_execution, update_trade_execution
+from src.trading.risk import RiskCheckError, check_gas_reserve, check_pre_execution_risk, check_wallet_funds
 
 
 NOW = 1_800_000_000
@@ -68,51 +69,47 @@ def test_in_flight_execution_blocks_a_second_execution(tmp_path) -> None:
 
 
 def test_daily_live_limit_counts_signed_or_later_attempts(tmp_path) -> None:
-    """Three conservative live attempts in one UTC day must block the fourth."""
+    """One conservative live attempt in a UTC day must block the next."""
     database_path = tmp_path / "bot.sqlite"
     init_db(database_path)
     config = AppConfig(risk={"pause_file": str(tmp_path / "missing-pause")})
 
     with connect(database_path) as conn:
-        for index in range(3):
-            execution_id = _create_execution(conn, index + 1)
-            update_trade_execution(
-                conn,
-                execution_id,
-                updated_at=NOW,
-                status="confirmed",
-                amount_in_raw=1_000_000,
-            )
+        execution_id = _create_execution(conn, 1)
+        update_trade_execution(
+            conn,
+            execution_id,
+            updated_at=NOW,
+            status="confirmed",
+            amount_in_raw=TRADE_AMOUNT_USDT_RAW,
+        )
         current_id = _create_execution(conn, 10)
         with pytest.raises(RiskCheckError, match="DAILY_TRADE_LIMIT_REACHED"):
             check_pre_execution_risk(conn, config, current_id, now_s=NOW)
 
 
-def test_cumulative_cap_includes_prior_days(tmp_path) -> None:
-    """Conservative lifetime spend plus the next 1 USDT must never exceed the cap."""
+def test_prior_day_spend_does_not_block_the_next_trade(tmp_path) -> None:
+    """Lifetime USDT spend is recorded but must not stop a later UTC day's BUY."""
     database_path = tmp_path / "bot.sqlite"
     init_db(database_path)
-    config = AppConfig(
-        risk={
-            "pause_file": str(tmp_path / "missing-pause"),
-            "max_cumulative_usdt": "2",
-        }
-    )
+    config = AppConfig(risk={"pause_file": str(tmp_path / "missing-pause")})
 
     with connect(database_path) as conn:
         prior_id = _create_execution(conn, 1)
-        update_trade_execution(conn, prior_id, status="confirmed", amount_in_raw=2_000_000)
+        update_trade_execution(conn, prior_id, status="confirmed", amount_in_raw=100_000_000)
         conn.execute("UPDATE trade_executions SET created_at=? WHERE id=?", (NOW - 86_400, prior_id))
         current_id = _create_execution(conn, 2)
-        with pytest.raises(RiskCheckError, match="CUMULATIVE_SPEND_LIMIT_REACHED"):
-            check_pre_execution_risk(conn, config, current_id, now_s=NOW)
+        exposure = check_pre_execution_risk(conn, config, current_id, now_s=NOW)
+
+    assert exposure.utc_day_trade_count == 0
+    assert exposure.cumulative_spend_raw == 100_000_000
 
 
 def test_wallet_and_gas_reserve_checks_use_integer_units() -> None:
     """Wallet checks must retain configured POL after a conservative gas budget."""
     config = AppConfig(risk={"min_pol_reserve": Decimal("0.01")})
 
-    check_wallet_funds(config, usdt_balance_raw=1_000_000, pol_balance_raw=20_000_000_000_000_000)
+    check_wallet_funds(config, usdt_balance_raw=TRADE_AMOUNT_USDT_RAW, pol_balance_raw=20_000_000_000_000_000)
     check_gas_reserve(
         config,
         pol_balance_raw=20_000_000_000_000_000,
@@ -122,7 +119,7 @@ def test_wallet_and_gas_reserve_checks_use_integer_units() -> None:
     )
 
     with pytest.raises(RiskCheckError, match="INSUFFICIENT_USDT_BALANCE"):
-        check_wallet_funds(config, usdt_balance_raw=999_999, pol_balance_raw=20_000_000_000_000_000)
+        check_wallet_funds(config, usdt_balance_raw=TRADE_AMOUNT_USDT_RAW - 1, pol_balance_raw=20_000_000_000_000_000)
     with pytest.raises(RiskCheckError, match="INSUFFICIENT_POL_GAS_RESERVE"):
         check_gas_reserve(
             config,

@@ -468,13 +468,22 @@ def _run_execution(
         )
         return execution_id, receipt.status
     except RiskCheckError as exc:
+        # A short USDT balance is a failed BUY. Pause, the daily cap, and gas skips stay skipped.
+        terminal_status = "failed" if exc.code == "INSUFFICIENT_USDT_BALANCE" else "skipped"
         status = _record_execution_outcome(
             database_path,
             execution_id,
-            status="skipped",
+            status=terminal_status,
             reason=exc.code,
         )
-        log_event(audit_logger, "execution_skipped", cycle_id=correlation_id, decision_id=decision_id, execution_id=execution_id, reason=exc.code)
+        log_event(
+            audit_logger,
+            "execution_failed" if terminal_status == "failed" else "execution_skipped",
+            cycle_id=correlation_id,
+            decision_id=decision_id,
+            execution_id=execution_id,
+            reason=exc.code,
+        )
         return execution_id, status
     except LiveModeNotAllowed:
         status = _record_execution_outcome(

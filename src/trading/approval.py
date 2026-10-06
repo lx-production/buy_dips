@@ -7,7 +7,7 @@ from typing import Any
 from web3 import Web3
 
 from ..config import AppConfig
-from .constants import CANARY_ALLOWANCE_USDT_RAW, POLYGON_CHAIN_ID
+from .constants import MAX_APPROVAL_USDT_RAW, POLYGON_CHAIN_ID
 from .contract_checks import ContractCheckError, ContractCheckResult, run_contract_checks
 
 
@@ -33,11 +33,11 @@ def approve_trading(
     password: str | None = None,
     web3: Any | None = None,
 ) -> ApprovalResult:
-    # Run every contract check, zero-reset a prior allowance, then grant exactly the canary cap.
+    # Run every contract check, zero-reset a prior allowance, then grant exactly one trade.
     try:
         checked = run_contract_checks(config, password=password, web3=web3)
         previous = checked.allowance_raw
-        if previous == CANARY_ALLOWANCE_USDT_RAW:
+        if previous == MAX_APPROVAL_USDT_RAW:
             return ApprovalResult("already-approved", previous, previous, ())
 
         transaction_hashes: list[str] = []
@@ -45,10 +45,10 @@ def approve_trading(
             transaction_hashes.append(_send_approval_transaction(config, checked, 0))
             if _read_allowance(checked) != 0:
                 raise ApprovalError("USDT allowance did not reset to zero")
-        transaction_hashes.append(_send_approval_transaction(config, checked, CANARY_ALLOWANCE_USDT_RAW))
+        transaction_hashes.append(_send_approval_transaction(config, checked, MAX_APPROVAL_USDT_RAW))
         current = _read_allowance(checked)
-        if current != CANARY_ALLOWANCE_USDT_RAW:
-            raise ApprovalError("USDT allowance did not reach the 10 USDT canary cap")
+        if current != MAX_APPROVAL_USDT_RAW:
+            raise ApprovalError("USDT allowance did not reach the 20 USDT trade cap")
         return ApprovalResult("approved", previous, current, tuple(transaction_hashes))
     except (ApprovalError, ContractCheckError):
         raise
@@ -90,8 +90,8 @@ def ensure_swap_allowance(
     allowed = {Web3.to_checksum_address(address) for address in config.execution.router_allowlist}
     if router not in allowed:
         raise ApprovalError("Quote router is outside the configured allowlist")
-    if amount_raw <= 0 or amount_raw > CANARY_ALLOWANCE_USDT_RAW:
-        raise ApprovalError("Swap approval amount is outside the canary cap")
+    if amount_raw <= 0 or amount_raw > MAX_APPROVAL_USDT_RAW:
+        raise ApprovalError("Swap approval amount is outside the single-trade cap")
     previous = _read_allowance(checked, router)
     if previous >= amount_raw:
         return ApprovalResult("already-sufficient", previous, previous, ())
@@ -115,8 +115,8 @@ def _send_approval_transaction(
     router_address: str | None = None,
 ) -> str:
     # Simulate, estimate, locally sign, broadcast once, and require a successful mined receipt.
-    if amount_raw < 0 or amount_raw > CANARY_ALLOWANCE_USDT_RAW:
-        raise ApprovalError("Approval amount is outside the permitted canary values")
+    if amount_raw < 0 or amount_raw > MAX_APPROVAL_USDT_RAW:
+        raise ApprovalError("Approval amount is outside the single-trade cap")
     if checked.chain_id != POLYGON_CHAIN_ID:
         raise ApprovalError("Refusing to sign an approval for the wrong chain")
     router = checked.router_address if router_address is None else Web3.to_checksum_address(router_address)

@@ -12,7 +12,7 @@ Bot **không** tự bán. CLI dùng cùng một cycle cho `observe`, `dry_run`, 
 
 **Fail-closed** — Khi thiếu dữ liệu, watermark lỗi, zone không fingerprint được, hoặc 4h quá hạn mà thiếu nến 1h: **dừng cycle**, không ghi `HOLD` giả, không trade trên zone cũ.
 
-**Canary** — Chạy thật với số tiền rất nhỏ để kiểm tra hệ thống: **1 USDT / lệnh**, tối đa **10 USDT** cộng dồn. Không phải chiến lược full size.
+**Kích thước live** — Mỗi lệnh đúng **20 USDT**, tối đa **1 BUY đã ký / ngày UTC**. Không còn trần cộng dồn. Ví thiếu 20 USDT thì execution `failed` (`INSUFFICIENT_USDT_BALANCE`), không quote và không ký.
 
 **Observe / dry_run / live** — Cùng một engine quyết định; khác nhau **sau** khi ra BUY:
 
@@ -240,11 +240,11 @@ Pause, cap USDT, gas, quote, allowance **không** đổi BUY thành HOLD. Đó l
 
 **`quote_base_url`** — Host `POST /api/swap/quote`. Dev: public `https://prana.triethocduongpho.net`. Prod: loopback `http://127.0.0.1:4173` (route server local, bot không tự start).
 
-**USDT → PRANA, `amountIn="1"`** — Canary luôn 1 USDT. `slippageBps` 50 = 0.5%. `minimumAmountOut` có thể là số human hoặc raw cùng scale với `amountOutRaw`; bot lưu human và vẫn reject nếu min > `amountOut`.
+**USDT → PRANA, `amountIn="20"`** — Mỗi quote đúng 20 USDT. `slippageBps` 50 = 0.5%. `minimumAmountOut` có thể là số human hoặc raw cùng scale với `amountOutRaw`; bot lưu human và vẫn reject nếu min > `amountOut`.
 
 **Router allowlist** — Thường Uniswap SwapRouter02. Fail-closed nếu quote trỏ chỗ khác.
 
-**`approve-trading` / `revoke-trading`** — Allowance USDT cho router **capped 10 USDT**, không unlimited. Revoke = 0.
+**`approve-trading` / `revoke-trading`** — Allowance USDT cho router đúng **một lệnh 20 USDT**, không unlimited. Revoke = 0.
 
 **`trade-check`** — Chain, bytecode router, decimals, balance, allowance. Không trade.
 
@@ -258,7 +258,7 @@ Pause, cap USDT, gas, quote, allowance **không** đổi BUY thành HOLD. Đó l
 
 **Idempotent cycle** — Chạy lại cùng giờ không nhân lệnh. Nonce/hash được commit trước broadcast; rerun reconcile đúng hash đó và không gửi replacement.
 
-**Canary risk** — Mỗi lệnh đúng 1 USDT, tối đa 3 attempt/ngày UTC và 10 USDT cumulative. Các trạng thái từ `signed` trở đi được tính bảo thủ, kể cả pending/reverted.
+**Giới hạn live** — Mỗi lệnh đúng 20 USDT và tối đa 1 attempt/ngày UTC. Các trạng thái từ `signed` trở đi được tính bảo thủ, kể cả pending/reverted. Không có trần USDT cộng dồn; ví không đủ 20 USDT thì BUY fail.
 
 **In-flight lock** — Một execution chưa terminal (`started` → `pending`) chặn execution mới. Trạng thái skip/fail nằm ở `trade_executions`, không đổi BUY thành HOLD.
 

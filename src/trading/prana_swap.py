@@ -12,7 +12,7 @@ import requests
 from web3 import Web3
 
 from ..config import AppConfig
-from .constants import POLYGON_CHAIN_ID, QUOTE_TOKEN_IN_SYMBOL, QUOTE_TOKEN_OUT_SYMBOL, TRADE_AMOUNT_USDT_RAW
+from .constants import POLYGON_CHAIN_ID, QUOTE_TOKEN_IN_SYMBOL, QUOTE_TOKEN_OUT_SYMBOL, TRADE_AMOUNT_USDT_RAW, TRADE_AMOUNT_USDT_TEXT
 from .models import SwapTransaction, ValidatedSwapQuote
 
 
@@ -39,7 +39,7 @@ def fetch_swap_quote(
     body = {
         "tokenInSymbol": QUOTE_TOKEN_IN_SYMBOL,
         "tokenOutSymbol": QUOTE_TOKEN_OUT_SYMBOL,
-        "amountIn": "1",
+        "amountIn": TRADE_AMOUNT_USDT_TEXT,
         "recipient": recipient_address,
         "slippageBps": config.execution.slippage_bps,
     }
@@ -87,11 +87,11 @@ def validate_swap_quote(
         raise QuoteError("Quote tokenInSymbol does not match USDT")
     if request.get("tokenOutSymbol") != QUOTE_TOKEN_OUT_SYMBOL:
         raise QuoteError("Quote tokenOutSymbol does not match PRANA")
-    if request.get("amountIn") != "1":
-        raise QuoteError('Quote amountIn must exactly equal "1"')
+    if request.get("amountIn") != TRADE_AMOUNT_USDT_TEXT:
+        raise QuoteError(f'Quote amountIn must exactly equal "{TRADE_AMOUNT_USDT_TEXT}"')
     amount_in_raw = _positive_int(request.get("amountInRaw"), "request.amountInRaw")
     if amount_in_raw != TRADE_AMOUNT_USDT_RAW:
-        raise QuoteError("Quote amountInRaw does not equal 1 USDT")
+        raise QuoteError(f"Quote amountInRaw does not equal {TRADE_AMOUNT_USDT_TEXT} USDT")
     response_recipient = _checksum_address(request.get("recipient"), "request.recipient")
     if response_recipient != _checksum_address(recipient, "recipient"):
         raise QuoteError("Quote recipient does not match the bot wallet")

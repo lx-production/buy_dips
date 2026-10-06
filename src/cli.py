@@ -74,7 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("wallet-create", help="Create the configured encrypted development keystore.")
     subparsers.add_parser("wallet-status", help="Decrypt and print only the configured wallet address.")
     subparsers.add_parser("trade-check", help="Validate Polygon, contracts, wallet, and allowance.")
-    subparsers.add_parser("approve-trading", help="Approve the router for exactly the 10 USDT canary cap.")
+    subparsers.add_parser("approve-trading", help="Approve the router for exactly one 20 USDT trade.")
     subparsers.add_parser("revoke-trading", help="Reset the configured router's USDT allowance to zero.")
     return parser
 

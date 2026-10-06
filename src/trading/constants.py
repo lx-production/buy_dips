@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 
 EXCHANGE = "binance"
 SYMBOL = "BTCUSDT"
@@ -26,8 +28,12 @@ SWAP_ROUTER_02_ADDRESSES = frozenset(
 
 USDT_DECIMALS = 6
 PRANA_DECIMALS = 9
-CANARY_ALLOWANCE_USDT_RAW = 10_000_000
-TRADE_AMOUNT_USDT_RAW = 1_000_000
+# Locked in code on purpose. Raising the size again requires a review, not a YAML edit.
+TRADE_AMOUNT_USDT = Decimal("20")
+TRADE_AMOUNT_USDT_RAW = int(TRADE_AMOUNT_USDT * (Decimal(10) ** USDT_DECIMALS))
+TRADE_AMOUNT_USDT_TEXT = format(TRADE_AMOUNT_USDT, "f")
+# approve-trading and the live top-up may grant exactly one trade, never an unlimited allowance.
+MAX_APPROVAL_USDT_RAW = TRADE_AMOUNT_USDT_RAW
 
 QUOTE_TOKEN_IN_SYMBOL = "USDT"
 QUOTE_TOKEN_OUT_SYMBOL = "PRANA"

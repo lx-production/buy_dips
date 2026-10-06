@@ -42,8 +42,8 @@ def _quote() -> ValidatedSwapQuote:
     return ValidatedSwapQuote(
         token_in_symbol="USDT",
         token_out_symbol="PRANA",
-        amount_in=Decimal("1"),
-        amount_in_raw=1_000_000,
+        amount_in=Decimal("20"),
+        amount_in_raw=20_000_000,
         recipient=WALLET,
         slippage_bps=50,
         chain_id=137,
@@ -62,9 +62,9 @@ def _checked() -> SimpleNamespace:
     """Build the public checked-wallet fields used by execution orchestration."""
     return SimpleNamespace(
         wallet_address=WALLET,
-        usdt_balance_raw=10_000_000,
+        usdt_balance_raw=20_000_000,
         pol_balance_raw=10**18,
-        allowance_raw=10_000_000,
+        allowance_raw=20_000_000,
         web3=SimpleNamespace(eth=SimpleNamespace(gas_price=1_000_000_000)),
     )
 
@@ -88,7 +88,7 @@ def test_live_execution_reserves_hash_before_broadcast_and_is_idempotent(monkeyp
     monkeypatch.setattr("src.trading.runner.fetch_swap_quote", lambda *_args, **_kwargs: _quote())
     monkeypatch.setattr(
         "src.trading.runner.ensure_swap_allowance",
-        lambda *_args, **_kwargs: ApprovalResult("already-sufficient", 1_000_000, 1_000_000, ()),
+        lambda *_args, **_kwargs: ApprovalResult("already-sufficient", 20_000_000, 20_000_000, ()),
     )
     monkeypatch.setattr(
         "src.trading.runner.simulate_swap",
@@ -223,3 +223,40 @@ def test_pause_file_persists_execution_skip_before_wallet_access(monkeypatch, tm
     assert execution["status"] == "skipped"
     assert execution["reason"] == "PAUSE_FILE_PRESENT"
     assert status == "skipped"
+
+
+def test_live_insufficient_usdt_fails_before_quote(monkeypatch, tmp_path) -> None:
+    """A wallet short of one 20 USDT trade fails the BUY and does not request a quote."""
+    database_path = tmp_path / "bot.sqlite"
+    decision_id = _insert_decision(database_path)
+    checked = _checked()
+    checked.usdt_balance_raw = 19_999_999
+    monkeypatch.setattr("src.trading.runner.run_contract_checks", lambda *_args, **_kwargs: checked)
+    monkeypatch.setattr("src.trading.runner.assert_live_mode_allowed", lambda *_args, **_kwargs: None)
+
+    def forbidden(*_args, **_kwargs):
+        """Fail if a short wallet continues into quote, approval, or signing."""
+        raise AssertionError("short wallet continued into quote or signing")
+
+    monkeypatch.setattr("src.trading.runner.fetch_swap_quote", forbidden)
+    monkeypatch.setattr("src.trading.runner.ensure_swap_allowance", forbidden)
+    monkeypatch.setattr("src.trading.runner.prepare_signed_swap", forbidden)
+    monkeypatch.setattr("src.trading.runner.broadcast_signed_swap", forbidden)
+
+    execution_id, status = _run_execution(
+        _execution_config(tmp_path),
+        database_path,
+        decision_id,
+        mode="live",
+        password=None,
+        web3=None,
+        quote_session=None,
+        live_confirmation=None,
+    )
+
+    with connect(database_path) as conn:
+        execution = conn.execute("SELECT status, reason, transaction_hash FROM trade_executions WHERE id=?", (execution_id,)).fetchone()
+    assert status == "failed"
+    assert execution["status"] == "failed"
+    assert execution["reason"] == "INSUFFICIENT_USDT_BALANCE"
+    assert execution["transaction_hash"] is None

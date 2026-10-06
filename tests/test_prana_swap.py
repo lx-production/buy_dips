@@ -6,6 +6,7 @@ from decimal import Decimal
 import pytest
 
 from src.config import AppConfig
+from src.trading.constants import TRADE_AMOUNT_USDT_RAW, TRADE_AMOUNT_USDT_TEXT
 from src.trading.prana_swap import DEV_QUOTE_BASE_URL, QuoteError, fetch_swap_quote, validate_swap_quote
 
 
@@ -20,8 +21,8 @@ def _payload() -> dict[str, object]:
         "request": {
             "tokenInSymbol": "USDT",
             "tokenOutSymbol": "PRANA",
-            "amountIn": "1",
-            "amountInRaw": "1000000",
+            "amountIn": TRADE_AMOUNT_USDT_TEXT,
+            "amountInRaw": str(TRADE_AMOUNT_USDT_RAW),
             "recipient": WALLET,
             "slippageBps": 50,
             "chainId": 137,
@@ -83,11 +84,11 @@ def test_fetch_quote_sends_origin_free_locked_request() -> None:
     assert request["json"] == {
         "tokenInSymbol": "USDT",
         "tokenOutSymbol": "PRANA",
-        "amountIn": "1",
+        "amountIn": TRADE_AMOUNT_USDT_TEXT,
         "recipient": WALLET,
         "slippageBps": 50,
     }
-    assert quote.amount_in_raw == 1_000_000
+    assert quote.amount_in_raw == TRADE_AMOUNT_USDT_RAW
     assert quote.transaction.data == "0x1234"
 
 

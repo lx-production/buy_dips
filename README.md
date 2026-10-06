@@ -224,12 +224,12 @@ One cycle:
 4. Evaluates `support_close_v2` on the latest closed 1h candle.
 5. Persists the decision (`BUY` or `HOLD`) and prints id / decision / reason / zones-rebuilt.
 6. For a BUY in `dry_run` or `live`, creates one idempotent `trade_executions` row and checks the pause file plus any unresolved execution.
-7. For `live`, also enforces at most 3 attempts per UTC day and at most 10 USDT cumulative reserved/attempted spend. Signed, broadcast, pending, confirmed, and reverted attempts count conservatively.
-8. Checks USDT/POL balances and a conservative gas reserve before approval or signing, then validates a fresh `POST /api/swap/quote` response.
+7. For `live`, also enforces at most 1 signed attempt per UTC day. Signed, broadcast, pending, confirmed, and reverted attempts count. There is no cumulative USDT stop.
+8. Checks USDT/POL balances and a conservative gas reserve before approval or signing. A wallet short of the 20 USDT trade fails the execution (`INSUFFICIENT_USDT_BALANCE`) and does not quote or sign. Then the cycle validates a fresh `POST /api/swap/quote` response.
 
 No wallet credentials are required for `observe`.
 
-The quote must echo `USDT`→`PRANA`, `amountIn="1"`, the signer recipient, configured slippage, and chain ID 137. The router and `transaction.to` must match the allowlist, calldata must be non-empty, ERC-20 `value` must be zero, and both deadline and verification expiry must have enough time remaining. `minimumAmountOut` may be a human decimal string or the same token's raw integer (same magnitude as `amountOutRaw`); the adapter stores it in human units and still rejects a minimum above `amountOut`. The adapter sends only `Content-Type: application/json`; it does not send `Origin`.
+The quote must echo `USDT`→`PRANA`, `amountIn="20"`, the signer recipient, configured slippage, and chain ID 137. The router and `transaction.to` must match the allowlist, calldata must be non-empty, ERC-20 `value` must be zero, and both deadline and verification expiry must have enough time remaining. `minimumAmountOut` may be a human decimal string or the same token's raw integer (same magnitude as `amountOutRaw`); the adapter stores it in human units and still rejects a minimum above `amountOut`. The adapter sends only `Content-Type: application/json`; it does not send `Origin`.
 
 `dry_run` performs `eth_call` and `estimate_gas`, then stores `simulated` without approval, signing, or broadcast. `live` additionally requires `environment: prod`, the loopback quote host, `live_enabled: true`, the pinned wallet, and matching `LIVE_TRADING_CONFIRMATION`. It tops up only the quote amount when allowance is low, commits nonce/hash before broadcasting once, decodes received PRANA from the receipt, and reconciles that same hash on rerun.
 
@@ -249,7 +249,7 @@ python3 -m src.cli wallet-status
 # Verify chain, router bytecode, token decimals, balances, allowance
 python3 -m src.cli trade-check
 
-# Cap router USDT allowance to the 10 USDT canary total
+# Approve the router for exactly one 20 USDT trade (not unlimited)
 python3 -m src.cli approve-trading
 
 # Reset that router allowance to zero
@@ -295,7 +295,7 @@ Fetch failures, zone-build failures, and an overdue incomplete 4h bucket abort t
 - Live trading requires `execution.live_enabled`, a pinned wallet address, the prod loopback quote host, and wallet-specific confirmation.
 - Quote verification tokens, calldata, signed transaction bytes, passwords, and RPC URLs are never stored in `trade_executions`.
 - Keystores and `.env` are gitignored; never commit passwords, private keys, signed txs, or RPC URLs with API keys.
-- Canary intent: exactly **1 USDT** per trade, at most **3 attempts per UTC day**, **10 USDT** cumulative cap, and capped router approval (not unlimited).
+- Live size is locked in code: exactly **20 USDT** per trade, at most **1 signed attempt per UTC day**, no cumulative USDT stop, and router approval capped at one trade (not unlimited). A BUY fails when the wallet holds less than 20 USDT.
 - `risk.min_pol_reserve` remains untouched after a conservative approval/swap gas budget.
 - A non-terminal execution blocks every later execution. This prevents a second quote/sign/broadcast path while an earlier lifecycle is unresolved.
 

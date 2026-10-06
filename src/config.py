@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .trading.constants import POLYGON_CHAIN_ID, SWAP_ROUTER_02_ADDRESSES
+from .trading.constants import POLYGON_CHAIN_ID, SWAP_ROUTER_02_ADDRESSES, TRADE_AMOUNT_USDT
 
 
 class ZoneConfig(BaseModel):
@@ -114,9 +114,8 @@ class ExecutionConfig(BaseModel):
 class RiskConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    trade_amount_usdt: Decimal = Decimal("1")
-    max_trades_per_utc_day: int = Field(default=3, ge=1, le=3)
-    max_cumulative_usdt: Decimal = Field(default=Decimal("10"), ge=0, le=Decimal("10"))
+    trade_amount_usdt: Decimal = TRADE_AMOUNT_USDT
+    max_trades_per_utc_day: int = Field(default=1, ge=1, le=1)
     min_pol_reserve: Decimal = Field(default=Decimal("0.01"), ge=0)
     pause_file: str = "data/PAUSE_TRADING"
 
@@ -146,11 +145,11 @@ class AppConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_wallet_execution_safety(self) -> "AppConfig":
-        # Lock canary configuration and prevent a development machine from entering live mode.
+        # Lock the trade size and prevent a development machine from entering live mode.
         if self.execution.chain_id != POLYGON_CHAIN_ID:
             raise ValueError(f"execution.chain_id must be {POLYGON_CHAIN_ID}")
-        if self.risk.trade_amount_usdt != Decimal("1"):
-            raise ValueError("risk.trade_amount_usdt must be exactly 1")
+        if self.risk.trade_amount_usdt != TRADE_AMOUNT_USDT:
+            raise ValueError(f"risk.trade_amount_usdt must be exactly {TRADE_AMOUNT_USDT}")
         if not self.risk.pause_file.strip():
             raise ValueError("risk.pause_file must not be empty")
         if not self.logging.file_path.strip():

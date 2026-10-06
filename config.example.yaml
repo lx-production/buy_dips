@@ -24,9 +24,8 @@ execution:
   receipt_timeout_seconds: 120
 
 risk:
-  trade_amount_usdt: "1"
-  max_trades_per_utc_day: 3
-  max_cumulative_usdt: "10"
+  trade_amount_usdt: "20" # locked; any other value is rejected
+  max_trades_per_utc_day: 1 # locked to 1 live BUY per UTC day
   min_pol_reserve: "0.01" # retained after the conservative approval + swap gas budget
   pause_file: data/PAUSE_TRADING # create this file to skip dry_run/live execution
 

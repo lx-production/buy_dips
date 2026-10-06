@@ -31,7 +31,7 @@ class RiskCheckError(RuntimeError):
 
 @dataclass(frozen=True)
 class LiveExposure:
-    """Describe conservative live canary usage before reserving another trade."""
+    """Describe conservative live usage before reserving another trade."""
 
     utc_day_trade_count: int
     utc_day_spend_raw: int
@@ -74,10 +74,11 @@ def check_pre_execution_risk(
     *,
     now_s: int,
 ) -> LiveExposure:
-    """Apply pause, in-flight, and live canary caps before external execution work.
+    """Apply pause, in-flight, and the one-live-BUY-per-UTC-day cap before external work.
 
     Dry runs obey the operational pause and in-flight lock, but they do not
-    consume or get blocked by live-spend caps because they never sign.
+    consume or get blocked by the daily live cap because they never sign.
+    Lifetime spend is not a stop; a short USDT balance fails later in the wallet check.
     """
     if Path(config.risk.pause_file).exists():
         raise RiskCheckError("PAUSE_FILE_PRESENT")
@@ -101,14 +102,11 @@ def check_pre_execution_risk(
 
     if exposure.utc_day_trade_count >= config.risk.max_trades_per_utc_day:
         raise RiskCheckError("DAILY_TRADE_LIMIT_REACHED")
-    max_cumulative_raw = _usdt_to_raw(config.risk.max_cumulative_usdt)
-    if exposure.cumulative_spend_raw + TRADE_AMOUNT_USDT_RAW > max_cumulative_raw:
-        raise RiskCheckError("CUMULATIVE_SPEND_LIMIT_REACHED")
     return exposure
 
 
 def check_wallet_funds(config: AppConfig, *, usdt_balance_raw: int, pol_balance_raw: int) -> None:
-    """Require the exact trade balance and untouched minimum POL reserve."""
+    """Fail the BUY when the wallet cannot cover one full trade plus the POL reserve."""
     if usdt_balance_raw < TRADE_AMOUNT_USDT_RAW:
         raise RiskCheckError("INSUFFICIENT_USDT_BALANCE")
     if pol_balance_raw < _pol_to_wei(config.risk.min_pol_reserve):
@@ -130,11 +128,6 @@ def check_gas_reserve(
     required = _pol_to_wei(config.risk.min_pol_reserve) + gas_price_wei * (gas_limit + approval_gas)
     if pol_balance_raw < required:
         raise RiskCheckError("INSUFFICIENT_POL_GAS_RESERVE")
-
-
-def _usdt_to_raw(amount: Decimal) -> int:
-    """Convert configured USDT to exact six-decimal integer units."""
-    return int(amount * Decimal(1_000_000))
 
 
 def _pol_to_wei(amount: Decimal) -> int:

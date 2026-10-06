@@ -5,15 +5,9 @@ from types import SimpleNamespace
 import pytest
 
 from src.config import AppConfig
-from src.trading.approval import (
-    ApprovalBroadcastTimeout,
-    ApprovalError,
-    approve_trading,
-    ensure_swap_allowance,
-    revoke_trading,
-)
-from src.trading.constants import CANARY_ALLOWANCE_USDT_RAW
 from src.trading.contract_checks import ContractCheckResult
+from src.trading.constants import MAX_APPROVAL_USDT_RAW, TRADE_AMOUNT_USDT_RAW
+from src.trading.approval import ApprovalBroadcastTimeout, ApprovalError, approve_trading, ensure_swap_allowance, revoke_trading
 
 
 WALLET = "0x0000000000000000000000000000000000000001"
@@ -140,7 +134,7 @@ def _checked(initial_allowance: int) -> tuple[ContractCheckResult, _ApprovalCont
         wallet_address=WALLET,
         router_address=ROUTER,
         pol_balance_raw=10**18,
-        usdt_balance_raw=CANARY_ALLOWANCE_USDT_RAW,
+        usdt_balance_raw=MAX_APPROVAL_USDT_RAW,
         allowance_raw=initial_allowance,
         web3=web3,
         account=signer,
@@ -152,9 +146,9 @@ def _checked(initial_allowance: int) -> tuple[ContractCheckResult, _ApprovalCont
 @pytest.mark.parametrize(
     ("initial", "expected_amounts", "expected_action"),
     [
-        (0, [CANARY_ALLOWANCE_USDT_RAW], "approved"),
-        (3_000_000, [0, CANARY_ALLOWANCE_USDT_RAW], "approved"),
-        (CANARY_ALLOWANCE_USDT_RAW, [], "already-approved"),
+        (0, [MAX_APPROVAL_USDT_RAW], "approved"),
+        (3_000_000, [0, MAX_APPROVAL_USDT_RAW], "approved"),
+        (MAX_APPROVAL_USDT_RAW, [], "already-approved"),
     ],
 )
 def test_approve_is_capped_and_zero_resets_when_needed(monkeypatch, initial, expected_amounts, expected_action) -> None:
@@ -165,11 +159,11 @@ def test_approve_is_capped_and_zero_resets_when_needed(monkeypatch, initial, exp
     result = approve_trading(AppConfig())
 
     assert result.action == expected_action
-    assert result.current_allowance_raw == CANARY_ALLOWANCE_USDT_RAW
+    assert result.current_allowance_raw == MAX_APPROVAL_USDT_RAW
     assert contract.requested == expected_amounts
     assert contract.simulated == expected_amounts
     assert contract.estimated == expected_amounts
-    assert all(amount <= CANARY_ALLOWANCE_USDT_RAW for amount in contract.requested)
+    assert all(amount <= MAX_APPROVAL_USDT_RAW for amount in contract.requested)
     assert checked.web3.eth.nonce_tags == ["pending"] * len(expected_amounts)
     assert len(signer.transactions) == len(expected_amounts)
 
@@ -227,11 +221,14 @@ def test_approval_rejects_gas_estimate_above_configured_limit(monkeypatch) -> No
 
 
 def test_swap_allowance_tops_up_only_the_quote_amount() -> None:
-    """Automatic live approval must grant 1 USDT, not the broader manual canary cap."""
+    """Automatic live approval must grant exactly one 20 USDT trade and refuse more."""
     checked, contract, _signer = _checked(0)
 
-    result = ensure_swap_allowance(AppConfig(), checked, ROUTER, 1_000_000)
+    result = ensure_swap_allowance(AppConfig(), checked, ROUTER, TRADE_AMOUNT_USDT_RAW)
 
     assert result.action == "topped-up"
-    assert result.current_allowance_raw == 1_000_000
-    assert contract.requested == [1_000_000]
+    assert result.current_allowance_raw == TRADE_AMOUNT_USDT_RAW
+    assert contract.requested == [TRADE_AMOUNT_USDT_RAW]
+
+    with pytest.raises(ApprovalError, match="single-trade cap"):
+        ensure_swap_allowance(AppConfig(), checked, ROUTER, TRADE_AMOUNT_USDT_RAW + 1)

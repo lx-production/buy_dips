@@ -148,9 +148,8 @@ execution:
   receipt_timeout_seconds: 120
 
 risk:
-  trade_amount_usdt: "1"
-  max_trades_per_utc_day: 3
-  max_cumulative_usdt: "10"
+  trade_amount_usdt: "20"
+  max_trades_per_utc_day: 1
   min_pol_reserve: "0.01"
   pause_file: /home/botuser/buy_dips/data/PAUSE_TRADING
 
@@ -526,7 +525,7 @@ sudo systemd-run \
 
 Address in ra phải trùng tuyệt đối `wallet.expected_address`. `trade-check` phải xác nhận chain 137, router/token contracts, balance và allowance.
 
-`dry_run` yêu cầu ví có ít nhất 1 USDT và đủ POL reserve. Mô phỏng exact swap có thể cần allowance đã có sẵn. Lệnh `approve-trading` là **giao dịch Polygon thật**, ngay cả khi app config đang là dev; không chạy lệnh đó chỉ để “thử”. Nếu thật sự cần allowance để dry-run simulation thành công, operator phải review/fund dev wallet và chủ động approve capped 10 USDT như một thao tác on-chain riêng.
+`dry_run` yêu cầu ví có ít nhất 20 USDT và đủ POL reserve. Mô phỏng exact swap có thể cần allowance đã có sẵn. Lệnh `approve-trading` là **giao dịch Polygon thật**, ngay cả khi app config đang là dev; không chạy lệnh đó chỉ để “thử”. Nếu thật sự cần allowance để dry-run simulation thành công, operator phải review/fund dev wallet và chủ động approve đúng 20 USDT (một lệnh) như một thao tác on-chain riêng.
 
 ## 15. Rollout pha B — dry_run nhiều ngày
 
@@ -606,7 +605,7 @@ Không đổi sang live chỉ bằng cách thay timer instance. Tối thiểu ph
 6. Chỉ sau operator review mới đặt `live_enabled: true` và tạo `LIVE_TRADING_CONFIRMATION` đúng `polygon:137:<prod checksum address>` qua `LoadCredential=`.
 7. Bắt đầu với pause file hiện diện; kiểm tra manual một cycle, gỡ pause có chủ đích, rồi mới bật `prana-buy-dips@live.timer`.
 
-Live guard còn bắt buộc đúng chain 137, wallet pinned, local quote host, 1 USDT/trade, tối đa 3 attempts/ngày UTC và cumulative cap 10 USDT. Tuy vậy các guard phần mềm không thay thế review vận hành.
+Live guard còn bắt buộc đúng chain 137, wallet pinned, local quote host, 20 USDT/trade và tối đa 1 BUY đã ký mỗi ngày UTC. Không còn trần 10 USDT cộng dồn. Ví prod còn dưới 20 USDT thì BUY fail (`INSUFFICIENT_USDT_BALANCE`) trước khi quote hoặc ký. Tuy vậy các guard phần mềm không thay thế review vận hành.
 
 ## 18. Cập nhật repo về sau
 
