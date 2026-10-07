@@ -497,7 +497,16 @@ def _run_execution(
     except (ApprovalError, ContractCheckError, QuoteError, TransactionError, WalletError) as exc:
         reason = _execution_failure_code(exc)
         status = _record_execution_failure(database_path, execution_id, reason)
-        log_event(audit_logger, "execution_failed", cycle_id=correlation_id, decision_id=decision_id, execution_id=execution_id, reason=reason, status=status)
+        log_event(
+            audit_logger,
+            "execution_failed",
+            cycle_id=correlation_id,
+            decision_id=decision_id,
+            execution_id=execution_id,
+            reason=reason,
+            status=status,
+            **_quote_failure_audit_fields(exc),
+        )
         return execution_id, status
     except Exception:
         # Do not persist unexpected provider details because they may contain RPC credentials.
@@ -584,6 +593,27 @@ def _record_execution_outcome(
         update_trade_execution(conn, execution_id, status=status, reason=reason)
         conn.commit()
     return status
+
+
+def _quote_failure_audit_fields(exc: Exception) -> dict[str, Any]:
+    """Attach a secret-free quote diagnosis to the audit event only.
+
+    SQLite keeps the stable reason code. The adapter message is already safe.
+    A chained HTTP or timeout error contributes its class name and status code,
+    never the response body or request URL.
+    """
+    if not isinstance(exc, QuoteError):
+        return {}
+    fields: dict[str, Any] = {"detail": str(exc)}
+    cause = exc.__cause__
+    if cause is None:
+        return fields
+    fields["cause_type"] = type(cause).__name__
+    response = getattr(cause, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if isinstance(status_code, int):
+        fields["http_status"] = status_code
+    return fields
 
 
 def _execution_failure_code(exc: Exception) -> str:

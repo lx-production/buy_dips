@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -7,6 +9,7 @@ from src.config import AppConfig
 from src.db import connect, init_db
 from src.trading.approval import ApprovalResult
 from src.trading.models import SignedSwap, SwapReceipt, SwapSimulation, SwapTransaction, ValidatedSwapQuote
+from src.trading.prana_swap import QuoteError
 from src.trading.runner import _run_execution
 
 
@@ -185,6 +188,57 @@ def test_dry_run_stops_after_quote_and_simulation(monkeypatch, tmp_path) -> None
         row = conn.execute("SELECT status, transaction_hash FROM trade_executions").fetchone()
     assert row["status"] == "simulated"
     assert row["transaction_hash"] is None
+
+
+def test_quote_failure_logs_safe_detail_and_http_status(monkeypatch, tmp_path) -> None:
+    """A failed quote records the adapter message and status, not the response body."""
+    database_path = tmp_path / "bot.sqlite"
+    decision_id = _insert_decision(database_path)
+
+    class _Response:
+        """Stand in for a requests response that must not be copied into the audit log."""
+
+        status_code = 500
+        text = "upstream route body with verification material"
+
+    class _HTTPError(Exception):
+        """Stand in for requests.HTTPError, whose string includes the URL and body."""
+
+        def __init__(self) -> None:
+            super().__init__("500 Server Error for url: http://127.0.0.1:4173/api/swap/quote")
+            self.response = _Response()
+
+    def fail_quote(*_args, **_kwargs):
+        """Fail the quote after contract checks, the same point as a live timeout or HTTP error."""
+        raise QuoteError("Quote request failed") from _HTTPError()
+
+    monkeypatch.setattr("src.trading.runner.run_contract_checks", lambda *_args, **_kwargs: _checked())
+    monkeypatch.setattr("src.trading.runner.fetch_swap_quote", fail_quote)
+
+    _execution_id, status = _run_execution(
+        _execution_config(tmp_path),
+        database_path,
+        decision_id,
+        mode="dry_run",
+        password=None,
+        web3=None,
+        quote_session=None,
+        live_confirmation=None,
+    )
+
+    assert status == "failed"
+    with connect(database_path) as conn:
+        row = conn.execute("SELECT status, reason FROM trade_executions").fetchone()
+    assert row["status"] == "failed"
+    assert row["reason"] == "QUOTE_FAILED"
+    events = [json.loads(line) for line in (tmp_path / "trading.jsonl").read_text().splitlines() if line.strip()]
+    failed = next(event for event in events if event["event"] == "execution_failed")
+    assert failed["detail"] == "Quote request failed"
+    assert failed["cause_type"] == "_HTTPError"
+    assert failed["http_status"] == 500
+    rendered = json.dumps(failed)
+    assert "upstream route body" not in rendered
+    assert "127.0.0.1" not in rendered
 
 
 def test_pause_file_persists_execution_skip_before_wallet_access(monkeypatch, tmp_path) -> None:
