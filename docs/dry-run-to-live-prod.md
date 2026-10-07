@@ -330,6 +330,12 @@ Nếu cần quay lại dry-run, chỉ bật `dry_run` sau khi đã kiểm tra kh
 sudo systemctl enable --now prana-buy-dips@dry_run.timer
 ```
 
+## 11. Cập nhật code khi live đang chạy
+
+Dùng `sudo /usr/local/sbin/prana-buy-dips-update` sau khi bản script mới đã được cài. Script chỉ tắt và bật lại `prana-buy-dips-prod-live.timer`. Nó từ chối chạy nếu `observe`, `dry_run`, hoặc `prana-buy-dips@live` còn enabled hoặc đang chạy, và không tự start các unit đó.
+
+Cycle kiểm tra tự động chỉ chạy khi `data/PAUSE_TRADING` đang có. Không có pause file thì script không start service live; giờ UTC kế tiếp mới là cycle đầu trên code mới.
+
 ## Checklist bàn giao
 
 - [ ] Dry-run đã đạt gate; không còn execution pending/in-flight.

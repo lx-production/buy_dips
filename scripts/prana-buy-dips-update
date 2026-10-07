@@ -1,30 +1,32 @@
 #!/usr/bin/env bash
 
-# Safely update the Pi canary checkout, verify it, and restore its previous timer.
+# Safely update the Pi production checkout and restore the prod live timer.
 set -Eeuo pipefail
 umask 0077
 
 readonly REPO_DIR="/home/botuser/buy_dips"
 readonly BOT_USER="botuser"
 readonly BOT_GROUP="botuser"
-readonly CONFIG_PATH="${REPO_DIR}/config.canary.yaml"
+readonly CONFIG_PATH="${REPO_DIR}/config.prod.yaml"
 readonly DB_PATH="${REPO_DIR}/data/canary.sqlite"
+readonly PAUSE_FILE="${REPO_DIR}/data/PAUSE_TRADING"
 readonly BACKUP_DIR="${REPO_DIR}/data/backups"
 readonly INSTALLED_SCRIPT="/usr/local/sbin/prana-buy-dips-update"
 readonly WAIT_TIMEOUT_SECONDS=900
-readonly -a CANARY_TIMERS=(
+readonly LIVE_TIMER="prana-buy-dips-prod-live.timer"
+readonly LIVE_SERVICE="prana-buy-dips-prod-live.service"
+readonly -a LEGACY_TIMERS=(
   "prana-buy-dips@observe.timer"
   "prana-buy-dips@dry_run.timer"
+  "prana-buy-dips@live.timer"
 )
-readonly -a CYCLE_SERVICES=(
+readonly -a LEGACY_SERVICES=(
   "prana-buy-dips@observe.service"
   "prana-buy-dips@dry_run.service"
   "prana-buy-dips@live.service"
 )
-readonly LIVE_TIMER="prana-buy-dips@live.timer"
 
-enabled_timer=""
-enabled_timer_state=""
+live_timer_state=""
 permissions_unlocked=0
 
 # Print one timestamped deployment message.
@@ -40,7 +42,7 @@ require_root() {
   fi
 }
 
-# Confirm the fixed canary paths and required commands exist before changing system state.
+# Confirm the production checkout, config, and database exist before changing system state.
 validate_environment() {
   local command_name
 
@@ -60,11 +62,11 @@ validate_environment() {
     exit 1
   fi
   if [[ ! -f "${CONFIG_PATH}" ]]; then
-    printf 'Canary config not found: %s\n' "${CONFIG_PATH}" >&2
+    printf 'Production config not found: %s\n' "${CONFIG_PATH}" >&2
     exit 1
   fi
   if [[ ! -f "${DB_PATH}" ]]; then
-    printf 'Canary database not found: %s\n' "${DB_PATH}" >&2
+    printf 'Production database not found: %s\n' "${DB_PATH}" >&2
     exit 1
   fi
 }
@@ -78,77 +80,67 @@ acquire_deploy_lock() {
   fi
 }
 
-# Remember the single enabled canary timer so only that timer is restored.
-detect_timer_state() {
+# Return success when a unit is enabled persistently or for this boot only.
+timer_is_enabled() {
+  local state="$1"
+
+  [[ "${state}" == "enabled" || "${state}" == "enabled-runtime" ]]
+}
+
+# Refuse while an old canary unit is still enabled or running, without stopping it.
+refuse_legacy_units() {
+  local service
   local state
   local timer
-  local enabled_count=0
 
-  state="$(systemctl is-enabled "${LIVE_TIMER}" 2>/dev/null || true)"
-  if [[ "${state}" == "enabled" || "${state}" == "enabled-runtime" ]] || systemctl is-active --quiet "${LIVE_TIMER}"; then
-    printf 'Live timer is enabled or active; this canary updater will not modify a live deployment.\n' >&2
-    exit 1
-  fi
-
-  for timer in "${CANARY_TIMERS[@]}"; do
+  for timer in "${LEGACY_TIMERS[@]}"; do
     state="$(systemctl is-enabled "${timer}" 2>/dev/null || true)"
-    if [[ "${state}" == "enabled" || "${state}" == "enabled-runtime" ]]; then
-      enabled_timer="${timer}"
-      enabled_timer_state="${state}"
-      ((enabled_count += 1))
+    if timer_is_enabled "${state}" || systemctl is-active --quiet "${timer}"; then
+      printf 'Legacy timer %s is enabled or active. Disable it manually before updating production.\n' "${timer}" >&2
+      exit 1
     fi
   done
 
-  if (( enabled_count > 1 )); then
-    printf 'More than one canary timer is enabled; fix the unsafe timer state manually.\n' >&2
-    exit 1
-  fi
+  for service in "${LEGACY_SERVICES[@]}"; do
+    if systemctl is-active --quiet "${service}"; then
+      printf 'Legacy service %s is still running. Let it finish, then update production.\n' "${service}" >&2
+      exit 1
+    fi
+  done
 }
 
-# Disable the remembered timer and stop any manually started canary timer.
-stop_canary_timers() {
-  local timer
+# Remember whether the production live timer should be turned back on after deploy.
+detect_timer_state() {
+  refuse_legacy_units
+  live_timer_state="$(systemctl is-enabled "${LIVE_TIMER}" 2>/dev/null || true)"
+}
 
-  if [[ -n "${enabled_timer}" ]]; then
-    log "Disabling ${enabled_timer} during deployment"
-    if [[ "${enabled_timer_state}" == "enabled-runtime" ]]; then
-      systemctl disable --runtime --now "${enabled_timer}"
+# Disable the production live timer so a new hour cannot start mid-deploy.
+stop_live_timer() {
+  if timer_is_enabled "${live_timer_state}"; then
+    log "Disabling ${LIVE_TIMER} during deployment"
+    if [[ "${live_timer_state}" == "enabled-runtime" ]]; then
+      systemctl disable --runtime --now "${LIVE_TIMER}"
     else
-      systemctl disable --now "${enabled_timer}"
+      systemctl disable --now "${LIVE_TIMER}"
     fi
+  elif systemctl is-active --quiet "${LIVE_TIMER}"; then
+    log "Stopping manually started ${LIVE_TIMER} during deployment"
+    systemctl stop "${LIVE_TIMER}"
   fi
-
-  for timer in "${CANARY_TIMERS[@]}"; do
-    if systemctl is-active --quiet "${timer}"; then
-      systemctl stop "${timer}"
-    fi
-  done
 }
 
-# Wait for an in-flight oneshot to finish instead of terminating it during a DB write.
-wait_for_cycle_services() {
-  local service
-  local running
+# Wait for the production oneshot to finish instead of terminating it during a DB write.
+wait_for_live_service() {
   local started_at="${SECONDS}"
 
-  while true; do
-    running=0
-    for service in "${CYCLE_SERVICES[@]}"; do
-      if systemctl is-active --quiet "${service}"; then
-        running=1
-        break
-      fi
-    done
-
-    if (( running == 0 )); then
-      return
-    fi
+  while systemctl is-active --quiet "${LIVE_SERVICE}"; do
     if (( SECONDS - started_at >= WAIT_TIMEOUT_SECONDS )); then
-      printf 'A trading cycle is still active after %s seconds; timer remains disabled.\n' "${WAIT_TIMEOUT_SECONDS}" >&2
+      printf '%s is still active after %s seconds; timer remains disabled.\n' "${LIVE_SERVICE}" "${WAIT_TIMEOUT_SECONDS}" >&2
       exit 1
     fi
 
-    log "Waiting for ${service} to finish safely"
+    log "Waiting for ${LIVE_SERVICE} to finish safely"
     sleep 2
   done
 }
@@ -200,6 +192,9 @@ lock_repo_permissions() {
   chmod 0700 "${REPO_DIR}/data/logs" || failed=1
   find "${REPO_DIR}/data/wallet" -maxdepth 1 -type f -exec chmod 0600 {} + || failed=1
   chmod 0640 "${CONFIG_PATH}" || failed=1
+  if [[ -f "${REPO_DIR}/config.canary.yaml" ]]; then
+    chmod 0640 "${REPO_DIR}/config.canary.yaml" || failed=1
+  fi
 
   return "${failed}"
 }
@@ -237,26 +232,31 @@ install_latest_updater() {
   mv -f "${temporary_path}" "${INSTALLED_SCRIPT}"
 }
 
-# Run one safe observe cycle after tests to verify the deployed systemd path.
-verify_observe_cycle() {
-  log "Running one observe cycle with the updated code"
-  systemctl start "prana-buy-dips@observe.service"
-  journalctl -u "prana-buy-dips@observe.service" -n 15 --no-pager
-}
-
-# Re-enable exactly the timer that was enabled before deployment.
-restore_timer() {
-  if [[ -z "${enabled_timer}" ]]; then
-    log "No canary timer was enabled before deployment; leaving timers disabled"
+# Run one production cycle only while the pause file blocks signing.
+verify_live_cycle() {
+  if [[ ! -f "${PAUSE_FILE}" ]]; then
+    log "Pause file is absent; not starting ${LIVE_SERVICE}. The restored timer runs the next cycle."
     return
   fi
 
-  if [[ "${enabled_timer_state}" == "enabled-runtime" ]]; then
-    systemctl enable --runtime --now "${enabled_timer}"
-  else
-    systemctl enable --now "${enabled_timer}"
+  log "Running one paused ${LIVE_SERVICE} cycle with the updated code"
+  systemctl start "${LIVE_SERVICE}"
+  journalctl -u "${LIVE_SERVICE}" -n 15 --no-pager
+}
+
+# Re-enable the production live timer only when this deploy stopped an enabled one.
+restore_timer() {
+  if ! timer_is_enabled "${live_timer_state}"; then
+    log "${LIVE_TIMER} was not enabled before deployment; leaving it disabled"
+    return
   fi
-  log "Restored ${enabled_timer}"
+
+  if [[ "${live_timer_state}" == "enabled-runtime" ]]; then
+    systemctl enable --runtime --now "${LIVE_TIMER}"
+  else
+    systemctl enable --now "${LIVE_TIMER}"
+  fi
+  log "Restored ${LIVE_TIMER}"
 }
 
 # Re-lock the checkout after failures and deliberately leave trading timers disabled.
@@ -289,8 +289,8 @@ main() {
   detect_timer_state
   trap 'cleanup_on_exit "$?"' EXIT INT TERM
 
-  stop_canary_timers
-  wait_for_cycle_services
+  stop_live_timer
+  wait_for_live_service
   backup_database
   unlock_repo_permissions
   update_and_test
@@ -300,7 +300,7 @@ main() {
   permissions_unlocked=0
 
   install_latest_updater
-  verify_observe_cycle
+  verify_live_cycle
   restore_timer
   log "Deployment completed successfully"
 }

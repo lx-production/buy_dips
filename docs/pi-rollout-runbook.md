@@ -611,13 +611,15 @@ Live guard còn bắt buộc đúng chain 137, wallet pinned, local quote host, 
 
 Script update trong repo tự làm tuần tự các bước an toàn sau:
 
-- Chặn hai lần deploy chạy đồng thời và từ chối chạy nếu timer `live` đang active/enabled.
-- Ghi nhớ timer canary đang enabled, tắt timer đó và chờ oneshot đang chạy kết thúc; script không kill cycle giữa lúc ghi DB.
-- Tạo SQLite backup nhất quán có timestamp trong `data/backups/`, rồi chạy `PRAGMA quick_check`.
-- Dừng nếu tracked file có local change; pull chỉ bằng `git pull --ff-only`.
-- Tạm trao ownership repo cho `botuser`; chỉ chạy pip khi `requirements.txt` thực sự thay đổi. Updater không chạy pytest (suite ở dev); Pi verify bằng một observe cycle sau khi khóa quyền.
+- Chặn hai lần deploy chạy đồng thời.
+- Từ chối chạy nếu timer hoặc service `observe`, `dry_run`, hoặc `prana-buy-dips@live` còn enabled/active. Script không tắt các unit cũ đó.
+- Ghi nhớ `prana-buy-dips-prod-live.timer` nếu đang enabled, tắt timer đó và chờ `prana-buy-dips-prod-live.service` kết thúc; script không kill cycle giữa lúc ghi DB.
+- Tạo SQLite backup nhất quán có timestamp trong `data/backups/`, rồi chạy `PRAGMA quick_check`. Database vẫn là `data/canary.sqlite`.
+- Dừng nếu tracked file có local change; pull chỉ bằng `git pull --ff-only`. Config bắt buộc là `config.prod.yaml`.
+- Tạm trao ownership repo cho `botuser`; chỉ chạy pip khi `requirements.txt` thực sự thay đổi. Updater không chạy pytest (suite ở dev).
 - Khóa lại source/config/venv theo mục **Khóa quyền repo**, nhưng giữ `data/` writable cho `botuser`.
-- Cập nhật bản script root-owned, chạy một observe cycle thủ công, rồi bật lại đúng timer đã enabled trước deploy.
+- Cập nhật bản script root-owned. Nếu `data/PAUSE_TRADING` đang có, chạy một cycle `prana-buy-dips-prod-live.service` để kiểm tra wiring. Nếu không có pause file, script không tự start cycle live.
+- Bật lại `prana-buy-dips-prod-live.timer` chỉ khi timer đó đã enabled trước deploy.
 
 Cài command root-owned một lần sau khi repo đã có file script:
 
@@ -639,9 +641,9 @@ Hoặc gọi từ Mac:
 ssh -t rp5 'sudo /usr/local/sbin/prana-buy-dips-update'
 ```
 
-Script hiện dành riêng cho canary DB/config và timer `observe`/`dry_run` trong runbook này. Nó chủ động từ chối update khi timer `live` active/enabled; deployment live về sau cần script riêng gắn đúng prod config, DB và rollback policy.
+Script này dùng cho production đang chạy `prana-buy-dips-prod-live`. Nó không start `observe` hoặc `dry_run`.
 
-Nếu không có timer nào enabled trước update, script chạy verify observe nhưng vẫn để tất cả timer disabled. Nếu bất kỳ bước nào fail, script cố khóa lại quyền repo và **không bật lại timer**; nó không tự rollback Git commit, vì vậy phải đọc lỗi và kiểm tra code/ownership/service trước khi bật timer thủ công. Script không sửa config, credential, pause file hoặc systemd unit, vì vậy không cần `daemon-reload`.
+Nếu timer live chưa enabled trước update, script không tự bật nó. Nếu bất kỳ bước nào fail, script cố khóa lại quyền repo và **không bật lại timer**; nó không tự rollback Git commit, vì vậy phải đọc lỗi và kiểm tra code/ownership/service trước khi bật timer thủ công. Script không sửa config, credential, pause file hoặc systemd unit, vì vậy không cần `daemon-reload`.
 
 Các backup có timestamp không bị tự xóa để tránh script tự quyết định retention. Theo dõi dung lượng `data/backups/` và chỉ xóa các bản cũ sau khi đã xác nhận bản deploy mới ổn định.
 
