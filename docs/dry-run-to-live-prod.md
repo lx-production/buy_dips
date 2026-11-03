@@ -1,6 +1,6 @@
 # Chuyển `dry_run` sang `live` trên production
 
-Tài liệu này dành cho operator trên Raspberry Pi production. `live` sẽ ký và broadcast giao dịch Polygon thật: mỗi BUY là **20 USDT**, tối đa **1 giao dịch đã ký mỗi ngày UTC**. Chỉ thực hiện khi đã có người review và chấp nhận rủi ro.
+Tài liệu này dành cho operator trên Raspberry Pi production. `live` sẽ ký và broadcast giao dịch Polygon thật: mỗi BUY là **40 USDT**, tối đa **1 giao dịch đã ký mỗi ngày UTC**. Chỉ thực hiện khi đã có người review và chấp nhận rủi ro.
 
 ## Nguyên tắc bắt buộc
 
@@ -89,7 +89,7 @@ execution:
   live_enabled: false
 
 risk:
-  trade_amount_usdt: "20"
+  trade_amount_usdt: "40"
   max_trades_per_utc_day: 1
 ```
 
@@ -156,7 +156,7 @@ Chỉ tiếp tục nếu:
 
 - Chain là Polygon `137`.
 - Token/router/bytecode/decimals đúng allowlist.
-- Prod wallet có ít nhất `20 USDT` và đủ POL reserve.
+- Prod wallet có ít nhất `40 USDT` và đủ POL reserve.
 - Route server local đang hoạt động và health check nội bộ thành công.
 - Allowance hiện tại đã được review. `approve-trading` là giao dịch on-chain thật, kể cả khi app chưa bật live; không chạy nếu chưa có phê duyệt operator.
 
@@ -345,7 +345,7 @@ Cycle kiểm tra tự động chỉ chạy khi `data/PAUSE_TRADING` đang có. K
 - [ ] Prod config dùng `environment: prod`, loopback quote host và `live_enabled: true` chỉ sau review.
 - [ ] Prod password/RPC/confirmation là credential riêng, root-only.
 - [ ] Route server local đã được kiểm tra.
-- [ ] `trade-check` pass; wallet đủ 20 USDT và POL reserve.
+- [ ] `trade-check` pass; wallet đủ 40 USDT và POL reserve.
 - [ ] Manual cycle với pause không broadcast.
 - [ ] Operator đã chủ động gỡ pause và bật đúng timer live.
 - [ ] Cycle đầu tiên, status/receipt và transaction hash đã được review.

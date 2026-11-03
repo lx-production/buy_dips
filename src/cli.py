@@ -11,7 +11,7 @@ from .db import init_db, load_candles_df
 from .config import AppConfig, load_config
 from .utils import ms_to_iso, ms_to_utc7, resolve_path
 from .trading.runner import run_trade_once
-from .trading.constants import USDT_DECIMALS
+from .trading.constants import TRADE_AMOUNT_USDT, USDT_DECIMALS
 from .zones import detect_support_resistance_zones
 from .trading.approval import approve_trading, revoke_trading
 from .trading.backtest import parse_backtest_bound, run_backtest, write_buy_csv
@@ -74,7 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("wallet-create", help="Create the configured encrypted development keystore.")
     subparsers.add_parser("wallet-status", help="Decrypt and print only the configured wallet address.")
     subparsers.add_parser("trade-check", help="Validate Polygon, contracts, wallet, and allowance.")
-    subparsers.add_parser("approve-trading", help="Approve the router for exactly one 20 USDT trade.")
+    subparsers.add_parser("approve-trading", help=f"Approve the router for exactly one {TRADE_AMOUNT_USDT} USDT trade.")
     subparsers.add_parser("revoke-trading", help="Reset the configured router's USDT allowance to zero.")
     return parser
 

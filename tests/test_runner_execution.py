@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from src.config import AppConfig
 from src.db import connect, init_db
 from src.trading.approval import ApprovalResult
+from src.trading.constants import TRADE_AMOUNT_USDT, TRADE_AMOUNT_USDT_RAW
 from src.trading.models import SignedSwap, SwapReceipt, SwapSimulation, SwapTransaction, ValidatedSwapQuote
 from src.trading.prana_swap import QuoteError
 from src.trading.runner import _run_execution
@@ -45,8 +46,8 @@ def _quote() -> ValidatedSwapQuote:
     return ValidatedSwapQuote(
         token_in_symbol="USDT",
         token_out_symbol="PRANA",
-        amount_in=Decimal("20"),
-        amount_in_raw=20_000_000,
+        amount_in=TRADE_AMOUNT_USDT,
+        amount_in_raw=TRADE_AMOUNT_USDT_RAW,
         recipient=WALLET,
         slippage_bps=50,
         chain_id=137,
@@ -65,9 +66,9 @@ def _checked() -> SimpleNamespace:
     """Build the public checked-wallet fields used by execution orchestration."""
     return SimpleNamespace(
         wallet_address=WALLET,
-        usdt_balance_raw=20_000_000,
+        usdt_balance_raw=TRADE_AMOUNT_USDT_RAW,
         pol_balance_raw=10**18,
-        allowance_raw=20_000_000,
+        allowance_raw=TRADE_AMOUNT_USDT_RAW,
         web3=SimpleNamespace(eth=SimpleNamespace(gas_price=1_000_000_000)),
     )
 
@@ -91,7 +92,7 @@ def test_live_execution_reserves_hash_before_broadcast_and_is_idempotent(monkeyp
     monkeypatch.setattr("src.trading.runner.fetch_swap_quote", lambda *_args, **_kwargs: _quote())
     monkeypatch.setattr(
         "src.trading.runner.ensure_swap_allowance",
-        lambda *_args, **_kwargs: ApprovalResult("already-sufficient", 20_000_000, 20_000_000, ()),
+        lambda *_args, **_kwargs: ApprovalResult("already-sufficient", TRADE_AMOUNT_USDT_RAW, TRADE_AMOUNT_USDT_RAW, ()),
     )
     monkeypatch.setattr(
         "src.trading.runner.simulate_swap",
@@ -280,11 +281,11 @@ def test_pause_file_persists_execution_skip_before_wallet_access(monkeypatch, tm
 
 
 def test_live_insufficient_usdt_fails_before_quote(monkeypatch, tmp_path) -> None:
-    """A wallet short of one 20 USDT trade fails the BUY and does not request a quote."""
+    """A wallet short of one trade fails the BUY and does not request a quote."""
     database_path = tmp_path / "bot.sqlite"
     decision_id = _insert_decision(database_path)
     checked = _checked()
-    checked.usdt_balance_raw = 19_999_999
+    checked.usdt_balance_raw = TRADE_AMOUNT_USDT_RAW - 1
     monkeypatch.setattr("src.trading.runner.run_contract_checks", lambda *_args, **_kwargs: checked)
     monkeypatch.setattr("src.trading.runner.assert_live_mode_allowed", lambda *_args, **_kwargs: None)
 

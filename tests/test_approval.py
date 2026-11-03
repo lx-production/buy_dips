@@ -221,7 +221,7 @@ def test_approval_rejects_gas_estimate_above_configured_limit(monkeypatch) -> No
 
 
 def test_swap_allowance_tops_up_only_the_quote_amount() -> None:
-    """Automatic live approval must grant exactly one 20 USDT trade and refuse more."""
+    """Automatic live approval must grant exactly one trade and refuse more."""
     checked, contract, _signer = _checked(0)
 
     result = ensure_swap_allowance(AppConfig(), checked, ROUTER, TRADE_AMOUNT_USDT_RAW)

@@ -7,7 +7,7 @@ from typing import Any
 from web3 import Web3
 
 from ..config import AppConfig
-from .constants import MAX_APPROVAL_USDT_RAW, POLYGON_CHAIN_ID
+from .constants import MAX_APPROVAL_USDT_RAW, POLYGON_CHAIN_ID, TRADE_AMOUNT_USDT_TEXT
 from .contract_checks import ContractCheckError, ContractCheckResult, run_contract_checks
 
 
@@ -48,7 +48,7 @@ def approve_trading(
         transaction_hashes.append(_send_approval_transaction(config, checked, MAX_APPROVAL_USDT_RAW))
         current = _read_allowance(checked)
         if current != MAX_APPROVAL_USDT_RAW:
-            raise ApprovalError("USDT allowance did not reach the 20 USDT trade cap")
+            raise ApprovalError(f"USDT allowance did not reach the {TRADE_AMOUNT_USDT_TEXT} USDT trade cap")
         return ApprovalResult("approved", previous, current, tuple(transaction_hashes))
     except (ApprovalError, ContractCheckError):
         raise

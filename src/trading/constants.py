@@ -29,7 +29,7 @@ SWAP_ROUTER_02_ADDRESSES = frozenset(
 USDT_DECIMALS = 6
 PRANA_DECIMALS = 9
 # Locked in code on purpose. Raising the size again requires a review, not a YAML edit.
-TRADE_AMOUNT_USDT = Decimal("20")
+TRADE_AMOUNT_USDT = Decimal("40")
 TRADE_AMOUNT_USDT_RAW = int(TRADE_AMOUNT_USDT * (Decimal(10) ** USDT_DECIMALS))
 TRADE_AMOUNT_USDT_TEXT = format(TRADE_AMOUNT_USDT, "f")
 # approve-trading and the live top-up may grant exactly one trade, never an unlimited allowance.
