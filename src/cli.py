@@ -9,13 +9,14 @@ from pathlib import Path
 from .candles import backfill_days
 from .db import init_db, load_candles_df
 from .config import AppConfig, load_config
-from .utils import ms_to_iso, ms_to_utc7, resolve_path
 from .trading.runner import run_trade_once
-from .trading.constants import TRADE_AMOUNT_USDT, USDT_DECIMALS
+from .trading.withdraw import withdraw_all_prana
 from .zones import detect_support_resistance_zones
+from .utils import ms_to_iso, ms_to_utc7, resolve_path
 from .trading.approval import approve_trading, revoke_trading
-from .trading.backtest import parse_backtest_bound, run_backtest, write_buy_csv
 from .trading.contract_checks import format_token_amount, run_contract_checks
+from .trading.backtest import parse_backtest_bound, run_backtest, write_buy_csv
+from .trading.constants import PRANA_DECIMALS, TRADE_AMOUNT_USDT, USDT_DECIMALS
 from .trading.wallet import create_encrypted_keystore, load_local_account, resolve_keystore_password
 
 
@@ -48,6 +49,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_approve_trading(config)
     if args.command == "revoke-trading":
         return _cmd_revoke_trading(config)
+    if args.command == "withdraw-prana":
+        return _cmd_withdraw_prana(config, args.to, args.broadcast)
     parser.print_help()
     return 1
 
@@ -76,6 +79,16 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("trade-check", help="Validate Polygon, contracts, wallet, and allowance.")
     subparsers.add_parser("approve-trading", help=f"Approve the router for exactly one {TRADE_AMOUNT_USDT} USDT trade.")
     subparsers.add_parser("revoke-trading", help="Reset the configured router's USDT allowance to zero.")
+    withdraw = subparsers.add_parser(
+        "withdraw-prana",
+        help="Preview or send the prod wallet's entire PRANA balance to the pinned address.",
+    )
+    withdraw.add_argument("--to", required=True, help="Must match the pinned withdrawal address.")
+    withdraw.add_argument(
+        "--broadcast",
+        action="store_true",
+        help="Sign and broadcast. Omit this flag to preview the balance without signing.",
+    )
     return parser
 
 
@@ -237,6 +250,37 @@ def _cmd_approve_trading(config: AppConfig) -> int:
     print(f"Allowance: {format_token_amount(result.current_allowance_raw, USDT_DECIMALS)} USDT")
     for transaction_hash in result.transaction_hashes:
         print(f"Transaction hash: {transaction_hash}")
+    return 0
+
+
+def _cmd_withdraw_prana(config: AppConfig, destination: str, broadcast: bool) -> int:
+    # Preview the full PRANA balance, and sign only when the operator passes the matching confirmation.
+    try:
+        result = withdraw_all_prana(
+            config,
+            destination=destination,
+            broadcast=broadcast,
+            confirmation=os.getenv("WITHDRAW_PRANA_CONFIRMATION"),
+        )
+    except Exception as exc:
+        print(f"PRANA withdrawal failed: {exc}", file=sys.stderr)
+        return 2
+    print(f"Action: {result.action}")
+    print(f"Wallet: {result.wallet_address}")
+    print(f"Destination: {result.destination}")
+    print(f"PRANA balance: {format_token_amount(result.balance_raw, PRANA_DECIMALS)}")
+    print(f"POL balance: {format_token_amount(result.pol_balance_raw, 18)}")
+    if result.gas_limit is not None and result.gas_price_wei is not None:
+        gas_cost_wei = result.gas_limit * result.gas_price_wei
+        print(f"Estimated gas: {result.gas_limit}")
+        print(f"Estimated POL cost: {format_token_amount(gas_cost_wei, 18)}")
+    if result.transaction_hash is not None:
+        print(f"Transaction hash: {result.transaction_hash}")
+    if result.action == "preview":
+        print("Broadcast: no")
+        print(f"Confirmation: {result.confirmation}")
+    if result.action == "withdrawn":
+        print("Remaining PRANA: 0")
     return 0
 
 

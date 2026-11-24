@@ -256,6 +256,8 @@ python3 -m src.cli approve-trading
 python3 -m src.cli revoke-trading
 ```
 
+`withdraw-prana` sends the production wallet's entire PRANA balance to one pinned address, `0x696b00596F553FcF6F98EeBfD58F48d2645D7E1b`. It only runs when `environment` is `prod` and the keystore filename contains `trader-prod`. Without `--broadcast` it reads the balance, estimates gas, and prints a confirmation string. Broadcasting requires the configured pause file, a clear buy execution queue, matching confirmed and pending wallet nonces, and `WITHDRAW_PRANA_CONFIRMATION` equal to `withdraw-all-prana:137:<prod wallet>:<pinned address>`. The recipient gets PRANA and the wallet pays gas in POL. The Pi commands and transaction recovery steps are in [Rút toàn bộ PRANA từ ví prod](docs/dry-run-to-live-prod.md#12-rút-toàn-bộ-prana-từ-ví-prod).
+
 ## Decision Engine (`support_close_v2`)
 
 One dip-to-support flow. Output is gate-based (not scored): exactly one `decision` (`BUY` / `HOLD`) and one `reason_code` per cycle.

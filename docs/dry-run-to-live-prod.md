@@ -351,3 +351,71 @@ Cycle kiểm tra tự động chỉ chạy khi `data/PAUSE_TRADING` đang có. K
 - [ ] Cycle đầu tiên, status/receipt và transaction hash đã được review.
 
 Nếu có bất kỳ mục nào chưa đạt, giữ pause và không bật live.
+
+## 12. Rút toàn bộ PRANA từ ví prod
+
+Lệnh này chuyển **toàn bộ số PRANA đang nằm trong ví prod** tới đúng một địa chỉ:
+
+`0x696b00596F553FcF6F98EeBfD58F48d2645D7E1b`
+
+Địa chỉ đó được gắn cố định trong code. Gõ một địa chỉ khác thì lệnh dừng, không ký. USDT và POL vẫn ở lại ví prod. POL chỉ bị trừ phí gas của giao dịch chuyển PRANA.
+
+Ví dụ: ví prod đang giữ 1250 PRANA và 80 USDT. Sau lệnh này, ví nhận có thêm 1250 PRANA. Ví prod còn 0 PRANA và vẫn còn 80 USDT, trừ một lượng POL rất nhỏ cho gas.
+
+Làm các bước sau trên Pi, sau khi code của lệnh `withdraw-prana` đã có trong `/home/botuser/buy_dips`.
+
+1. Tắt timer, tạo pause file theo `risk.pause_file` trong `config.prod.yaml`, rồi chờ cycle hiện tại tự kết thúc. Ví dụ với đường dẫn pause file hiện tại:
+
+```bash
+sudo systemctl disable --now prana-buy-dips-prod-live.timer
+sudo -u botuser touch /home/botuser/buy_dips/data/PAUSE_TRADING
+sudo chmod 0600 /home/botuser/buy_dips/data/PAUSE_TRADING
+sudo systemctl show --property=ActiveState --value prana-buy-dips-prod-live.service
+```
+
+Tiếp tục khi lệnh cuối in `inactive`. Nếu service còn chạy, chờ cycle hoàn tất để nó ghi lại trạng thái execution. Nếu còn execution chưa kết thúc hoặc nonce của ví đang pending, xử lý giao dịch đó trước khi rút.
+
+2. Xem số dư trước. Lệnh này chỉ đọc và ước lượng gas. Nó không ký và không gửi giao dịch.
+
+```bash
+sudo systemd-run \
+  --quiet --wait --pipe --collect \
+  --unit=prana-buy-dips-prod-withdraw-prana-preview \
+  --uid=botuser --gid=botuser \
+  --working-directory=/home/botuser/buy_dips \
+  --setenv=CONFIG_PATH=/home/botuser/buy_dips/config.prod.yaml \
+  --property=LoadCredential=keystore_password:/etc/prana-buy-dips/credentials/prod_keystore_password \
+  --property=LoadCredential=polygon_rpc_url:/etc/prana-buy-dips/credentials/polygon_rpc_url \
+  /bin/bash -c 'set -euo pipefail; export KEYSTORE_PASSWORD="$(<"${CREDENTIALS_DIRECTORY}/keystore_password")"; export POLYGON_RPC_URL="$(<"${CREDENTIALS_DIRECTORY}/polygon_rpc_url")"; exec /home/botuser/buy_dips/.venv/bin/python -m src.cli --config "${CONFIG_PATH}" withdraw-prana --to 0x696b00596F553FcF6F98EeBfD58F48d2645D7E1b'
+```
+
+Đối chiếu trước khi gửi thật:
+
+- `Wallet` khớp `wallet.expected_address` trong `config.prod.yaml`.
+- `Destination` đúng `0x696b00596F553FcF6F98EeBfD58F48d2645D7E1b`.
+- `PRANA balance` là số token muốn rút. `Action: empty` nghĩa là ví không còn PRANA, không cần chạy bước gửi.
+- `POL balance` đủ trả `Estimated POL cost`. Nếu lệnh báo không đủ POL, nạp thêm POL vào ví prod rồi chạy lại bước xem.
+- Dòng `Confirmation` được copy nguyên văn sang bước sau. Nó có dạng `withdraw-all-prana:137:<địa chỉ ví prod>:0x696b00596F553FcF6F98EeBfD58F48d2645D7E1b`.
+
+3. Gửi giao dịch. Thay `PASTE_CONFIRMATION` bằng giá trị sau `Confirmation:` ở bước 2 để xác nhận đúng ví và đúng địa chỉ nhận.
+
+```bash
+sudo systemd-run \
+  --quiet --wait --pipe --collect \
+  --unit=prana-buy-dips-prod-withdraw-prana \
+  --uid=botuser --gid=botuser \
+  --working-directory=/home/botuser/buy_dips \
+  --setenv=CONFIG_PATH=/home/botuser/buy_dips/config.prod.yaml \
+  --setenv=WITHDRAW_PRANA_CONFIRMATION=PASTE_CONFIRMATION \
+  --property=LoadCredential=keystore_password:/etc/prana-buy-dips/credentials/prod_keystore_password \
+  --property=LoadCredential=polygon_rpc_url:/etc/prana-buy-dips/credentials/polygon_rpc_url \
+  /bin/bash -c 'set -euo pipefail; export KEYSTORE_PASSWORD="$(<"${CREDENTIALS_DIRECTORY}/keystore_password")"; export POLYGON_RPC_URL="$(<"${CREDENTIALS_DIRECTORY}/polygon_rpc_url")"; exec /home/botuser/buy_dips/.venv/bin/python -m src.cli --config "${CONFIG_PATH}" withdraw-prana --to 0x696b00596F553FcF6F98EeBfD58F48d2645D7E1b --broadcast'
+```
+
+Thành công khi in `Action: withdrawn`, `Remaining PRANA: 0`, và một transaction hash. Mở hash đó trên Polygonscan và kiểm tra token PRANA đã tới `0x696b00596F553FcF6F98EeBfD58F48d2645D7E1b`.
+
+Nếu RPC mất phản hồi khi gửi hoặc lệnh chưa đọc được receipt, dùng transaction hash do lệnh in ra để kiểm tra trên Polygonscan. Giữ pause trong lúc xác minh. Chỉ gửi lại sau khi đã xác định kết quả giao dịch trước và bước xem vẫn báo ví prod còn PRANA.
+
+Wrapper `/usr/local/libexec/prana-buy-dips-run` cố ý không có lệnh này. Không thêm `withdraw-prana` vào wrapper thường trực.
+
+USDT không bị chuyển. Muốn bot mua tiếp thì xóa pause file và bật lại `prana-buy-dips-prod-live.timer` chỉ sau khi đã review xong.
